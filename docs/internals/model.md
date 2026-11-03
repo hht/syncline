@@ -16,7 +16,7 @@ Properties to uphold appear at the end of each model: P1–P3, P5–P7, P9–P11
 
 At the repository root: `pnpm model:setup` installs TLC, `pnpm model` runs gate configurations, `pnpm model:big` runs large configurations (excluded from standard gates), and `pnpm model:trace` performs trace validation (set `SIMULATION_SEED` to test different seeds). If inputs (configuration, imported modules, TLC version, and execution flags) are unchanged and the previous run passed, cached results are reused; deleting `.check/model-cache.json` reruns all configurations.
 
-Run `pnpm model` whenever `model/` changes; all configurations must pass before committing. Run trace validation once a round of protocol changes is complete across both models and implementation; skip it during intermediate commits where implementation is catching up with model changes in stages. Run trace validation during wrap-up when modifying only the implementation or trace logging without touching models.
+Run `pnpm model` whenever a change in `model/` alters what TLC checks: anything beyond comments, plus the `Gate mode` header of a `.cfg` file, which `tools/dev/model.ts` reads to choose random walk; comment-only changes skip it. All configurations must pass before committing. Run trace validation once a round of protocol changes is complete across both models and implementation; skip it during intermediate commits where implementation is catching up with model changes in stages. Run trace validation during wrap-up when modifying only the implementation or trace logging without touching models.
 
 ## Trace validation
 
