@@ -1,6 +1,8 @@
-//! 测试直接喂的（只有测试的构建有）：不经连接收下拉取结果与连接上的消息、整份重下、对一段校验和，排在队列里，像 App 的调用一样回复；
-//! 读一个空间的游标、待上传这类状态的不经 `control`、直接读（开着本机写时、关库之后，外面正做着指令时也能读，与连接读它们一样）。
-//! 不该知道的：连接怎么收消息。
+//! Injected probe events for testing (test builds only): receives pull results and messages directly without network connections,
+//! triggers full resyncs, and verifies checksum ranges, queued and replied like app calls.
+//! Inspects space state (cookie, pending writes) directly without calling `control` (accessible while local writes are open,
+//! after close, or while instructions are running externally, matching how connections read state).
+//! What it should not know: how connections receive messages over network.
 
 use super::{Client, Waiter};
 use crate::sync::Job;
@@ -10,11 +12,14 @@ use crate::sync::mirror::Mirror;
 use serde::Deserialize;
 use serde_json::Value as Json;
 
-/// 测试直接喂的事件
+/// Injected test probe events.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
-// 32 位的 wasm 上指针减半，大小之差不到阈值、不报
-#[cfg_attr(target_pointer_width = "64", expect(clippy::large_enum_variant, reason = "测试喂的，收下就扔"))]
+// Pointers are 32-bit on wasm, size difference below threshold
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(clippy::large_enum_variant, reason = "test-only variant discarded immediately after receipt")
+)]
 pub enum Probe {
     Receive {
         channel: String,
@@ -30,17 +35,17 @@ pub enum Probe {
         discard_pending: bool,
     },
     Verify,
-    /// 一个共用空间的建表与升级做完了没有：排在 `shared` 的建表后面，回它的结果
+    /// Checks whether table creation and upgrades for a shared space have finished: queued after `shared` table creation, returning its outcome.
     Opened {
         channel: String,
     },
-    /// 换了一条连接（共用空间忘掉上一条连接上听到的）
+    /// Connection changed (shared space forgets messages heard on previous connection).
     Connecting {
         channel: String,
     },
 }
 
-/// 测试直接读的一个空间的状态
+/// Inspects state of a space directly in tests.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Inspect {
@@ -56,7 +61,7 @@ pub enum Inspect {
     PullRequest {
         channel: String,
     },
-    /// 以下只有私有空间有
+    /// Private space only:
     PendingCount,
     Pending {
         limit: Option<f64>,
@@ -65,10 +70,11 @@ pub enum Inspect {
 }
 
 impl Client {
-    /// 读出一个空间的状态（JSON）
+    /// Reads state of a space as JSON.
     ///
     /// # Errors
-    /// 没有这个共用空间；读库出错。
+    ///
+    /// Returns an error if the shared space does not exist or database queries fail.
     pub fn inspect(&mut self, inspect: Inspect, now: f64) -> Result<Json, Failure> {
         let device = &mut self.device;
         match inspect {
@@ -87,7 +93,7 @@ impl Client {
         }
     }
 
-    /// 排到了的
+    /// Dispatches queued probe when its turn arrives.
     pub(super) fn probe(&mut self, id: u64, probe: Probe, jobs: &mut Vec<Job>, now: f64) {
         let result = match probe {
             Probe::Receive { channel, pulled } => Mirror(&channel).receive(&mut self.device, &pulled, now).map(Json::from),
@@ -97,7 +103,7 @@ impl Client {
             Probe::Opened { channel } => match self.opened.get(&channel) {
                 Some(Opened::Ready) => Ok(Json::Null),
                 Some(Opened::Failed(error)) => Err(error.clone()),
-                Some(Opened::Pending) | None => Err(Failure::new(format!("没有共用空间 {channel}"))),
+                Some(Opened::Pending) | None => Err(Failure::new(format!("shared space {channel} does not exist"))),
             },
             Probe::Connecting { channel } => {
                 Mirror(&channel).connecting(&mut self.device);

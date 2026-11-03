@@ -13,27 +13,34 @@ import { landedAt, type Position } from './position.ts';
 import type { Begun, Reader } from './reader.ts';
 
 /**
- * 共用空间怎么按订阅给块与发给分片的一轮：读取器按设备的订阅读，
- * 块要能让订阅相同的设备共用：请求带游标与落地时的订阅（landed，末块给的、设备原样带回），分块中途另带位置；计划的订阅与这次的不同（令牌换了）
- * 就从游标与落地的订阅重起：去掉了桶就整份，加了桶只扫新加的桶（model/Shared.tla 的 Start）。整份的水位取最近的块边界、增量的取它与游标中较大的，
- * 同一段时间里起拉的设备落在同一串网址上；游标不在当前历史上、cursor 认不出（伪造、清空重建过、截日志截过了）回 reset，设备清空重下。
- * 每块带 seen（算这一块时的最新一版）；末块另带 next（落在末块那一版的位置）与按的订阅：末块可能是缓存里过时的副本，设备发现它比暂存的块早时
- * 从 next 接着拉、带上下限。整份下载的中间块带进度：总共是第一块时订阅里各桶的行数之和，已下是扫过的行，随 cursor 带着
- * （同一串网址上的块进度也相同）；行数还没数完的整次下载不带。写的时候提交记录的每一项带着这一行改前与改后在的桶，发给分片的一轮据此按连接的订阅筛。
- * 不该知道的：写怎么执行与记、块怎么经缓存发出、怎么发给分片、分片怎么推。
+ * Emits chunks and shard broadcast rounds for shared spaces according to subscriptions:
+ * reader executes queries filtered by device subscription.
+ * Chunks are designed for edge cache sharing across devices with identical subscriptions:
+ * requests supply cookie, landed subscription (`landed`, emitted on final chunks and echoed back by devices), and mid-chunk pagination position;
+ * when a plan's subscription diverges from the request (token changed), sync restarts from the cookie and landed subscription:
+ * removing buckets triggers a full pull, while adding buckets scans only the newly added buckets (Start in model/Shared.tla).
+ * Full pull watermark snaps to the nearest chunk boundary; incremental pulls take the maximum of the chunk boundary and cookie,
+ * coalescing requests from devices connecting around the same time to identical cache URLs;
+ * off-history cookies or unrecognized cursors (forged, rebuilt space, or truncated log) return a reset response instructing devices to clear and re-pull.
+ * Each chunk includes `seen` (head version at chunk computation); final chunks additionally include `next` (resting at the final version) and subscription:
+ * if the final chunk was served from a stale edge cache entry earlier than already staged chunks, the device continues pulling from `next` with `atLeast` floor.
+ * Intermediate chunks of full pulls carry progress: total is computed on the first chunk as the sum of rows across subscribed buckets,
+ * and downloaded tracks scanned rows, carried in cursors (matching URLs report identical progress); omitted if counting is incomplete.
+ * Commit log entries record row bucket memberships before and after each write, used to filter changes per WebSocket connection on broadcast shards.
+ * What this module should not know: write execution and logging, edge HTTP caching, shard message dispatch, or WebSocket fanout.
  * @see https://electric-sql.com/docs/api/http
  * @see https://docs.powersync.com/architecture/powersync-protocol
  */
 
-/** 共用空间的设置：桶规则；每满 chunkRows 行（改到的行）一个块边界，整份的水位对齐到它 */
+/** Shared space configuration: bucket rules; chunk boundary frequency in changed rows (`chunkRows`), aligning full-pull watermarks. */
 export type Shared = { buckets: BucketRules; chunkRows?: number };
 
-/** 共用空间默认每满几行（改到的行）一个块边界：后台持续写时，整份的水位约这么多行换一次，其间新装的设备共用缓存的块 */
+/** Default changed-row interval for shared space chunk boundaries: under continuous writes, full-pull watermarks step approximately every this many rows, sharing cached chunks across newly onboarding devices. */
 export const defaultRows = 1000;
 
 /**
- * 服务端的写里每一项带上改前在的桶：改前读，删的在 RETURNING 里按删掉前的值算（连带删的也是）；
- * 同一行在这次写里改了几次的，writeOnServer 按第一次被改之前的算
+ * Captures pre-write bucket memberships for server writes: evaluates pre-write state; deletes evaluate pre-delete row values in RETURNING clauses (including cascade deletes);
+ * multiple changes to the same row in a single write evaluate against the initial pre-write state.
  */
 export const bucketsBefore = (buckets: Buckets, query: Query) => ({
   before: (table: string, key: Record<string, Value>) => buckets.now(query, [[table, key]])(table, key),
@@ -43,20 +50,20 @@ export const bucketsBefore = (buckets: Buckets, query: Query) => ({
   },
 });
 
-/** 共用空间给出的块与重置报给谁 */
+/** Reporting callback for shared space chunks and resets. */
 type SharedReport = { reset: (cookie: Cookie | null) => void; pulled: <T extends Poke | Chunk>(chunk: T, chars: number) => T };
 
-/** 共用空间一台设备的订阅：规范写法（至多 subscriptionBytes 字节，放得进连接的附带数据）与它的指纹 */
+/** Subscription state for a device in a shared space: canonical bucket list (within subscriptionBytes limit for connection attachments) and its fingerprint. */
 export type Subscribed = { subscription: Subscription; sub: string };
 
-/** 落地时的订阅怎么放进网址：规范写法的 JSON 编成 base64url（网址里的长度至多 4/3 倍，不像转义那样随字符变） */
+/** Encodes landed subscription into URL: base64url-encodes canonical JSON (bounded to at most 4/3 string length, avoiding URL-escaping variability). */
 const encodeLanded = (subscription: Subscription) =>
   btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(subscription))))
     .replaceAll('+', '-')
     .replaceAll('/', '_')
     .replace(/=+$/, '');
 
-/** 设备带回的落地时的订阅；认不出（伪造、损坏）是 undefined，当作没有（整份） */
+/** Decodes landed subscription from request URL; returns undefined on invalid format or forgery (treated as absent, triggering full pull). */
 function decodeLanded(text: string | undefined): Subscription | undefined {
   if (text === undefined) return undefined;
   try {
@@ -69,14 +76,17 @@ function decodeLanded(text: string | undefined): Subscription | undefined {
 }
 
 /**
- * 共用空间从哪读起：带着的位置认得出、按的还是这份订阅就接着读；按的不是这份订阅（或没有位置）就从游标与落地的订阅新起：
- * 没有游标、落地的订阅认不出或去掉了桶就整份，否则增量，第一轮另扫新加的桶。游标或位置认不出是 undefined（回 reset）
+ * Determines starting position for shared space pulls: resumes from position if recognized and matching the subscription;
+ * if subscription differs (or position is omitted), restarts from cookie and landed subscription:
+ * triggers a full pull if cookie is missing, landed subscription is invalid, or buckets were removed;
+ * otherwise performs an incremental pull, scanning newly added buckets in round 1.
+ * Returns undefined if cookie or position is unrecognized (triggering a reset response).
  */
 function beginShared(commits: Commits, reader: Reader, { cookie, cursor, landed }: PullRequest, { subscription, sub }: Subscribed) {
   if (cookie && !commits.onHistory(cookie)) return undefined;
   const resumed = cursor === undefined ? undefined : reader.resume(cursor);
   if (cursor !== undefined && !resumed) return undefined;
-  // 新加的桶：订阅里有、落地的订阅里没有的（接着读的第一轮也要，每个请求都带着落地的订阅）
+  // Newly added buckets: present in current subscription but absent in landed subscription (evaluated on round 1 of resumption; requests include landed subscription).
   const before = decodeLanded(landed);
   const added = new Set(before ? subscription.filter((bucket) => !before.includes(bucket)) : []);
   if (resumed?.sub === sub) return { position: resumed, fresh: false, carried: resumed.carried, added };
@@ -92,7 +102,7 @@ function beginShared(commits: Commits, reader: Reader, { cookie, cursor, landed 
   return { position, fresh: true, added };
 }
 
-/** 共用空间拉一块：subscribed 是设备的订阅，另带桶规则（buckets）与每个桶的行数（rows），一块至多给 limit 个字符的改动 */
+/** Pulls one chunk for a shared space: `subscribed` contains device subscription, bucket rules, and bucket row counter; bounds chunk by `limit` characters. */
 export function pullShared(
   commits: Commits,
   reader: Reader,
@@ -103,15 +113,15 @@ export function pullShared(
 ): Poke | Chunk | Reset {
   const { cookie, cursor } = request;
   const { buckets, rows, subscription, sub } = subscribed;
-  // 都带上订阅的指纹与空间的这一代：设备带着目标作下限时据此认出目标是不是这一代
+  // Messages carry subscription fingerprint and space incarnation: devices verify target incarnation against their floor.
   const origin = { sub, incarnation: commits.incarnation() };
   const begun = beginShared(commits, reader, request, subscribed);
   if (!begun) {
-    // 共用空间的设备只读、没有待上传：cursor 认不出就回 reset，设备清空重下
+    // Devices in shared spaces are read-only with no pending writes: unrecognized cursors return reset to clear and resync.
     report.reset(cookie);
     return { base: cookie, reset: true, ...origin };
   }
-  // 整份新起时算总共（私有空间的按字节估）
+  // Total rows computed on full pull start (private spaces estimate by byte size).
   const { total, read: counted } = begun.fresh && begun.position.full ? rows.total(subscription) : { total: undefined, read: 0 };
   let progressed: Progress | undefined;
   const read = reader.read(
@@ -140,21 +150,25 @@ export function pullShared(
 }
 
 /**
- * 共用空间发给广播分片的一轮：base 之后到 cookie 改到的行，分片按每条连接的订阅筛（rows 的每一行：改前或改后在订阅的桶里才给，现在在就给值、
- * 不在了给删除）。没有 rows 是改到的太多、有不带键的一版（规则变了、表进出同步）或 base 不在当前历史上：分片只发提示，设备连着 HTTP 拉取（经缓存）。
- * incarnation 是空间的这一代（第 0 版的随机数，清空重建后不同）
+ * A batch of shared space changes dispatched to broadcast shards: rows modified between `base` and `cookie`,
+ * filtered by shards against each connection's subscription (each row delivered if in subscribed buckets before or after the change,
+ * emitting values if present and del if removed).
+ * Omitted `rows` indicates changes exceeded budget, unkeyed commits occurred (rule changes or table evolution),
+ * or `base` is off history: shards push hints prompting devices to pull over HTTP (via edge cache).
+ * `incarnation` is the space's version 0 random nonce, changing on rebuild.
  */
 export type Round = { base: Cookie; cookie: Cookie; incarnation: number; rows?: RoundRow[] };
 
-/** 一轮里改到的一行：row 是现在的值（不在了没有），now 是它现在在的桶，touched 是这段时间里改前或改后在的桶（都是规范写法） */
+/** A row modified within a round: `row` is current value (omitted if removed), `now` is current buckets, and `touched` lists all buckets occupied before or after change (canonical format). */
 type RoundRow = { table: string; key: Record<string, unknown>; row?: Record<string, unknown>; now: string[]; touched: string[] };
 
-/** 一轮里改到的一行：表、主键与这段时间里改前或改后在的桶 */
+/** Touch summary for a row in a round: table, primary key, and touched buckets during this period. */
 type RoundTouch = { table: string; key: Record<string, unknown>; buckets: Set<string> };
 
 /**
- * base 之后到最新一版改到的行（按行合并，带着各项记下的桶）；读的提交超过 readRows 行、有不带键的一版（规则变了、表进出同步）、
- * 有离开同步的表都给 undefined
+ * Collects rows touched from base version to head (coalesced per row with recorded buckets);
+ * returns undefined if read commits exceed readRows, unkeyed commits exist (rule changes or table evolution),
+ * or tables left sync.
  */
 function touchedSince(commits: Commits, base: Cookie) {
   const head = commits.head().version;
@@ -172,7 +186,7 @@ function touchedSince(commits: Commits, base: Cookie) {
   return [...touched.values()];
 }
 
-/** 一版的各项并进 touched（同一行合并它记下的桶）；不带键的一版、离开同步的表并不进，是 false */
+/** Merges commit keys into touch map (accumulating touched buckets per row); returns false if commit is unkeyed or table left sync. */
 function merge(touched: Map<string, RoundTouch>, keys: Keys) {
   if (keys.length === 0 || keys.some(([, key]) => key === null)) return false;
   for (const [table, key, names = []] of keys) {
@@ -185,13 +199,14 @@ function merge(touched: Map<string, RoundTouch>, keys: Keys) {
 }
 
 /**
- * 共用空间发给广播分片的一轮里改到的行：base 之后到最新一版改到的每一行，现在的值、现在在的桶与这段时间里改前或改后在的桶
- * （提交记录的项带着），分片按每条连接的订阅筛。读不全（touchedSince）、这段提交记录的主键超过 limit 字节、行的 JSON 超过 limit 个字符、base 不在当前历史上，都给 undefined：
- * 分片只发提示，设备去拉
+ * Collects modified rows in a shared space round for broadcast shards: all rows modified between `base` and head,
+ * with current values, current buckets, and touched buckets across the interval (from commit log), filtered by shards per connection subscription.
+ * Returns undefined if changes cannot be read in full (touchedSince), commit keys exceed limit bytes, serialized row JSON exceeds limit characters,
+ * or base is off history: shards push hints prompting devices to pull over HTTP.
  */
 export function sharedRound(commits: Commits, tables: TableReads, buckets: Buckets, query: Query, base: Cookie, limit: number) {
   if (!commits.onHistory(base)) return undefined;
-  // 这段提交记录的主键（累计字节相减）就超过上限：不读进内存（同一行改了很多次也算，那时只发提示，设备去拉）
+  // Exceeds byte limit based on commit log key byte difference alone: avoids reading into memory (frequent updates to same row push hints and pull).
   if (commits.bytesAt(commits.head().version) - commits.bytesAt(base.version) > limit) return undefined;
   const touched = touchedSince(commits, base);
   if (!touched) return undefined;
@@ -217,7 +232,7 @@ export function sharedRound(commits: Commits, tables: TableReads, buckets: Bucke
   return rows;
 }
 
-/** 共用空间写完时每一项并上它现在在的桶（改前的随这一项报出），改前、改后的桶报给 tally 增减各桶的行数 */
+/** Attaches post-write bucket memberships to each commit item on server write completion, reporting pre/post buckets to tally for row counts. */
 export function withBuckets(buckets: Buckets, query: Query, keys: Keys, tally: Tally): Keys {
   const now = buckets.now(query, changedRows(keys));
   return keys.map((entry) => {

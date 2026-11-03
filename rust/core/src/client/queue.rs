@@ -1,6 +1,7 @@
-//! 本机库的事排队一件件做：读、本机写、收下云端的改动、建共用空间、整份重下、对校验和与收缩库文件的一步；本机写开着时别的都排在它后面，
-//! 等满 5 秒提醒接入方。到时的计时器照记下的做。
-//! 不该知道的：每件事怎么做。
+//! Queued execution of local database tasks: queries, local writes, applying cloud changes, creating shared spaces,
+//! full resyncs, and incremental steps of checksum verification and database shrinking.
+//! While a local write is open, other tasks queue behind it and warn the integrator after 5s. Expired timers run recorded actions.
+//! What it should not know: how individual tasks are performed.
 
 #[cfg(feature = "testing")]
 use super::probe::Probe;
@@ -11,12 +12,12 @@ use crate::sync::instructions::{Instruction, Timer, Work};
 use crate::sync::mirror::Mirror;
 use serde_json::Value as Json;
 
-/// 排在开着的本机写后面等这么久就提醒（毫秒）
+/// Warning timeout for tasks queued behind an open local write (milliseconds).
 const STUCK_AFTER: f64 = 5000.0;
-/// 收缩库文件一步截多少页
+/// Number of pages freed per database shrinking step.
 const FREED_PER_STEP: u32 = 512;
 
-/// 排着的事
+/// Queued task.
 pub(super) enum Task {
     Query {
         id: u64,
@@ -42,7 +43,7 @@ pub(super) enum Task {
 
 pub(super) struct Queued {
     pub(super) task: Task,
-    /// 排在开着的本机写后面时，等太久提醒的计时
+    /// Timer warning if task waits too long behind an open local write.
     pub(super) stuck: Option<u32>,
 }
 
@@ -61,13 +62,13 @@ impl Client {
             Timer::Resume(Work::Verify) => self.enqueue(Task::Verify),
             Timer::Resume(Work::Shrink) => self.enqueue(Task::Shrink),
             Timer::Stuck => self.out.push(Instruction::Warn {
-                message: "Syncline：读写排在一次开着的本机写后面，已等了 5 秒。write 的 body 里只用 tx 读写，用 query、useQuery 或另一次 write 会一直等下去"
+                message: "Syncline: read or write queued behind an open local write has waited for 5s; use only tx inside write body instead of query, useQuery, or another write"
                     .to_owned(),
             }),
         }
     }
 
-    /// 排进队尾；本机写开着时排一个提醒
+    /// Pushes task to the back of the queue; schedules a warning timer if a local write is open.
     pub(super) fn enqueue(&mut self, task: Task) {
         let stuck = self.write.is_some().then(|| self.out.schedule(Timer::Stuck, STUCK_AFTER));
         self.queue.push_back(Queued { task, stuck });
@@ -79,7 +80,7 @@ impl Client {
         }
     }
 
-    /// 没有开着的本机写就一件件做排着的事
+    /// Processes queued tasks sequentially when no local write is open.
     pub(super) fn drain(&mut self, now: f64) {
         while self.write.is_none() && !self.closed {
             let Some(Queued { task, stuck }) = self.queue.pop_front() else {
@@ -123,7 +124,7 @@ impl Client {
                     self.out.schedule(Timer::Resume(Work::Shrink), 0.0);
                 }
                 Ok(false) => {}
-                // 出错（磁盘满了这类）照常报出就停，空页留到下次落地再截
+                // Report error (e.g. disk full) and stop; free pages will be trimmed at next landing
                 Err(error) => self.out.report(error),
             },
         }

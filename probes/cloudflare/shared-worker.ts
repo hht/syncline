@@ -1,14 +1,14 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { SynclineBroadcast, SynclineSharedSpace } from '../../src/cloudflare/index.ts';
 
-// 量平台限制用的临时 Worker（shared-write.ts 部署、量完删掉）：一张表 item 的共用空间，按 owner 分桶，广播分片取默认的个数。
-// 请求带部署时随机定的 SECRET，部署着的这几分钟里别人调不动
+// Ephemeral Worker for probing platform limits (deployed by shared-write.ts and deleted when finished): a shared space with a single item table bucketed by owner, using the default number of broadcast shards.
+// Requests require the randomly assigned SECRET generated at deployment time to prevent unauthorized access.
 
 type Env = { SHARED: DurableObjectNamespace<ProbeShared>; BROADCAST: DurableObjectNamespace<ProbeBroadcast>; SECRET: string };
 
 const item = sqliteTable('item', { id: text().primaryKey(), owner: text().notNull() });
 
-/** 一次后台写：spread 插入 rows 行、各在一个新桶；move 把 spread 的行各挪到一个新桶（离开一个、进一个）；same 插入 rows 行、都在同一个桶 */
+/** Server write pattern: spread inserts rows each into a distinct bucket; move moves each spread row to a new bucket (leaving one, entering another); same inserts rows all into the same bucket. */
 type Kind = 'spread' | 'move' | 'same';
 
 export class ProbeShared extends SynclineSharedSpace<Env> {
@@ -16,7 +16,7 @@ export class ProbeShared extends SynclineSharedSpace<Env> {
     super(ctx, env, { schema: { item }, buckets: { owner: { item: { by: ['owner'] } } }, broadcast: (bindings) => bindings.BROADCAST });
   }
 
-  /** 各表的桶行数都数完了：没数完时写进来的行不增减行数，量出的就少了这一块 */
+  /** Returns whether bucket row counting has finished across all tables, ensuring subsequent writes adjust bucket row counts. */
   counted() {
     return (
       this.ctx.storage.sql.exec<{ left: number }>('SELECT count(*) AS left FROM _syncline_counted WHERE after IS NOT NULL').one().left === 0
@@ -45,7 +45,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const space = url.searchParams.get('space');
-    // 没设 SECRET（不经 shared-write.ts 部署）时一律拒绝
+    // Rejects requests when SECRET is not configured or does not match.
     if (!space || !env.SECRET || url.searchParams.get('secret') !== env.SECRET) return new Response(null, { status: 403 });
     const shared = env.SHARED.getByName(space);
     if (url.pathname === '/counted') return Response.json(await shared.counted());

@@ -20,47 +20,41 @@ import { Upkeep } from './upkeep.ts';
 export { forwardShared, type SharedDefinition, type SharedIdentity, SynclineSharedEntry } from './shared-forward.ts';
 
 /**
- * 共用空间接到 Workers 上（缓存用 Workers Cache）：
- * - 入口（forwardShared）验身份、按令牌定订阅：WebSocket 随机转给一个广播分片；HTTP 拉取去掉 Authorization、把订阅放进 ctx.props，
- *   经 ctx.exports 调开了缓存的入口（SynclineSharedEntry），同一订阅同一网址的响应全网共用一份缓存；
- * - 入口再调共用空间的 Durable Object（DO 本身不能缓存），它按块的种类给缓存时长；
- * - 后台写（mutate）之后把这一轮（改到的行与它们在的桶）并行发给全部广播分片（SynclineBroadcast），分片按每条连接的订阅筛、转给连着的设备；
- *   怎么发（每个分片各自一条，确认了才前进）见 Fanout，这里给它接上分片的 RPC 与超时、落库，没送到的按退避再发。
- * 接入方继承这三个类、传入定义（表与桶规则），在 wrangler 配置里关掉入口 Worker 的缓存、打开 SynclineSharedEntry 子类的缓存。
- * 不该知道的：身份怎么验、订阅怎么从身份定、接入方的业务。
+ * Shared spaces on Cloudflare Workers (backed by Workers Cache):
+ * - Entry router ({@link forwardShared}) verifies identity and resolves token subscriptions: routes WebSockets to random broadcast shards;
+ *   strips `Authorization` on HTTP pulls, puts the subscription in `ctx.props`, and calls the cache-enabled entrypoint ({@link SynclineSharedEntry})
+ *   via `ctx.exports` so identical subscriptions and URLs share one cached response across the network;
+ * - The entrypoint calls the shared space Durable Object ({@link SynclineSharedSpace}, since DO responses themselves are not cached), which sets cache TTLs by chunk type;
+ * - Server writes (`mutate`) dispatch the resulting round (changed rows and their buckets) in parallel to all broadcast shards ({@link SynclineBroadcast}),
+ *   which filter by each connection's subscription; see {@link Fanout} for per-shard delivery, timeouts, persistence, and backoff retries.
+ * Integrators subclass these three classes, pass the shared definition (tables and bucket rules), disable caching on the entry Worker, and enable caching on the {@link SynclineSharedEntry} subclass.
+ * What it should not know: how identities are verified, how subscriptions are derived from identities, or integrator business logic.
  * @see https://developers.cloudflare.com/workers/cache/examples/
  * @see https://github.com/electric-sql/electric/blob/3f9809fb0bd894cb74470d434749673492ad7acf/packages/sync-service/lib/electric/shapes/api/response.ex
  */
 
-// 全部分片都确认到的那一版，存在共用空间的 KV 里
+// Monotonically increasing version acknowledged by all broadcast shards, stored in shared space KV.
 const fanoutKey = 'syncline:fanout';
-// 发一轮在定时表里登记的名字：重发与定时醒是同一件
+// Registered chore name for fanout dispatch and periodic wakeups in the schedule table.
 const deliverName = `${reserved}deliver`;
 
-// 重发的退避
+// Fanout retry backoff parameters.
 const retryDelay = 1000;
 const retry = { base: retryDelay, max: 60_000 };
-// 没有要重发时也每隔这么久醒一次（一个共用空间每天 24 次请求）：部署后打开时记了重扫的那一版要发出去；对象要有人叫醒才发得出去，
-// 分片不会为游标没变的设备来问，alarm 跨部署留着、醒来跑的是新代码
+// Periodic wakeup interval (24 alarms per day) to retry unacknowledged fanouts or push newly scanned versions across deploys.
 const refreshInterval = 3_600_000;
 
-/** 给一个分片发一轮至多等多久：一个分片同一时刻只有一轮在路上，卡住的算没送到，不让它排在后面的一轮一直等 */
+/** Maximum duration to await fanout delivery to a single broadcast shard before timing out. */
 const notifyTimeout = 10_000;
 
-/**
- * 发给分片的一轮里改到的行至多多少字符：每个分片各收一份（默认 128 片），分片按每条连接的订阅筛，筛出的一条通知仍要在 socketLimit 之内；
- * 取它的 10 倍，订阅很窄的设备也收得到通知，一次大写给每个分片的不过约 24 万字符。超了只发提示，设备去拉
- */
+/** Maximum character count of changed rows in a fanout round to keep individual shard notices within socketLimit. */
 const roundLimit = 10 * socketLimit;
 
-/**
- * 一块可以缓存多久：首个请求（定基准版本）60 秒，让新设备拿到最近的块边界；
- * 末块与重置（最新一版，被广播叫来的设备同时拉）5 秒，一阵请求合并成一次；中间的块由位置决定，过时的副本也照样对（model/Shared.tla），缓存一天
- */
+/** Computes Cache-Control header based on pull request and chunk properties. */
 function cacheControl(request: PullRequest, chunk: Poke | Chunk | Reset) {
-  // 带下限的请求，响应只能在云端到了下限之后算出（model/Shared.tla）：还没到（伪造的请求）就不进缓存，免得这个网址存着比下限旧的
+  // Requests with floor versions cannot be served before the cloud reaches that version (model/Shared.tla): bypass cache if not reached.
   if (request.atLeast !== undefined && !('reset' in chunk) && (chunk.seen ?? 0) < request.atLeast) return 'no-store';
-  // 带这一代的请求同理：云端不在这一代（分片记着的是上一代，或伪造的）就不进缓存，设备拿到现算的才放下它
+  // Requests with incarnations bypass cache if the space incarnation has changed.
   if (request.incarnation !== undefined && chunk.incarnation !== request.incarnation) return 'no-store';
   if ('reset' in chunk || 'cookie' in chunk) return 'public, max-age=5';
   if (request.cursor === undefined) return 'public, max-age=60';
@@ -68,20 +62,20 @@ function cacheControl(request: PullRequest, chunk: Poke | Chunk | Reset) {
 }
 
 type SharedOptions<Env> = SharedDefinition & {
-  /** 这个共用空间的广播分片 */
+  /** Broadcast shard Durable Object namespace for this shared space. */
   broadcast: (env: Env) => DurableObjectNamespace<SynclineBroadcast>;
-  /** 接入方给表的 Standard Schema，后台写按它查 */
+  /** Standard Schema definitions used to validate server writes. */
   validation?: Validation;
-  /** 拉取的块、重置、广播分片没通知到 */
+  /** Event callback for pulls, resets, and failed broadcast notices. */
   events?: Events;
-  /** 删掉的表与列（「表.列」），不再回到同步，与设备上的一样 */
+  /** Retired tables and columns excluded from sync. */
   retired?: string[];
 };
 
 /**
- * 一个共用空间的 Durable Object：只由后台写，设备只读；只经 SynclineSharedEntry 转进来拉取，经 SynclineBroadcast 收通知。
- * 接入方继承它、传入定义（表与桶规则，与入口的同一份）；mutate、schedule、unschedule 与 SynclineSpace 一样是实例上的函数，经 RPC 调不到。
- * alarm 由这里管：发通知与接入方的定时都登记在定时表里，子类不要覆盖 alarm，自己的定时用 schedule 登记、在 scheduled 里做
+ * Shared space Durable Object: written only by the server (`mutate`), read-only for devices; entered only via {@link SynclineSharedEntry} for pulls and {@link SynclineBroadcast} for live notifications.
+ * Integrators subclass it and pass the definition (tables and bucket rules, shared with the entry Worker); `mutate`, `schedule`, and `unschedule` are instance properties like on {@link SynclineSpace} and cannot be called over RPC.
+ * Alarms are managed here: fanout delivery and integrator timers are registered in the schedule table; subclasses must not override `alarm`—register timers via `schedule` and handle them in `scheduled`.
  */
 export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
   readonly #space: Space;
@@ -89,7 +83,7 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
   readonly #upkeep: Upkeep;
   readonly #fanout: Fanout;
 
-  /** options：定义（表与桶规则，照它建表、补列、建索引）与广播分片等，见 SharedOptions */
+  /** Initializes tables, bucket rules, indexes, upkeep chores, and fanout delivery from `options` (see {@link SharedOptions}). */
   constructor(ctx: DurableObjectState, env: Env, options: SharedOptions<Env>) {
     super(ctx, env);
     const { schema, buckets, chunkRows, validation, events = quiet, retired } = options;
@@ -107,14 +101,14 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     });
     const broadcast = options.broadcast(env);
     const name = ctx.id.name ?? '';
-    // 发给一个分片至多等 notifyTimeout，卡住的算没送到；全部确认到了落库、登记下一次定时醒
+    // Dispatches fanout rounds with notifyTimeout per shard; updates KV and arms periodic wakeup when all shards acknowledge.
     this.#fanout = new Fanout(
       {
         shards: Array.from({ length: options.shards ?? defaultShards }, (_, index) => shardName(name, index)),
         head: () => this.#space.head(),
         round: (from, head) => this.#space.round(roundLimit, from ?? head),
         send: (shard, round) =>
-          withTimeout(broadcast.getByName(shard).notify(round), notifyTimeout, `分片 ${notifyTimeout / 1000} 秒没回话`),
+          withTimeout(broadcast.getByName(shard).notify(round), notifyTimeout, `Shard timed out after ${notifyTimeout / 1000}s`),
         failed: (shard, error) => this.#events({ type: 'notice.failed', shard, reason: String(error) }),
         confirmed: async (head) => {
           ctx.storage.kv.put(fanoutKey, head);
@@ -124,19 +118,18 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
       },
       ctx.storage.kv.get<Cookie>(fanoutKey) ?? null,
     );
-    // 还有没发完的（打开时记了重扫；全新的库：新建、清空重建之后，分片可能记着上一代的）：马上发一轮，不等定时醒
-    // 用 by：分片一直没送到、正在退避时不清掉退避（每次打开对象不各重试一次）
+    // Dispatches immediately if unacknowledged shards or pending rescans exist, preserving active backoff.
     if (!this.#fanout.allAcked()) this.timetable.by(deliverName, Date.now());
     else if (this.timetable.when(deliverName) === undefined) this.timetable.at(deliverName, Date.now() + refreshInterval);
-    // 登记了、alarm 却没排上（登记之后、排之前对象重启了）：照登记的重排
+    // Re-arms the alarm on startup to recover scheduled times if the actor restarted before setting the alarm.
     void ctx.blockConcurrencyWhile(() => this.timetable.arm());
   }
 
-  /** HTTP 拉取的一块：请求在 URL 的查询串里，订阅在入口加的请求头上 */
+  /** Handles HTTP pull requests: query parameters in URL, subscription in forwarded request headers. */
   override async fetch(request: Request) {
     if (request.method !== 'GET') return new Response(null, { status: 405 });
     const subscribed = subscribedOf(request);
-    if (!subscribed) throw new Error('拉取没经入口转来');
+    if (!subscribed) throw new Error('Pull request was not forwarded through the entry Worker');
     const pull = parsePullRequest(new URL(request.url));
     const chunk = this.#space.pullShared(pull, subscribed);
     return new Response(JSON.stringify(chunk), {
@@ -144,65 +137,62 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     });
   }
 
-  /** 最新一版（广播分片对不上设备的游标时来问）：没有改动的一轮 */
+  /** Returns the latest empty round for broadcast shards to catch up out-of-sync client cookies. */
   latest(): Round {
     return this.#space.round(roundLimit);
   }
 
   /**
-   * 后台写：接入方在自己的方法里调用，同步提交，再把这一轮并行发给全部广播分片，等到各分片包含这次提交的那一轮发完；执行出错整条不提交，抛给调用方；抛错不代表没提交（如提交之后、发通知的途中对象被重置），所以重试要能重做。
-   * 与提交在同一回合里先登记好重发，再发：发的途中对象被重置（部署、超时），重启后 alarm 照样从落库的那一版发（最新一版比它新），不会只提交不通知
+   * Executes a server write: called from integrator methods, commits synchronously, and dispatches the round in parallel to all broadcast shards,
+   * awaiting delivery of a round covering this commit; rolls back and rethrows on execution error.
+   * Throwing does not guarantee the write was not committed (for example, if the actor is reset after committing while delivering notices), so retries must be idempotent.
+   * Schedules retry in the same turn before delivering so that if the actor resets mid-delivery (deploy or timeout), the alarm resumes from the persisted version on restart.
    */
   protected readonly mutate = async (write: (tx: Transaction) => void) => {
-    // 设备连的是广播分片，发给分片的一轮另算（round），这里只提交
+    // Clients connect to broadcast shards; fanout rounds are delivered separately, so mutate commits directly.
     const base = this.#space.head();
     this.#space.mutate(write, 0);
-    // 没改到同步的行就没有新的一版，不发
+    // Omit fanout when no synced tables were modified.
     if (this.#space.head().version === base.version) return;
-    // 日志超了上限就登记截日志
+    // Schedules commit log truncation if limits were exceeded.
     this.#upkeep.written();
     this.timetable.by(deliverName, Date.now() + retryDelay);
     await this.timetable.arm();
     await this.#fanout.deliver();
   };
 
-  /** 定时表里到时候了的：后台收拾的事、发通知（mutate 与没送到时登记的重发、定时醒）与接入方的定时；做完把 alarm 排到下一件 */
+  /** Executes due background upkeep chores, fanout redelivery, periodic wakeups, and integrator callbacks. */
   override async alarm() {
     await this.timetable.run(
-      // 没送到的分片已各报了 notice.failed
       (name) =>
         this.#upkeep.chore(name) ?? (name === deliverName ? { run: () => this.#redeliver(), retry, failed: () => undefined } : undefined),
       (name) => this.scheduled(name),
     );
   }
 
-  /** alarm 里的重发与定时醒：还有没跟上的分片就抛出，按退避重排 */
+  /** Retries fanout delivery during alarms, rethrowing to trigger backoff if shards remain unacknowledged. */
   async #redeliver() {
     await this.#fanout.deliver();
-    // 判跟上与登记在同一段同步代码里：中间插进来的写登记的重发不会被定时醒盖掉
-    if (!this.#fanout.allAcked()) throw new Error('还有分片没送到');
-    // 都已跟上：定时醒照样续上（这次一轮也没发时 Fanout 不报 confirmed、不登记），不然之后只能等外面的请求叫醒
+    // Checks acknowledgments synchronously to prevent intervening mutations from overwriting delivery state.
+    if (!this.#fanout.allAcked()) throw new Error('Some broadcast shards have not acknowledged fanout');
+    // Reschedules periodic wakeup if all shards are caught up.
     this.timetable.at(deliverName, Date.now() + refreshInterval);
     return false;
   }
 }
 
-/**
- * 共用空间的一个广播分片：把可休眠的 WebSocket 接到 Broadcast 上（知道到哪一轮只在内存里，推给每条连接的最后一版在连接的附带数据里）。
- * 接入方继承它、传入共用空间的命名空间
- */
+/** Broadcast shard Durable Object: bridges hibernatable WebSockets to {@link Broadcast} in memory. */
 export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
   readonly #broadcast: Broadcast<WebSocket>;
-  /** 排着的 alarm 的时刻，null 是没排（只在内存里：休眠、重启后是 undefined，先问存储） */
+  /** Scheduled alarm epoch ms, or null if no alarm is scheduled. */
   #alarm: number | null | undefined;
 
-  /** events：关连接 */
   constructor(ctx: DurableObjectState, env: Env, shared: DurableObjectNamespace<SynclineSharedSpace>, events?: Events) {
     super(ctx, env);
     const name = ctx.id.name ?? '';
     const space = shared.getByName(name.slice(0, name.lastIndexOf('#')));
     this.#broadcast = new Broadcast(ctx, async () => (await space.latest()) as Round, events);
-    // 心跳由运行时直接回，不唤醒对象
+    // Configures automatic WebSocket ping-pong handling at the runtime layer without waking the actor.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(ping, pong));
   }
 
@@ -210,7 +200,7 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response(null, { status: 405 });
     const expiresAt = numberHeader(request, expiresHeader);
     const subscribed = subscribedOf(request);
-    if (expiresAt === undefined || !subscribed) throw new Error('连接没经入口转来');
+    if (expiresAt === undefined || !subscribed) throw new Error('WebSocket connection was not forwarded through the entry Worker');
     const { 0: client, 1: server } = new WebSocketPair();
     await this.#broadcast.accept(server, parsePullRequest(new URL(request.url)).cookie, expiresAt, subscribed);
     await this.#wakeBy(expiresAt);
@@ -225,7 +215,7 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
     return this.#broadcast.notify(round);
   }
 
-  /** 关掉身份到期的连接，排到下一个到期的 */
+  /** Closes expired connections and schedules alarms for upcoming expiries. */
   override async alarm() {
     this.#alarm = null;
     const earliest = this.#broadcast.closeExpired();
@@ -233,8 +223,7 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * 身份在 at 到期的连接最迟在 at 之后的整分钟关掉：没排 alarm 或排得更晚，就改排到这一分钟。按分钟合并，一片至多每分钟醒一次
-   * （alarm 按一次请求、改排按写一行计费；对象空闲时不计时长）。到期时刻由接入方给、可以很远（alarm 排不到 2189 年之后）：至多排到一天后，醒来再排
+   * Batches alarm wakeups for expiring connections to the next whole minute, capped at 24 hours into the future.
    * @see https://developers.cloudflare.com/durable-objects/platform/pricing/
    */
   async #wakeBy(at: number) {

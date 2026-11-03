@@ -1,23 +1,28 @@
 import { report } from '../common/listeners.ts';
 
 /**
- * 一个进程里一个本机库只开一份（同一个库开两份就是两个 Device 各自排队写同一个文件），前台打开与后台任务的 syncOnce 怎么共用这一份：
- * 后台任务被叫醒时 App 还开着库，syncOnce 就用开着的那份、不关；syncOnce 开着时用户点开了 App，前台接管同一个人的那份，syncOnce 同步完不再关它；
- * 开着的是别人的（换了人登录），前台先关掉它再开自己的，那次 syncOnce 随之失败。只在手机上用（web 没有后台任务）。
- * 不该知道的：库怎么打开、同步怎么进行。
+ * Coordinates single-instance ownership of open local databases within a process between foreground and background tasks.
+ *
+ * Opening the same database twice would create two independent device sync state machines competing for the same file.
+ * When a background task wakes up while the database is already open, syncOnce shares that open instance without closing it.
+ * If the user opens the app while syncOnce is running, foreground adopts the database for that owner so syncOnce does not close it.
+ * If the background database belongs to a different owner, foreground closes it before opening its own instance, failing that syncOnce.
+ * Used only on mobile (web has no background tasks).
+ * What this module must not know: How databases are opened or how sync proceeds internally.
  */
 
 type Database = { sync(options?: { signal?: AbortSignal }): Promise<void>; close(): Promise<void> };
 
-/** 开着的一份：主人（私有空间属于谁），是不是后台任务的 syncOnce 开的、还没被前台接管 */
+/** Tracked open instance: owner (private space owner) and whether opened by background syncOnce task not yet adopted by foreground. */
 type Entry<D> = { database: D; owner: string | undefined; background: boolean };
 
 export class OpenDatabases<D extends Database> {
   readonly #opened = new Map<string, Entry<D>>();
 
   /**
-   * 前台打开：后台任务开着同一个人的就接管它，开着别人的就先关掉它（不等关完：新开的在原生一侧等旧的关完才开库文件）；前台已经开着（重复打开）就抛错。
-   * create 开出的库关库时（一调用就算）要调 closed
+   * Opens database in foreground, adopting an existing background instance for the same owner or closing one of a different owner.
+   *
+   * Throws if already open in the foreground. The caller must call closed as soon as close is invoked on the created instance.
    */
   open(name: string, owner: string | undefined, create: () => D): D {
     const running = this.#opened.get(name);
@@ -25,7 +30,8 @@ export class OpenDatabases<D extends Database> {
       running.background = false;
       return running.database;
     }
-    if (running && !running.background) throw new Error(`本机库 ${name} 已经开着：先关掉，或用开着的那份`);
+    if (running && !running.background)
+      throw new Error(`Local database ${name} is already open: close it first, or reuse the open instance`);
     if (running) {
       this.#opened.delete(name);
       running.database.close().catch(report);
@@ -35,12 +41,12 @@ export class OpenDatabases<D extends Database> {
     return database;
   }
 
-  /** 一份库关了（关库一调用就算，不等关完）：不再算开着 */
+  /** Marks a database closed as soon as close is initiated without waiting for completion, so it is no longer considered open. */
   closed(name: string, database: D) {
     if (this.#opened.get(name)?.database === database) this.#opened.delete(name);
   }
 
-  /** 后台任务同步一次：开着就用开着的那份、不关；没开就开一份，同步完（出错也是）关掉，同步期间被前台接管了就不关 */
+  /** Runs single sync pass in background task, reusing open instance if present or opening temporary instance and closing on completion. */
   async syncOnce(name: string, owner: string | undefined, create: () => D, options?: { signal?: AbortSignal }) {
     const running = this.#opened.get(name);
     if (running) return running.database.sync(options);

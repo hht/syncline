@@ -14,9 +14,9 @@ import { Connection } from '../test/test-sync.ts';
 import { heartbeat } from './test-connection.ts';
 import { chunkLimit, createDraft, createNote, draft, expectConnected, idle, note, setup, url } from './test-status.ts';
 
-// 同步状态：跟着连接、拉取、上传走，每次变了报给订阅者
+// Sync status: tracks connection, download, and upload state, delivering updates to subscribers.
 
-test('状态跟着连接走：start 前都是假；整份拉取时在下载、带进度；连上补齐后已连上、同步过；每次变了都报给 onStatus', async () => {
+test('status tracks connection: false before start; downloading with progress during full pull; connected after catch-up', async () => {
   const { connection, seen, run } = setup();
   expect(connection.status()).toEqual(idle);
   connection.start();
@@ -32,7 +32,7 @@ test('状态跟着连接走：start 前都是假；整份拉取时在下载、�
   expect(connection.status()).toEqual({ ...idle, hasSynced: true });
 });
 
-test('HTTP 拉完了、WebSocket 还没连上（被代理挡住这类）：拉完那一刻就是同步过', async () => {
+test('HTTP pull completes before WebSocket connects (e.g. proxy blockage): marked as hasSynced upon pull completion', async () => {
   const { network, connection } = setup();
   connection.start();
   await flush();
@@ -46,7 +46,7 @@ test('HTTP 拉完了、WebSocket 还没连上（被代理挡住这类）：拉�
   connection.stop();
 });
 
-test('待上传：本机写之后加一，云端确认后清零', async () => {
+test('pending count: increments on local write, resets to zero upon cloud confirmation', async () => {
   const { device, connection, run } = setup();
   connection.start();
   await run();
@@ -57,12 +57,12 @@ test('待上传：本机写之后加一，云端确认后清零', async () => {
   connection.stop();
 });
 
-test('取不到 token、连接断了记成下载出错，之后连上清掉', async () => {
+test('records download error on failed token or disconnect, cleared on successful reconnect', async () => {
   const { network, state, connection, run } = setup();
   state.tokenFails = true;
   connection.start();
   await flush();
-  expect(connection.status()).toMatchObject({ connecting: true, downloadError: new Error('取不到 token') });
+  expect(connection.status()).toMatchObject({ connecting: true, downloadError: new Error('failed to get token') });
 
   state.tokenFails = false;
   network.fire();
@@ -76,7 +76,7 @@ test('取不到 token、连接断了记成下载出错，之后连上清掉', as
   connection.stop();
 });
 
-test('云端执行不了的写扣下待修复：序号照样推进、待上传清掉，onHeld 给出原因与原样的改动；不算上传出错，sync() 照常成功', async () => {
+test('holds mutations that fail validation on cloud: advances lmid and clears pending, onHeld delivers reason and changes', async () => {
   const { space, device, connection, serverErrors, run } = setup();
   connection.start();
   await run();
@@ -93,12 +93,12 @@ test('云端执行不了的写扣下待修复：序号照样推进、待上传�
   connection.stop();
 });
 
-test('云端处理推送本身出错（存储出错这类，不是某条写执行不了）：以 1011 关掉，记成上传出错，正在等的 sync() 随之失败', async () => {
+test('records uploadError and fails pending sync() when cloud push handler throws internal error (closing with 1011)', async () => {
   const { space, device, connection, serverErrors, run, events } = setup();
   connection.start();
   await run();
   space.push = () => {
-    throw new Error('存储出错');
+    throw new Error('storage error');
   };
   await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
   const failed = connection.sync().catch((error: unknown) => error);
@@ -106,12 +106,12 @@ test('云端处理推送本身出错（存储出错这类，不是某条写执�
   expect(serverErrors).toHaveLength(1);
   expect(connection.status()).toMatchObject({ connected: false, pending: 1, uploadError: expect.any(Error) });
   expect(await failed).toEqual(connection.status().uploadError);
-  expect(events).toContainEqual({ type: 'push.failed', reason: '存储出错' });
+  expect(events).toContainEqual({ type: 'push.failed', reason: 'storage error' });
   expect(events).toContainEqual({ type: 'connection.closed', code: 1011, reason: 'push failed' });
   connection.stop();
 });
 
-test('超过云端的写入额度：以 1013 关掉，记成上传出错（不是下载），写还在待上传、按退避重推', async () => {
+test('exceeding write quota: closes with 1013, records uploadError without downloadError, retains pending writes', async () => {
   const { device, connection, run, events } = setup({ rate: 1e-9, burst: 1 });
   connection.start();
   await run();
@@ -126,12 +126,12 @@ test('超过云端的写入额度：以 1013 关掉，记成上传出错（不�
   connection.stop();
 });
 
-test('云端以 4000 关掉连接（游标不在当前历史上，要先拉取）：不立刻重连、不算失败，拉取（整份重拉）后再连上', async () => {
+test('cloud closes with 4000 (cookie off history, pull required): full pull before reconnecting cleanly without error', async () => {
   const { cloud, network, connection, run, events } = setup();
   connection.start();
   await run();
   expect(connection.status()).toMatchObject({ connected: true });
-  // 云端的历史换掉了（时间点恢复后又写了同样多版）：设备游标那一版的随机数对不上
+  // Cloud history replaced (PITR followed by writes): cookie nonce no longer matches.
   cloud.sql.exec('UPDATE _syncline_commit SET nonce = nonce + 1 WHERE version = (SELECT max(version) FROM _syncline_commit)');
   network.breakOne();
   await run();
@@ -140,7 +140,7 @@ test('云端以 4000 关掉连接（游标不在当前历史上，要先拉取�
   connection.stop();
 });
 
-test('通知太大：云端只发提示、连接不断，设备连着 HTTP 拉到追上，不算失败、不重连', async () => {
+test('oversized notice: cloud delivers hint, device catches up via HTTP pull without disconnecting or error', async () => {
   const { server, network, connection, run, events, notes } = setup();
   connection.start();
   await run();
@@ -159,7 +159,7 @@ test('通知太大：云端只发提示、连接不断，设备连着 HTTP 拉�
   connection.stop();
 });
 
-test('前一批推送还没确认时又写了：不重发在路上的那批，确认到了再推下一批；每条写只推一次', async () => {
+test('local writes during in-flight push batch: queues next batch until confirmation arrives, pushing each mutation once', async () => {
   const { server, device, connection, run } = setup();
   const pushed: string[] = [];
   const receive = server.receive.bind(server);
@@ -178,33 +178,33 @@ test('前一批推送还没确认时又写了：不重发在路上的那批，�
   connection.stop();
 });
 
-test('界面的监听器抛错：本机写照样成功、照样推送并被确认，别的监听器照样收到；错误照常报出（不吞）', async () => {
+test('UI listener throw: local write and push confirmation succeed, other listeners receive updates, error reported', async () => {
   const { device, connection, run } = setup();
   const reported = captureReported();
   try {
     connection.start();
     await run();
     device.onChange(() => {
-      throw new Error('界面出错');
+      throw new Error('ui error');
     });
     connection.onStatus(() => {
-      throw new Error('状态出错');
+      throw new Error('status error');
     });
     await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
     await run();
     expect(connection.status().pending).toBe(0);
-    expect(reported).toContain('界面出错');
-    expect(reported).toContain('状态出错');
+    expect(reported).toContain('ui error');
+    expect(reported).toContain('status error');
   } finally {
     connection.stop();
   }
 });
 
-test('云端认不出推上去的这批（设备的缺陷：解析不了、超出上限、认不出写的身份）：以 1007 关、报 push.failed；设备报 uploadError，这次不再推，下载照常；整份重下留着它还会被拒，丢掉待上传才照常推', async () => {
+test('cloud rejects unrecognized push batch (1007): reports uploadError without retrying, resync preserves pending until discarded', async () => {
   const { device, connection, run, events, serverErrors, state } = setup();
   connection.start();
   await run();
-  // 写 n9 的那条认不出是哪个客户端的：没法扣下、推进序号，整批拒收（只是改动认不出的那条，云端扣下它、不拒收整批）
+  // Mutate client ID so write cannot be attributed: rejected entirely instead of held.
   const broken = (mutation: Mutation) => JSON.stringify(mutation.changes).includes('"n9"');
   state.tamper = (mutation) => (broken(mutation) ? { ...mutation, client: 1 as never } : mutation);
   await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
@@ -219,28 +219,27 @@ test('云端认不出推上去的这批（设备的缺陷：解析不了、超�
   expect(connection.status()).toMatchObject({
     connected: true,
     pending: 1,
-    uploadError: expect.objectContaining({ message: expect.stringContaining('认不出') }),
+    uploadError: expect.objectContaining({ message: expect.stringContaining('unrecognized push') }),
   });
-  // 不再推、待上传永远不为 0：手动同步立刻带着上传的错失败，不一直等（等不到追平）
+  // Disables push; pending count remains non-zero: sync() fails immediately with upload error.
   const outcome = connection.sync().then(
     () => 'synced',
     (error: Error) => error.message,
   );
   await run();
-  expect(await Promise.race([outcome, Promise.resolve('waiting')])).toContain('认不出');
-  // 整份重下默认留着待上传：重新开始推，那批还会被拒，等着的随之失败
-  await expect(Promise.all([connection.resync(), run()])).rejects.toThrow('认不出');
+  expect(await Promise.race([outcome, Promise.resolve('waiting')])).toContain('unrecognized push');
+  // resync preserves pending by default: resumes pushing, fails again.
+  await expect(Promise.all([connection.resync(), run()])).rejects.toThrow('unrecognized push');
   expect(connection.status().pending).toBe(1);
   await Promise.all([connection.resync({ discardPending: true }), run()]);
   await write(device, (tx) => tx.insert(note).values({ id: 'n10' }));
   await run();
   expectConnected(connection, { pending: 0 });
-  // 两次被拒各报一次（整份重下留着的那批又被拒了一次）
   expect(reported).toHaveLength(2);
   connection.stop();
 });
 
-test('待上传里夹着一条改动认不出的写（设备的缺陷、版本不符）：云端只扣下它，前后的写照常确认，不用清空重下，设备同步完、告诉接入方哪条被扣下', async () => {
+test('mutation with malformed changes in upload queue: held by cloud while preceding and subsequent writes confirm', async () => {
   const { device, connection, run, space, notes, state } = setup();
   connection.start();
   await run();
@@ -252,14 +251,14 @@ test('待上传里夹着一条改动认不出的写（设备的缺陷、版本�
   expectConnected(connection, { pending: 0 });
   expect(space.held()).toMatchObject([{ id: 2, changes: 'x' }]);
   expect(held).toEqual([
-    { reason: expect.stringContaining('格式不对'), changes: [expect.objectContaining({ row: expect.objectContaining({ id: 'bad' }) })] },
+    { reason: expect.stringContaining('Malformed'), changes: [expect.objectContaining({ row: expect.objectContaining({ id: 'bad' }) })] },
   ]);
   expect(notes().map(({ id }) => id)).toEqual(expect.arrayContaining(['g1', 'g2']));
   expect(notes().map(({ id }) => id)).not.toContain('bad');
   connection.stop();
 });
 
-test('云端说的空间变了（这台设备上换了账号）：同步停下、报 AccountMismatch，不再重连，本机的数据与待上传都留着', async () => {
+test('space identity change (account switch): stops sync with AccountMismatch without retrying, preserving data and pending writes', async () => {
   const space = new Space(cloudStorage(createNote, createDraft), [note, draft]);
   space.mutate((tx) => tx.insert(note, { id: 'n1' }));
   let identity = 'alice';
@@ -283,12 +282,12 @@ test('云端说的空间变了（这台设备上换了账号）：同步停下�
   expect(reported).toHaveLength(1);
 });
 
-test('连接断了、对方给了原因（手机上连不上：解析地址、TLS、握手被拒都以 1006 带着原因交来）：下载出错的消息带着原因', () =>
+test('connection close carries remote reason (e.g. mobile TLS or handshake refusal): download error message includes reason', () =>
   withFakeTimers(async () => {
     const { connection, sockets, open } = await heartbeat();
     open();
-    sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: 1006, reason: '证书不受信任' }));
+    sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: 1006, reason: 'untrusted certificate' }));
     await flush();
-    expect(connection.status().downloadError?.message).toBe('连接断了（关闭码 1006：证书不受信任）');
+    expect(connection.status().downloadError?.message).toBe('connection closed (code 1006: untrusted certificate)');
     connection.stop();
   }));

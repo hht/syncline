@@ -6,16 +6,16 @@ import { captureReported } from '../test/test-errors.ts';
 import { createWorkout, install, pulled, tables, upload, workout, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 
-// 冲突的语义：按列覆盖、后到云端的为准；删除不是墓碑，同一个主键整行重建、后到的就回来
+// Conflict resolution semantics: last-write-wins per column on the cloud; deletes are not tombstones.
 
-/** 云端有一行 settings，两台设备都拉过 */
+/** Cloud space pre-populated with a settings row and two synced devices. */
 async function shared() {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, tables);
-  space.mutate((tx) => tx.insert(workout, { id: 'settings', note: '旧的' }));
+  space.mutate((tx) => tx.insert(workout, { id: 'settings', note: 'initial' }));
   const phone = await install(space);
   const tablet = await install(space);
-  /** 先传手机的、再传平板的，返回两台与云端最后的样子 */
+  /** Uploads phone changes first, then tablet changes, returning final state across phone, tablet, and cloud. */
   const settle = async () => {
     await upload(space, phone.device, [phone.device, tablet.device]);
     await upload(space, tablet.device, [phone.device, tablet.device]);
@@ -24,26 +24,26 @@ async function shared() {
   return { space, phone, tablet, settle };
 }
 
-test('一台删了一行，另一台离线时先删、之后按同一个主键插回来：插的后到云端，这一行回来，两台与云端一致', async () => {
+test('row deleted on one device and recreated with same primary key on another: latest insert wins, achieving convergence', async () => {
   const { phone, tablet, settle } = await shared();
   await write(phone.device, (tx) => tx.delete(workout));
   await write(tablet.device, (tx) => tx.delete(workout));
-  await write(tablet.device, (tx) => tx.insert(workout).values({ id: 'settings', note: '平板重建的' }));
-  const recreated = [{ id: 'settings', note: '平板重建的' }];
+  await write(tablet.device, (tx) => tx.insert(workout).values({ id: 'settings', note: 'recreated on tablet' }));
+  const recreated = [{ id: 'settings', note: 'recreated on tablet' }];
   expect(await settle()).toEqual([recreated, recreated, recreated]);
 });
 
-test('同一次写里删了又按同一个主键插：记成「改」（session 扩展这样记），按列上传；别处同时删了这一行，它就不回来，两台与云端一致', async () => {
+test('delete followed by insert with same primary key in single transaction recorded as patch: concurrent delete deletes row', async () => {
   const { phone, tablet, settle } = await shared();
   await write(phone.device, (tx) => tx.delete(workout));
   await write(tablet.device, async (tx) => {
     await tx.delete(workout);
-    await tx.insert(workout).values({ id: 'settings', note: '平板重建的' });
+    await tx.insert(workout).values({ id: 'settings', note: 'recreated on tablet' });
   });
   expect(await settle()).toEqual([[], [], []]);
 });
 
-test('重放一条待上传时出了拒收之外的错（两列合起来违反 CHECK，两台各改一列）：本机当作预测失败、照常收下云端改动，上传后云端扣下，两台与云端一致', async () => {
+test('replaying pending write fails CHECK constraint (each device mutates one column): local prediction drops, cloud holds write', async () => {
   const pair = sqliteTable('pair', { id: text().primaryKey(), a: integer(), b: integer() });
   const createPair = 'CREATE TABLE pair (id TEXT PRIMARY KEY, a INTEGER, b INTEGER, CHECK (coalesce(a, 0) + coalesce(b, 0) <= 10))';
   const cloud = cloudStorage(createPair);
@@ -67,11 +67,11 @@ test('重放一条待上传时出了拒收之外的错（两列合起来违反 C
   }
 });
 
-test('本机的行与待上传的改动集对不上（绕过 Syncline 改了同步表），撤回失败：报出一次、整份重拉（不撤回），待上传照常重放与确认', async () => {
+test('local row differs from pending changeset (out-of-band table modification) causing revert failure: refetches full snapshot', async () => {
   const { space, phone, tablet, settle } = await shared();
-  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w2', note: '手机加的' }));
+  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'added on phone' }));
   phone.storage.sql.exec("DELETE FROM workout WHERE id = 'w2'");
-  await write(tablet.device, (tx) => tx.update(workout).set({ note: '平板改的' }));
+  await write(tablet.device, (tx) => tx.update(workout).set({ note: 'modified on tablet' }));
   const reported = captureReported();
   const [, , cloud] = await settle();
   expect(reported).toHaveLength(1);

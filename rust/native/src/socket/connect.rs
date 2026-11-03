@@ -1,5 +1,5 @@
-//! 连上一条 WebSocket：解析地址、TCP（IPv6 与 IPv4 赛跑）、TLS（rustls，显式用 ring）、WebSocket 握手，阻塞着做、各步至多等 `CONNECT_TIMEOUT`，之后转成非阻塞交给收发的循环。
-//! 不该知道的：连上之后怎么收发。
+//! Establishes a WebSocket connection: resolves addresses, races IPv6 and IPv4 TCP connections, performs the TLS handshake (rustls with ring) and WebSocket handshake synchronously with a per-step `CONNECT_TIMEOUT`, then switches the stream to non-blocking for the I/O loop.
+//! What it should not know: how frames are sent and received after connecting.
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
@@ -11,16 +11,16 @@ use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{HandshakeError, WebSocket};
 
-/// 连不上：地址本身不合法（重连也没用），或连不上那一头（网络、TLS、握手被拒）
+/// Connection failure: either the address itself is invalid (reconnecting will not help) or the remote endpoint could not be reached (network, TLS, or handshake rejection)
 pub(in crate::socket) enum Unconnected {
     Invalid(String),
     Unreachable(String),
 }
 
-/// 连上一个地址、TLS 与 WebSocket 握手各至多等多久：核心在发出连接时就排了收第一条消息的期限，这里只让卡住的线程别一直挂着
+/// Maximum duration for each of TCP connect, TLS handshake, and WebSocket handshake: the core schedules a deadline for the first incoming message as soon as it requests a connection, so this timeout prevents a blocked connect thread from hanging indefinitely
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 要连的：握手的请求、主机、端口、是不是 TLS
+/// Parsed connection target: handshake request, host, port, and whether TLS is used
 struct Target {
     request: tungstenite::handshake::client::Request,
     host: String,
@@ -28,24 +28,24 @@ struct Target {
     secure: bool,
 }
 
-/// 读出要连的地址：不合法的（不是 ws、wss，没有主机，子协议放不进请求头）重连也没用
+/// Parses the target URL: invalid URLs (non-ws/wss scheme, missing host, or subprotocols that cannot fit in a header) cannot succeed on retry
 fn target(url: &str, protocols: &[String]) -> Result<Target, String> {
     let mut request = url.into_client_request().map_err(|error| error.to_string())?;
     if !protocols.is_empty() {
         let value = protocols
             .join(", ")
             .parse()
-            .map_err(|_| "子协议里有不能放进请求头的字符".to_owned())?;
+            .map_err(|_| "subprotocol contains characters invalid in an HTTP header".to_owned())?;
         request.headers_mut().insert("Sec-WebSocket-Protocol", value);
     }
     let uri = request.uri();
     let secure = match uri.scheme_str() {
         Some("wss") => true,
         Some("ws") => false,
-        _ => return Err(format!("不是 WebSocket 的地址：{url}")),
+        _ => return Err(format!("not a WebSocket URL: {url}")),
     };
-    let host = uri.host().ok_or_else(|| format!("地址里没有主机：{url}"))?;
-    // IPv6 的地址在网址里带方括号，解析与 TLS 的名字都不要
+    let host = uri.host().ok_or_else(|| format!("URL has no host: {url}"))?;
+    // IPv6 literals in URLs are enclosed in brackets, which neither DNS resolution nor TLS server name validation accepts
     let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
     let port = uri.port_u16().unwrap_or(if secure { 443 } else { 80 });
     Ok(Target {
@@ -56,7 +56,7 @@ fn target(url: &str, protocols: &[String]) -> Result<Target, String> {
     })
 }
 
-/// 连上并握手（阻塞，各步至多等 `CONNECT_TIMEOUT`），之后转成非阻塞
+/// Connects and completes the handshake (blocking, up to `CONNECT_TIMEOUT` per step), then switches the socket to non-blocking mode
 pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) -> Result<WebSocket<Stream>, Unconnected> {
     let Target {
         request,
@@ -76,7 +76,7 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
     };
     let (ws, _) = tungstenite::client(request, stream).map_err(|error| {
         Unconnected::Unreachable(match error {
-            HandshakeError::Interrupted(_) => format!("握手超时（{} 秒）", CONNECT_TIMEOUT.as_secs()),
+            HandshakeError::Interrupted(_) => format!("handshake timed out ({}s)", CONNECT_TIMEOUT.as_secs()),
             HandshakeError::Failure(error) => error.to_string(),
         })
     })?;
@@ -88,11 +88,11 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
     Ok(ws)
 }
 
-/// 连上解析出的一个地址（两种地址族赛跑，见 [`race`]），连上后设好收发的超时
+/// Connects to one of the resolved addresses (racing address families; see [`race`]) and configures read/write timeouts
 fn tcp(host: &str, port: u16) -> Result<TcpStream, String> {
     let addresses: Vec<SocketAddr> = (host, port).to_socket_addrs().map_err(|error| error.to_string())?.collect();
     if addresses.is_empty() {
-        return Err(format!("解析不出 {host} 的地址"));
+        return Err(format!("could not resolve address for {host}"));
     }
     let tcp = race(addresses, Instant::now() + CONNECT_TIMEOUT, |address, timeout| {
         TcpStream::connect_timeout(&address, timeout)
@@ -104,16 +104,14 @@ fn tcp(host: &str, port: u16) -> Result<TcpStream, String> {
     Ok(tcp)
 }
 
-/// 另一种地址族晚多久开始连
+/// Delay before starting the fallback address family
 const FALLBACK_DELAY: Duration = Duration::from_millis(300);
-/// 依次试一族的地址时，一个地址至少等多久
+/// Minimum timeout per address when trying an address family serially
 const SANE_MINIMUM: Duration = Duration::from_secs(2);
 
-/// 两种地址族赛跑（Happy Eyeballs）：第一个地址那一族先依次试，`FALLBACK_DELAY` 之后还没连上（或先失败了）就同时依次试另一族，
-/// 先连上的用，另一边之后连上的丢掉（关掉）。不赛跑的话，IPv6 不通又不回话（包被丢掉）的网络上，排在前面的 IPv6 地址要等满超时，
-/// 核心收第一条消息的期限先到、断开重连，下次又从 IPv6 开始，一直连不上。都失败时给首选族第一个地址的错。照 Go 的 `net.Dialer` 整套做法
-/// @see <https://github.com/golang/go/blob/go1.25.0/src/net/dial.go>（`dialParallel`、`dialSerial`、`partialDeadline`）
-/// @see <https://github.com/golang/go/blob/go1.25.0/src/net/ipsock.go>（`partition`）
+/// Races both address families (Happy Eyeballs): tries the first address's family serially, and if it has not connected after `FALLBACK_DELAY` (or fails earlier), starts trying the other family serially in parallel, using whichever connects first and dropping (closing) any later connection from the other side. Without racing, on networks where IPv6 silently drops packets, a leading IPv6 address waits for the full timeout, causing the core's first-message deadline to fire and reconnect from IPv6 again indefinitely. If both families fail, returns the error from the primary family's first address. Follows Go's `net.Dialer` design.
+/// @see <https://github.com/golang/go/blob/go1.25.0/src/net/dial.go> (`dialParallel`, `dialSerial`, `partialDeadline`)
+/// @see <https://github.com/golang/go/blob/go1.25.0/src/net/ipsock.go> (`partition`)
 /// @see <https://www.rfc-editor.org/rfc/rfc8305>
 fn race<T, C>(addresses: Vec<SocketAddr>, deadline: Instant, connect: C) -> Result<T, String>
 where
@@ -128,14 +126,14 @@ where
     let (sender, results) = mpsc::channel();
     let start = |addresses: Vec<SocketAddr>, primary: bool| {
         let (sender, connect) = (sender.clone(), connect.clone());
-        // 主线程已经返回时发不出去，连上的随之丢掉、关掉。输掉的一边不像 Go 那样取消：标准库阻塞着的 connect 取消不了，至多连到 deadline
+        // If the main thread has already returned, sending fails and any late connection is dropped and closed. Unlike Go, the losing side is not cancelled because std's blocking connect cannot be cancelled and runs at most until deadline
         std::thread::spawn(move || drop(sender.send((primary, serial(&addresses, deadline, &connect)))));
     };
     start(primaries, true);
     let mut fallbacks = Some(fallbacks);
     let (mut primary_error, mut fallback_failed) = (None, false);
     loop {
-        // 两边都会交来结果（自己也拿着 sender，收不到「都断了」）
+        // Both sides report back (this function also holds sender, so Disconnected is unreachable while fallbacks is Some)
         let received = match fallbacks {
             Some(_) => results.recv_timeout(FALLBACK_DELAY),
             None => results.recv().map_err(|_| RecvTimeoutError::Disconnected),
@@ -150,14 +148,14 @@ where
         if let Some(error) = primary_error.take_if(|_| fallback_failed) {
             return Err(error);
         }
-        // 到了晚开始的时刻，或首选族先失败了
+        // Fallback delay elapsed or the primary family failed first
         if let Some(addresses) = fallbacks.take_if(|_| late || primary_error.is_some()) {
             start(addresses, false);
         }
     }
 }
 
-/// 依次试一族的地址：每个分到剩下时间的均分，太短就至少 `SANE_MINIMUM`（从后面的借）；给第一个地址的错
+/// Tries addresses of one family serially: each gets an equal share of the remaining time, floored at `SANE_MINIMUM` (borrowed from subsequent addresses); returns the first address's error if all fail
 fn serial<T>(
     addresses: &[SocketAddr],
     deadline: Instant,
@@ -167,7 +165,7 @@ fn serial<T>(
     for (index, address) in addresses.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            first.get_or_insert_with(|| format!("连 {address} 超时（{} 秒）", CONNECT_TIMEOUT.as_secs()));
+            first.get_or_insert_with(|| format!("connect to {address} timed out ({}s)", CONNECT_TIMEOUT.as_secs()));
             break;
         }
         let share = remaining / u32::try_from(addresses.len() - index).unwrap_or(u32::MAX);
@@ -224,7 +222,7 @@ impl Write for Stream {
 mod tests {
     use super::*;
 
-    /// 替身：IPv6 的地址不回话（等满给的超时再失败），IPv4 的立刻连上；回连上的地址
+    /// Fake connector: IPv6 addresses never answer (sleep for the full timeout then fail), IPv4 connects immediately; returns the connected address
     fn unanswered_ipv6(address: SocketAddr, timeout: Duration) -> std::io::Result<SocketAddr> {
         if address.is_ipv6() {
             std::thread::sleep(timeout);
@@ -234,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn ipv6_不回话_晚一点同时连_ipv4_先连上的用() {
+    fn ipv6_unanswered_starts_ipv4_after_delay_and_uses_first_connected() {
         let (ipv6, ipv4): (SocketAddr, SocketAddr) = ("[2001:db8::1]:443".parse().unwrap(), "192.0.2.1:443".parse().unwrap());
         let started = Instant::now();
         let connected = race(vec![ipv6, ipv6, ipv4], started + CONNECT_TIMEOUT, unanswered_ipv6);
@@ -244,13 +242,13 @@ mod tests {
     }
 
     #[test]
-    fn 首选族先失败_另一族立刻开始_都失败给首选族第一个地址的错() {
+    fn primary_family_failure_starts_fallback_immediately_and_returns_first_primary_error_when_both_fail() {
         let (ipv4, ipv6): (SocketAddr, SocketAddr) = ("192.0.2.1:443".parse().unwrap(), "[2001:db8::1]:443".parse().unwrap());
-        let refused = |address: SocketAddr, _| -> std::io::Result<()> { Err(std::io::Error::other(format!("拒绝 {address}"))) };
+        let refused = |address: SocketAddr, _| -> std::io::Result<()> { Err(std::io::Error::other(format!("refused {address}"))) };
         let started = Instant::now();
         assert_eq!(
             race(vec![ipv4, ipv6], started + CONNECT_TIMEOUT, refused),
-            Err("拒绝 192.0.2.1:443".to_owned())
+            Err("refused 192.0.2.1:443".to_owned())
         );
         assert!(started.elapsed() < FALLBACK_DELAY);
     }

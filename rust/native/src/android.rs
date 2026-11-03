@@ -1,9 +1,13 @@
-//! Android 的 Kotlin 调的 JNI 接口（`expo.modules.syncline.SynclineNative` 的静态方法），与 iOS 的 C 接口（`ffi` 模块）一一对应：
-//! 句柄是 long，`next` 回空之后用 `free` 放掉（只放一次）。出错与 panic 都在这里接住，转成 Kotlin 的 `RuntimeException`，不越过 JNI。
-//! 不该知道的：库里的事。
+//! JNI interface called from Android Kotlin (`expo.modules.syncline.SynclineNative` static methods), matching the iOS C interface (`ffi`).
+//! Handles are stored as `jlong` and freed with `free` once `next` returns null. Errors and panics are caught and converted to Kotlin
+//! `RuntimeException` without unwinding across the JNI boundary.
+//! What this module should not know: database contents or internal state machine rules.
 //! @see <https://docs.rs/jni/0.22.4/jni/>
 //! @see <https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html#resolving-native-method-names>
-#![expect(unsafe_code, reason = "JNI 的入口要导出不改名的符号；句柄是 Kotlin 那边按约定传回的指针")]
+#![expect(
+    unsafe_code,
+    reason = "JNI exports unmangled symbols; handles are pointers passed back from Kotlin by contract"
+)]
 
 use crate::{Handle, remove};
 use jni::errors::ThrowRuntimeExAndDefault;
@@ -13,7 +17,7 @@ use jni::{Env, EnvUnowned};
 use std::path::PathBuf;
 
 /// # Safety
-/// handle 来自 `start`、还没放掉。
+/// `handle` must originate from `start` and not have been freed yet.
 unsafe fn handle<'a>(handle: jlong) -> &'a Handle {
     unsafe { &*(handle as *const Handle) }
 }
@@ -22,7 +26,7 @@ fn text(env: &Env<'_>, text: &JString<'_>) -> jni::errors::Result<String> {
     text.try_to_string(env)
 }
 
-/// 跑一个入口：出错与 panic 转成 Kotlin 的 `RuntimeException`，回默认值
+/// Executes an entry point: catches errors and panics, throws a Kotlin `RuntimeException`, and returns default.
 fn guarded<'local, T: Default>(env: &mut EnvUnowned<'local>, body: impl FnOnce(&mut Env<'local>) -> jni::errors::Result<T>) -> T {
     env.with_env(body).resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -89,7 +93,7 @@ pub extern "system" fn Java_expo_modules_syncline_SynclineNative_free<'local>(
     });
 }
 
-/// 删掉库文件：成功回空，出错回错误消息
+/// Removes database files: returns null on success, error message on failure.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_expo_modules_syncline_SynclineNative_remove<'local>(
     mut env: EnvUnowned<'local>,

@@ -4,7 +4,7 @@ import { expect, test } from 'vitest';
 import { deviceStorage } from '../test/test-storage.ts';
 import { isTransient, Reject } from './storage.ts';
 
-// 云端的存储出的错是不是暂时的：workerd 与测试替身的官方 WASM 报结果码的样子不同（一个在末尾、一个在开头），都要认得
+// Classifies storage errors as transient or permanent: recognizes result codes from both workerd (suffix) and official SQLite WASM (prefix).
 
 test.for([
   ['database or disk is full: SQLITE_FULL', true],
@@ -14,20 +14,20 @@ test.for([
   ['CHECK constraint failed: a + b <= 10: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_CHECK)', false],
   ['SQLITE_CONSTRAINT_CHECK: sqlite3 result code 275: CHECK constraint failed', false],
   ['Cannot read properties of undefined', false],
-] as const)('「%s」：暂时的是 %s', ([message, transient]) => {
+] as const)('classifies "%s" as transient: %s', ([message, transient]) => {
   expect(isTransient(new Error(message))).toBe(transient);
 });
 
-test('平台标了 retryable 的是暂时的；不是 Error 的不是', () => {
+test('treats errors with retryable flag as transient and non-Error objects as non-transient', () => {
   expect(isTransient(Object.assign(new Error('Network connection lost.'), { retryable: true }))).toBe(true);
   expect(isTransient('SQLITE_FULL')).toBe(false);
 });
 
-test('拒收（含不合声明）不是暂时的：原因里带着推来的列名、校验器报的值，恰有结果码的字样也不算（云端推送按它分）', () => {
-  expect(isTransient(new Reject('改动的列不在 note 上：SQLITE_FULL'))).toBe(false);
+test('treats Reject instances as permanent even when error messages contain SQLite result codes', () => {
+  expect(isTransient(new Reject('Column missing on note: SQLITE_FULL'))).toBe(false);
 });
 
-test('Drizzle 照 DO 的 cursor 用 Storage：取一行（get）走 raw().next()，取多行走 toArray', () => {
+test('supports Drizzle queries over Storage cursors using raw().next() for get() and toArray() for all()', () => {
   const note = sqliteTable('note', { id: text().primaryKey() });
   const storage = deviceStorage('CREATE TABLE note (id TEXT PRIMARY KEY)', "INSERT INTO note VALUES ('n1'), ('n2')");
   const db = drizzle(storage);

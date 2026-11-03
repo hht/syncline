@@ -1,42 +1,42 @@
-//! 云端发来的在边界解析成精确类型：HTTP 拉取的结果、WebSocket 上的通知与提示；对不上就是错，不猜。
-//! 形状由 serde 按 `protocol` 的类型认，这里另查类型表达不了的：数是不小于 0 的安全整数、清空只在开头、主键的一段至少一列、
-//! 删表不同时给列与段、校验和是 32 位的。
-//! 不该知道的：消息从哪来、解析出的怎么用。
+//! Inbound cloud data parsed into exact types at the boundary: HTTP pull results, WebSocket notifications and hints; mismatches are errors, no guessing.
+//! Shape is validated by serde against `protocol` types; additional invariants not representable in types are checked here: numbers are non-negative safe integers, clear only at the beginning, primary key ranges have at least one column,
+//! drop does not specify both columns and ranges, checksum is 32-bit.
+//! What it should not know: where messages originate, how parsed data is used.
 
 use crate::change::MAX_SAFE_INTEGER;
 use crate::protocol::{Advice, Chunk, Cookie, Heard, Hint, KeyRange, Op, Poke, Pulled, Reset};
 
-/// HTTP 拉取的结果
+/// Result of an HTTP pull.
 ///
 /// # Errors
-/// 不是认得出的结果。
+/// Returns an error if the payload cannot be recognized as a valid pull result.
 pub fn pulled(text: &str) -> Result<Pulled, String> {
-    let pulled: Pulled = serde_json::from_str(text).map_err(|error| invalid("通知", text, &error))?;
+    let pulled: Pulled = serde_json::from_str(text).map_err(|error| invalid("notification", text, &error))?;
     match &pulled {
         Pulled::Reset(reset) => reset_ok(reset),
         Pulled::Poke(poke) => poke_ok(poke),
         Pulled::Chunk(chunk) => chunk_ok(chunk),
     }
     .then_some(pulled)
-    .ok_or_else(|| invalid("通知", text, &"值不对"))
+    .ok_or_else(|| invalid("notification", text, &"invalid value"))
 }
 
-/// WebSocket 上云端发来的消息：通知（补齐也是，要带游标），或共用空间分片的提示
+/// Message received from cloud over WebSocket: notification (including catch-up, must carry cookie) or shard hint for shared space.
 ///
 /// # Errors
-/// 不是认得出的消息。
+/// Returns an error if the payload cannot be recognized as a valid message.
 pub fn message(text: &str) -> Result<Heard, String> {
-    let heard: Heard = serde_json::from_str(text).map_err(|error| invalid("通知", text, &error))?;
+    let heard: Heard = serde_json::from_str(text).map_err(|error| invalid("notification", text, &error))?;
     match &heard {
         Heard::Hint(hint) => hint_ok(hint),
         Heard::Poke(poke) => poke_ok(poke),
     }
     .then_some(heard)
-    .ok_or_else(|| invalid("通知", text, &"值不对"))
+    .ok_or_else(|| invalid("notification", text, &"invalid value"))
 }
 
 fn invalid(what: &str, text: &str, error: &dyn std::fmt::Display) -> String {
-    format!("{what}格式不对：{}（{error}）", text.chars().take(200).collect::<String>())
+    format!("invalid {what}: {} ({error})", text.chars().take(200).collect::<String>())
 }
 
 fn count(value: i64) -> bool {
@@ -51,7 +51,7 @@ fn origin_ok(incarnation: Option<i64>) -> bool {
     incarnation.is_none_or(count)
 }
 
-#[expect(clippy::cast_precision_loss, reason = "2^53 - 1 恰好是 f64 精确表示得了的")]
+#[expect(clippy::cast_precision_loss, reason = "2^53 - 1 is exactly representable in f64")]
 fn advice_ok(advice: &Advice) -> bool {
     advice
         .spread
@@ -63,7 +63,7 @@ fn base_ok(base: Option<&Cookie>) -> bool {
     base.is_none_or(cookie_ok)
 }
 
-/// 改动：清空只在整份的第一块开头（在中间的话前面的改动白下了，是云端的缺陷）；删表不同时给列与段；主键的一段至少一列
+/// Changes: clear only at start of first chunk (in the middle would discard previous changes, a cloud defect); drop does not specify both columns and range; primary key range has at least one column.
 fn patch_ok(patch: &[Op]) -> bool {
     patch.iter().enumerate().all(|(index, op)| match op {
         Op::Clear => index == 0,
@@ -123,7 +123,7 @@ mod tests {
         ));
         let poke = r#"{"base":null,"cookie":{"version":1,"nonce":2},"lmids":{"c":1},"patch":[{"op":"clear"}],"expiresIn":60000}"#;
         let Ok(Heard::Poke(poke)) = message(poke) else {
-            panic!("应是通知")
+            panic!("expected poke")
         };
         assert_eq!(poke.advice.expires_in, Some(60_000.0));
     }
@@ -135,7 +135,7 @@ mod tests {
         assert!(message(r#"{"base":null,"cookie":{"version":-1,"nonce":2},"lmids":{},"patch":[]}"#).is_err());
         let late_clear = r#"{"base":null,"next":"n","patch":[{"op":"put","table":"t","key":{"id":1},"row":{"id":1}},{"op":"clear"}]}"#;
         assert!(pulled(late_clear).is_err());
-        // 连接上的消息要带游标：中间块不算
+        // Messages over connection must carry a cookie: intermediate chunks do not qualify.
         assert!(message(r#"{"base":null,"next":"n","patch":[]}"#).is_err());
     }
 }

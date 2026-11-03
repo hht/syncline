@@ -3,25 +3,25 @@ import { expect, test } from 'vitest';
 import { cloudStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
 
-// 服务端的写报的主键是库里存下的值（与设备推来的写一样）：调用方给的值按列的类型存（整数列把 "5" 存成 5），
-// 提交记录里同一行只有一种写法，不然同一行被当成两行（拉取给两次、删不掉、改前它在的桶对不上）
+// Server writes report stored primary key values (matching pushed writes from devices): caller values are mapped to column types (e.g. string "5" to integer 5),
+// so each touched row has a single representation in the commit log, preventing duplicate emission in pulls or mismatched prior bucket lookups.
 
 const item = sqliteTable('item', { id: integer().primaryKey(), name: text() });
 
-test('服务端的写给整数主键传了字符串：提交记录记库里存下的数，同一行再按数改，通知里只有一行', () => {
+test('server write passes string to integer primary key: records stored number in commits, update matches by number, and poke emits single row', () => {
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
   const base = space.head();
-  space.mutate((tx) => tx.insert(item, { id: '5' as never, name: '深蹲' }));
-  space.mutate((tx) => tx.update(item, { id: 5, name: '硬拉' }));
+  space.mutate((tx) => tx.insert(item, { id: '5' as never, name: 'squat' }));
+  space.mutate((tx) => tx.update(item, { id: 5, name: 'deadlift' }));
   const { patch } = pushedSince(space, base);
-  expect(patch).toEqual([{ op: 'put', table: 'item', key: { id: 5 }, row: { id: 5, name: '硬拉' } }]);
+  expect(patch).toEqual([{ op: 'put', table: 'item', key: { id: 5 }, row: { id: 5, name: 'deadlift' } }]);
 });
 
-test('服务端的写复用同一个对象删几行（删完一行改它的主键再删）：攒着的删除按调用那一刻的主键，几行都删掉', () => {
+test('server write reuses the same object across deletions: queued deletions snapshot keys at call time and delete all rows', () => {
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
   space.mutate((tx) => {
-    tx.insert(item, { id: 1, name: '深蹲' });
-    tx.insert(item, { id: 2, name: '硬拉' });
+    tx.insert(item, { id: 1, name: 'squat' });
+    tx.insert(item, { id: 2, name: 'deadlift' });
   });
   const base = space.head();
   space.mutate((tx) => {
@@ -37,9 +37,9 @@ test('服务端的写复用同一个对象删几行（删完一行改它的主�
   ]);
 });
 
-/** base 之后改到的行（拉取的增量，一块给完） */
+/** Rows modified after base (pull delta returned in a single chunk). */
 function pushedSince(space: Space, base: ReturnType<Space['head']>) {
   const pulled = space.pull({ cookie: base }, 1_000_000_000);
-  if (!('cookie' in pulled)) throw new Error('应一块给完');
+  if (!('cookie' in pulled)) throw new Error('Expected pull to complete in a single chunk');
   return pulled;
 }

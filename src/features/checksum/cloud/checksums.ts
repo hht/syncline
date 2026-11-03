@@ -5,24 +5,31 @@ import { fingerprintOf } from '../../../tables/fingerprint.ts';
 import { plus, rangeRows, rowText } from '../common/checksum.ts';
 
 /**
- * 私有空间的校验和怎么算：设备要时（拉取带 checksum）当场算一段，按整份扫描的先后（表名、主键）从 cursor 起读同步表、
- * 设备看得到的列，每行的哈希相加，一段至多 rangeRows 行（设备要的更少时照设备的）、约 rangeChars 个字符、rangeParts 张表；给出这一段是哪几部分
- * （每张表从哪个主键到哪个主键）、有几行、和与下一段从哪起，设备按同样的主键范围算本机的这一段比；最后一段另带全部同步表，
- * 设备把别的表还存着的行也算进来。
- * 一段在一次请求的 CPU 之内，表多大都一样；提交时不记、要时现算，按当前的同步范围算，范围怎么变都不用另外维护。
- * 不该知道的：行怎么写、提交怎么记、设备多久要一次。
+ * Computes checksums for private spaces: computed on demand when the device requests (pull includes checksum),
+ * reading synced tables and device-visible columns from cursor in full-scan order (table name, primary key).
+ * Adds the hashes of each row, up to rangeRows rows (or fewer if requested by the device), roughly rangeChars
+ * characters, and rangeParts tables per segment. Returns the parts in the segment (primary key ranges per table),
+ * row count, sum, and next segment start position. The device computes its local segment across the same primary
+ * key range to compare; the final segment includes all synced tables so the device can detect leftover rows in
+ * other tables.
+ * Each segment fits within the CPU budget of a single request regardless of table size; computed on the fly without
+ * logging during commits, evaluated against the current sync scope without extra maintenance when sync scopes change.
+ * What it shouldn't know: how rows are written, how commits are logged, how often devices request.
  * @see https://docs.powersync.com/architecture/powersync-protocol
  */
 
-/** 一段约几个字符（行的哈希文字）：行可以接近单个值的上限，除了行数另按字符数封顶 */
+/** Approximate character cap for a segment (row hash text): rows can approach the single-value limit, so segment size is capped by character count in addition to row count. */
 export const rangeChars = 8_000_000;
 
-/** 一段至多几张表：回复里每张表一项，对不上时设备把各部分原样放进按范围重下的拉取，一段的回复与重下的请求不随表数涨 */
+/** Maximum tables per segment: each table is an entry in the response; on mismatch, the device places the parts into a refetch pull request, keeping responses and refetch requests bounded regardless of table count. */
 export const rangeParts = 100;
 
 /**
- * 从 cursor 起算一段的校验和，至多 limit 行（不超过 rangeRows）。cursor 是上一段给的 next：读取器的扫描点，
- * 照整份扫描的先后（表名、主键）接着读，部署加减了表也接着，起点那张表不再同步就从下一个表名起；空串（从头）、认不出的从第一张表起
+ * Computes a checksum segment starting at cursor, up to limit rows (capped at rangeRows).
+ * The cursor is next returned from the previous segment: the reader scan position,
+ * continuing in full-scan order (table name, primary key). Continues across table additions
+ * or removals across deployments; if the starting table is no longer synced, resumes from the next
+ * table name; empty string (from start) or unrecognized cursors start from the first table.
  */
 export function spaceChecksum(tables: Pick<TableReads, 'order' | 'rows' | 'key'>, cursor: string, limit = rangeRows): Checksum {
   const order = tables.order();
@@ -35,7 +42,7 @@ export function spaceChecksum(tables: Pick<TableReads, 'order' | 'rows' | 'key'>
     order,
     decodeScan(cursor, (table) => tables.key(table)),
   )) {
-    // 表够多了：下一段从这张表起
+    // Table limit reached: next segment starts at this table.
     if (parts.length === rangeParts) return { parts, sum, rows, next: encodeScan({ table }) };
     const part: ChecksumPart = { table, key, ...(after && { after: after as Record<string, Value> }) };
     parts.push(part);
@@ -53,7 +60,7 @@ export function spaceChecksum(tables: Pick<TableReads, 'order' | 'rows' | 'key'>
   return { parts, sum, rows, tables: order.map(({ table }) => table) };
 }
 
-/** 从扫描点 start 起要读的表与各自从哪个主键之后读：表名在它之前的跳过，它那张表从它的主键之后；没有起点是全部表 */
+/** Tables to read starting from scan point start, along with their key offsets: skips tables before start, reads start table after its primary key; without a start point, returns all tables. */
 const startingAt = (order: { table: string; key: string[] }[], start: Scan | undefined) =>
   order
     .filter(({ table }) => !start || table >= start.table)

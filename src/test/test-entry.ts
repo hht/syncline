@@ -6,20 +6,21 @@ import { schemaConflict, schemaPrefix } from '../tables/declaration.ts';
 import type { Answer } from './test-requests.ts';
 import type { CloudEnd } from './test-sockets.ts';
 
-// 确定性模拟里的入口 Worker：先认协议版本（对不上的回云端的版本），再认 token 与表结构的指纹，
-// 认不出的 WebSocket 握手失败、HTTP 拉取回 401；认出了交给云端
+// Entry Worker in deterministic simulation: validates protocol version (returns cloud version on mismatch),
+// authenticates token and schema fingerprint; invalid requests fail WebSocket handshake or return 401 on HTTP pull;
+// valid requests forward to cloud actor.
 
-/** 替身 Worker 转给的云端：私有空间是 Server；共用空间是广播分片（接受连接）与共用空间的 DO（HTTP 拉取） */
+/** Cloud target forwarded by mock Worker: private space uses Server; shared space uses broadcast shards and DO. */
 export type Cloud = {
   accept(socket: CloudEnd, url: URL, expiresAt: number, fingerprint?: string): void | Promise<void>;
   receive(socket: CloudEnd, message: string): void;
-  /** HTTP 拉取：共用空间的请求在网址里，私有空间的在 POST 的正文 body 里 */
+  /** HTTP pull: shared space request in query URL, private space request in POST body. */
   pull(url: URL, body: string | undefined): string;
-  /** 私有空间比设备带的表结构的指纹：对不上时 HTTP 拉取回 schemaConflict、正文是云端的表结构；共用空间不比、不给 */
+  /** Private space compares client schema fingerprint: on mismatch returns schemaConflict with cloud schema. */
   schemaConflict?(fingerprint: string): string | undefined;
 };
 
-/** 私有空间的 Server 当作替身 Worker 转给的云端：拉取的正文照对象解析；space 是入口验过的身份 */
+/** Adapts private space Server as mock Worker cloud backend; parses pull body. */
 export const privateCloud = (server: Server<CloudEnd>, space?: string): Cloud => ({
   accept: (socket, url, expiresAt, fingerprint) => server.accept(socket, parsePullRequest(url).cookie, expiresAt, fingerprint, space),
   receive: (socket, message) => server.receive(socket, message),
@@ -28,8 +29,8 @@ export const privateCloud = (server: Server<CloudEnd>, space?: string): Cloud =>
 });
 
 /**
- * 替身 Worker 认的 token 与身份到期的时刻：renewed 是到期前换来的新 token；expiring 会到期（时刻很远，设备照云端给的剩余时长排续约，
- * 计时器由种子挑着触发）；lapsing 连得上，但第一次收发就已过期
+ * Mock Worker recognized tokens and expiry timestamps: renewed is acquired prior to expiry;
+ * expiring will expire (schedules renewal based on cloud expiry hint); lapsing connects but expires on first message.
  */
 const identities = new Map([
   ['valid', Number.POSITIVE_INFINITY],
@@ -38,13 +39,13 @@ const identities = new Map([
   ['lapsing', 0],
 ]);
 
-/** 接入方的 token()：大多给出有效的（有的会到期、要续约），有时给出马上过期的、认不出的，或者取不到 */
+/** Integrator token() generator: mostly valid tokens (some expiring), occasionally immediate expiry, invalid, or undefined. */
 export const tokens = [...Array<string>(4).fill('valid'), ...Array<string>(3).fill('expiring'), 'lapsing', 'revoked', undefined];
 
-/** 设备带的协议版本对不上替身 Worker 的 */
+/** Whether client protocol version mismatches mock Worker version. */
 export const mismatched = (url: string, cloudVersion: number) => new URL(url).searchParams.get(versionParam) !== String(cloudVersion);
 
-/** WebSocket 的子协议里设备带的：身份到期的时刻（认不出 token 是 undefined；浏览器：云端回的子协议不在设备发的里面，连接失败）与表结构的指纹 */
+/** Parses WebSocket subprotocols for token expiry and schema fingerprint. */
 export function admitSocket(protocols: string[]) {
   const token = protocols.includes(subprotocol) ? protocols.find((protocol) => protocol.startsWith(bearer)) : undefined;
   const expiresAt = identities.get(token?.slice(bearer.length) ?? '');
@@ -52,7 +53,7 @@ export function admitSocket(protocols: string[]) {
   return { expiresAt, ...(schema === undefined ? {} : { schema }) };
 }
 
-/** 替身 Worker 与对象算一个请求的应答：先认协议版本、表结构的指纹与身份，再交给对象（pull）；对象出了注入的故障（pull 给 undefined）回 500 */
+/** Evaluates HTTP response at mock Worker: validates version, schema, and auth before forwarding to pull; returns 500 on fault. */
 export function answer(
   request: Parameters<Answer>[0],
   cloudVersion: number,

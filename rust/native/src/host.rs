@@ -1,8 +1,12 @@
-//! 核心线程：按到达的顺序收事件（JS 的调用、网络线程的事），交给核心，照它回的指令开关 socket、发请求、排计时器，其余交回 JS。
-//! 没有事件时睡到最早的计时器到时；到时的计时器在两个事件之间触发，0 毫秒的（核心让出线程，校验和、收缩分步做）也排在已到的事件后面，
-//! JS 的读写插得进来。开库、关库在这一层：开库在这条线程上打开库文件、建表，不占 JS 线程；关库之后的调用都回「本机库已关闭」。
-//! 已断开的 socket、撤掉的请求再来的事不交给核心（与 web 的外壳一样）。核心线程 panic 时交回 `broken`，JS 那边让在等的都失败。
-//! 不该知道的：同步的规则、JS 怎么用回复。
+//! Sync thread: receives events in order of arrival (JS calls and network thread events), passes them to the core,
+//! manages sockets, HTTP requests, and timers according to returned instructions, and forwards remaining instructions back to JS.
+//! Idles until the earliest timer expires when no events are queued; expired timers fire between events, and 0 ms timers
+//! (yielding the thread for phased checksum or shrink steps) queue behind arrived events so JS reads/writes can interleave.
+//! Database opening and closing live at this layer: opening opens the database file and defines tables on this thread without
+//! blocking JS; calls after closing return "local database is closed".
+//! Stale events from disconnected sockets or aborted requests are discarded before reaching the core (matching the web host).
+//! Panics on the sync thread deliver `broken`, causing pending JS callers to fail.
+//! What this module should not know: sync protocol rules or how JS uses responses.
 //! @see <https://github.com/powersync-ja/powersync-sqlite-core/blob/v0.5.4/crates/core/src/sync/interface.rs>
 
 mod lifecycle;
@@ -22,17 +26,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use syncline::client::{Client, Failure, Input, Instruction, Opening, Unreadable, call_id, unreadable};
 
 pub enum Event {
-    /// JS 的一次调用（JSON）
+    /// A single call from JS (JSON string).
     Call(String),
-    /// 网络线程的事
+    /// An event from the network thread.
     Network(Input),
-    /// 句柄放掉了：关库、结束
+    /// Handle dropped: closes database and terminates sync thread.
     Shutdown,
-    /// 前面的都让了号，轮到这个库文件开了（`files::take`）
+    /// Preceding tickets relinquished; this database file is now permitted to open (`files::take`).
     Turn,
 }
 
-/// JS 的调用：开库、关库在这一层，其余交给核心
+/// Calls from JS: open and close are handled at this layer, all others forwarded to core.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Call {
@@ -52,15 +56,15 @@ pub struct Host {
     events: Sender<Event>,
     outbox: Arc<Outbox>,
     client: Option<Client>,
-    /// 在库文件上排的号：放在 client 后面，丢掉 Host（核心线程出错退出）时先关库再让出；关库、开库出错时让出
+    /// Ticket queued on the database file: dropped after client so closing occurs before ticket release.
     ticket: Option<files::Ticket>,
-    /// 排着等开库：开库与之后收到的调用（关库除外）照先后攒着，轮到时再做
+    /// Queued while waiting to open: calls received before turn (except close) are buffered in order.
     waiting: Option<Waiting>,
-    /// 关过了：之后的调用都回错，不再开
+    /// Closed: subsequent calls return an error, no further open allowed.
     closed: bool,
     timers: HashMap<u32, Instant>,
     sockets: HashMap<u32, socket::Socket>,
-    /// 在途的请求：撤掉时置上，回来的结果不再交
+    /// In-flight requests: flag set on abort to discard incoming responses.
     requests: HashMap<u32, Arc<AtomicBool>>,
     network: socket::Network,
     agent: ureq::Agent,
@@ -84,11 +88,11 @@ impl Host {
         }
     }
 
-    /// 一直收事件、按时触发计时器，直到关库或句柄放掉；panic 时交回 `broken`
+    /// Serves events and fires timers until close or handle drop; delivers `broken` on panic.
     pub fn run(mut self, events: &Receiver<Event>) {
         let outbox = self.outbox.clone();
         let served = catch_unwind(AssertUnwindSafe(|| self.serve(events)));
-        // 先关库、让出号，再交回 broken：JS 收到之后马上删库不会被当成还开着
+        // Close database and release ticket before delivering broken, ensuring immediate deletion succeeds.
         drop(self);
         if let Err(panic) = served {
             let message = panic
@@ -96,7 +100,7 @@ impl Host {
                 .map(|text| (*text).to_owned())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_default();
-            outbox.push([json!({ "type": "broken", "message": format!("Syncline 的核心线程出错：{message}") }).to_string()]);
+            outbox.push([json!({ "type": "broken", "message": format!("Syncline sync thread panicked: {message}") }).to_string()]);
         }
         outbox.finish();
     }
@@ -128,7 +132,7 @@ impl Host {
 
     fn call(&mut self, call: &str) {
         let parsed = serde_json::from_str(call);
-        // 排着等开库时只有关库马上做，其余照先后攒着：回复与调用同一个先后（JS 靠它）
+        // When queued waiting to open, only close is executed immediately; others buffer in FIFO order.
         if let Some(waiting) = &mut self.waiting
             && !matches!(parsed, Ok(Call::Close { .. }))
         {
@@ -151,21 +155,21 @@ impl Host {
                 }
                 None => {
                     if let Some(id) = call_id(&input) {
-                        self.deliver(vec![failed(id, Failure::new("本机库已关闭"))]);
+                        self.deliver(vec![failed(id, Failure::new("local database is closed"))]);
                     }
                 }
             },
         }
     }
 
-    /// 网络线程的事：已断开的 socket、撤掉的请求的不交；socket 关了、请求有了结果就不再记着
+    /// Network thread events: discards stale events for disconnected sockets or aborted requests.
     fn network(&mut self, input: Input) {
         let live = match &input {
             Input::Opened { socket } | Input::Message { socket, .. } => self.sockets.contains_key(socket),
             Input::Closed { socket, .. } => self.sockets.remove(socket).is_some(),
             Input::Failed { id, .. } => self.sockets.remove(id).is_some() || self.requests.remove(id).is_some(),
             Input::Response { request, .. } => self.requests.remove(request).is_some(),
-            _ => unreachable!("网络线程只交 socket 与请求的事"),
+            _ => unreachable!("network thread only delivers socket and request events"),
         };
         if let (true, Some(client)) = (live, &mut self.client) {
             let instructions = client.control(input, now());
@@ -173,7 +177,7 @@ impl Host {
         }
     }
 
-    /// 触发此刻已到的计时器（按到时的先后）；触发时新排的（含 0 毫秒的）等下一轮，先让排着的事件进来
+    /// Fires timers due at the current instant in order of deadline; new timers (including 0 ms) wait for next turn.
     fn fire_due(&mut self) {
         let now_instant = Instant::now();
         let mut due: Vec<(Instant, u32)> = self
@@ -184,7 +188,7 @@ impl Host {
             .collect();
         due.sort_unstable();
         for (_, timer) in due {
-            // 前面触发的可能撤掉了它
+            // Earlier timer callbacks may have cancelled this timer.
             if self.timers.remove(&timer).is_none() {
                 continue;
             }
@@ -194,7 +198,7 @@ impl Host {
         }
     }
 
-    /// 网络与计时的指令在这里做，其余交回 JS
+    /// Executes network and timer instructions locally; forwards remaining instructions back to JS.
     fn execute(&mut self, instructions: Vec<Instruction>) {
         let mut delivered = Vec::new();
         for instruction in instructions {
@@ -254,12 +258,12 @@ impl Host {
         self.outbox.push(
             instructions
                 .into_iter()
-                .map(|instruction| serde_json::to_string(&instruction).expect("指令总编得成 JSON")),
+                .map(|instruction| serde_json::to_string(&instruction).expect("Instruction always serializes to JSON")),
         );
     }
 }
 
-/// 当前时刻（毫秒），与 JS 的 `Date.now()` 同一个起点
+/// Current epoch timestamp in milliseconds, matching `Date.now()`.
 fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

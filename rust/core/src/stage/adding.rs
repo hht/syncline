@@ -1,5 +1,7 @@
-//! 一块的改动怎么进暂存：按主键去重、一行只留最后一条，攒成一批一次写；清空、删表、删列、清一段主键先丢掉暂存里被它盖过的，再各记一行。
-//! 不该知道的：暂存的怎么落地。
+//! Adding chunk changes to stage: deduplicates by primary key (keeps only latest op per row),
+//! writing in a single batch; clear, drop table, drop columns, and key range drops purge
+//! prior covered entries from stage before recording marker rows.
+//! What it should not know: how staged changes land.
 
 use super::{Stage, parsed, range_key};
 use crate::error::Error;
@@ -11,12 +13,12 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::collections::HashMap;
 
 impl Stage {
-    /// 暂存改动：按主键去重
+    /// Stages changes: deduplicates by primary key
     ///
     /// # Errors
-    /// 读写库出错；记下的删列读不出。
+    /// Database read or write error; deserialization error for recorded dropped columns.
     pub fn add(&self, db: &Connection, patch: &[Op]) -> Result<(), Error> {
-        // 连着的写与删先在内存里去重，遇到清空、删表或删列（要动已暂存的）之前一条语句存进去
+        // Contiguous puts and dels are deduplicated in memory and written in one statement before clear, drop table, or drop columns
         let mut rows = Batch::default();
         for op in patch {
             match op {
@@ -47,11 +49,10 @@ impl Stage {
         Ok(())
     }
 
-    /// 暂存一次删表、删列或清一段：删表丢掉这张表暂存的行，删列从暂存的行里去掉这几列，清一段丢掉这一段里的行；记下落地时要清的（同一张表先删过整张表的，
-    /// 再删列不用另记，删过几列的再删列合起来；清一段记在 `range_key` 下）
+    /// Stages drop table, drop columns, or key range: drop table discards staged rows, drop columns strips columns from staged rows, and key range drops rows within range; records cleanup for landing (if table was dropped earlier, drop columns is a no-op; multiple drop columns merge; key ranges record under `range_key`)
     fn drop(&self, db: &Connection, table: &str, columns: Option<&[String]>, range: Option<&KeyRange>) -> Result<(), Error> {
         if let Some(range) = range {
-            // 标记的 key 不是存着的主键（空串、段的 JSON）：只从行的 key 里取，SQLite 不保证先算 kind 的条件
+            // Marker keys are not stored row primary keys (empty string or range JSON): query only row keys, since SQLite does not guarantee condition evaluation order on kind
             let (condition, bindings) = in_range(&stored_columns(&range.key, "iif(kind IN ('put', 'del'), key, NULL)"), range);
             let mut values = vec![Value::Text(self.space.clone()), Value::Text(table.to_owned())];
             values.extend(bindings);
@@ -79,7 +80,7 @@ impl Stage {
         self.drop_columns(db, table, columns)
     }
 
-    /// 暂存一次删列：从暂存的行里去掉这几列，与之前删过的列合起来记下（先删过整张表的不用另记）
+    /// Stages dropped columns: strips columns from staged rows and records merged dropped columns (no-op if table was previously dropped)
     fn drop_columns(&self, db: &Connection, table: &str, columns: &[String]) -> Result<(), Error> {
         let paths: Vec<String> = columns.iter().map(|column| json_path(column)).collect();
         remove_paths(
@@ -105,13 +106,17 @@ impl Stage {
         }
         db.execute(
             "INSERT INTO _syncline_staged VALUES (?, ?, '', 'drop', ?) ON CONFLICT DO UPDATE SET row = excluded.row",
-            params![self.space, table, serde_json::to_string(&dropped).expect("列名编得成 JSON")],
+            params![
+                self.space,
+                table,
+                serde_json::to_string(&dropped).expect("column names serialize to JSON")
+            ],
         )?;
         Ok(())
     }
 }
 
-/// 连着的写与删在内存里按（表，主键）去重：同一行只留最后一条，位置照第一次出现（JS 的 Map 照插入的先后）
+/// Contiguous writes and deletes deduplicated in memory by `(table, primary_key)`: keeps only latest op per row, preserving first-seen insertion order
 #[derive(Default)]
 struct Batch {
     index: HashMap<(String, String), usize>,
@@ -133,9 +138,9 @@ impl Batch {
         self.rows.is_empty()
     }
 
-    /// 编成 [[表, 主键, put 或 del, 行或主键的 JSON]] 并清空
+    /// Serializes to `[[table, primary_key, kind, row_or_key_json]]` and clears
     fn take_json(&mut self) -> String {
         self.index.clear();
-        serde_json::to_string(&std::mem::take(&mut self.rows)).expect("文本编得成 JSON")
+        serde_json::to_string(&std::mem::take(&mut self.rows)).expect("text serializes to JSON")
     }
 }

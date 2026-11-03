@@ -2,11 +2,11 @@ import { bearer } from '../common/protocol.ts';
 import { schemaHeader, schemaPrefix } from '../tables/declaration.ts';
 
 /**
- * 设备的请求里带着什么：token 与表结构的指纹。WebSocket 都在子协议里（浏览器的 WebSocket 设不了请求头），HTTP 拉取在请求头里。
- * 不该知道的：token 怎么验、表结构怎么比。
+ * Extracts tokens and schema fingerprints from client requests:
+ * WebSocket connections pass them via subprotocols (browsers cannot set WebSocket headers); HTTP pulls pass them via headers.
  */
 
-/** WebSocket 的子协议里以 prefix 开头的那一个，去掉 prefix */
+/** Returns the subprotocol value stripped of prefix, or undefined if absent. */
 const protocolOf = (request: Request, prefix: string) =>
   request.headers
     .get('Sec-WebSocket-Protocol')
@@ -18,8 +18,8 @@ const protocolOf = (request: Request, prefix: string) =>
 export const isSocket = (request: Request) => request.headers.get('Upgrade') === 'websocket';
 
 /**
- * 转给对象之前去掉 token（对象用不着，免得进对象的日志与报错）：HTTP 拉取去掉 Authorization，WebSocket 去掉子协议里的 token
- * （握手照样回 syncline）
+ * Strips the token before forwarding to Durable Objects to avoid leaking it into logs or error traces:
+ * removes the Authorization header on HTTP pulls, and removes the token subprotocol on WebSockets.
  */
 export function withoutToken(request: Request) {
   const forwarded = new Request(request);
@@ -37,12 +37,12 @@ export function withoutToken(request: Request) {
   return forwarded;
 }
 
-/** 设备带的 token：WebSocket 在子协议里，HTTP 拉取在 Authorization 头里 */
+/** Extracts the client token from the WebSocket subprotocol or HTTP Authorization header. */
 export function tokenOf(request: Request) {
   if (isSocket(request)) return protocolOf(request, bearer);
   return /^Bearer (.+)$/.exec(request.headers.get('Authorization') ?? '')?.[1];
 }
 
-/** 设备带的表结构的指纹（schemaPrefix、schemaHeader）：不带是 undefined */
+/** Extracts the schema fingerprint from WebSocket subprotocols or HTTP headers, or undefined if omitted. */
 export const schemaFingerprintOf = (request: Request) =>
   isSocket(request) ? protocolOf(request, schemaPrefix) : (request.headers.get(schemaHeader) ?? undefined);

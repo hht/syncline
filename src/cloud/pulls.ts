@@ -9,19 +9,21 @@ import { progressAfter } from './progress.ts';
 import type { Begun, Reader } from './reader.ts';
 
 /**
- * 私有空间怎么给块：从哪读起在这里定（没有游标、游标或 cursor 认不出就整份，否则增量，分块中途接着读），读到哪由读取器定，
- * 这里拼成回给设备的块。每块给的都是读时的当前值、后面的块覆盖前面的，设备暂存到末块一起生效，就等于末块那一版的云端；
- * 从头重拉时游标与待上传都不动。末块带各客户端处理到第几条（HTTP 拉取给设备列出的，连上时的补齐给游标之后有提交的），设备据此丢掉已处理的。
- * 一块至多读 readRows 行、给 limit 个字符的改动（JSON，opChars）。
- * 不该知道的：改动怎么读、写怎么执行与记、共用空间的块。
+ * Emits pull chunks for private spaces: determines starting point here (null cookie or unrecognized cookie/cursor triggers a full pull; otherwise incremental, resuming mid-pull across chunks);
+ * reader bounds how far each step advances, and this module constructs the resulting chunk.
+ * Each chunk provides current row values at read time (subsequent chunks overwrite earlier ones), staged locally until the final chunk lands atomically to match the cloud head;
+ * refetching from scratch leaves local cookies and pending writes intact until completion.
+ * The final chunk carries lmids for clients (specified clients for HTTP pulls, or clients active since cookie for catch-up), allowing devices to discard confirmed pending writes.
+ * Each chunk reads at most `readRows` rows and yields at most `limit` op characters (JSON, opChars).
+ * What this module should not know: how changes are read, how writes are executed or logged, or shared space chunking.
  */
 
-/** 从 cursor 起当场算的一段校验和（可插拔的功能，组装根给校验和功能的 spaceChecksum） */
+/** Computes an on-demand checksum slice starting from cursor (pluggable feature, supplied by root via spaceChecksum). */
 export type SpaceChecksum = (tables: TableReads, cursor: string, rows: number | undefined) => Checksum;
 
 /**
- * 给出的块报给谁，末块带上哪些扣下的写（列出的客户端从各自最早的待上传起的，或某版之后的）、从 cursor 起当场算的一段校验和（没装校验和的不给），
- * 库文件多大（下载进度用）
+ * Pull reporting interface: reports completed chunks, attaches held writes to final chunks (from earliest pending per client or since version),
+ * computes on-demand checksums from cursor (omitted if checksum feature not installed), and provides database size for progress estimation.
  */
 type Report = {
   databaseSize: () => number;
@@ -31,8 +33,9 @@ type Report = {
 };
 
 /**
- * 从哪读起：cursor 是上一块的 next，认得出、带着 seen（读到一半时间点恢复回滚过就认不出）、增量的游标也在当前历史上
- * 就接着读，否则从头整份；没有 cursor 就从游标起，游标为空、不在当前历史上或要求整份（refetch）就整份，否则增量，第一轮并进要求重下的范围（ranges）
+ * Determines starting position for a pull: `cursor` resumes an in-flight pull if valid, carries `seen` (unrecognized if PITR rolled back history),
+ * and cookie remains on history; otherwise restarts with a full pull; if `cursor` is omitted, starts from `cookie` (or full pull if cookie is null,
+ * off history, or refetch requested), merging requested range pull boundaries into round 1.
  */
 function begin(commits: Commits, reader: Reader, { cookie, cursor, refetch, ranges = [] }: PullRequest): Begun {
   const resumed = cursor === undefined ? undefined : reader.resume(cursor);
@@ -43,11 +46,11 @@ function begin(commits: Commits, reader: Reader, { cookie, cursor, refetch, rang
   return { position: { ...reader.start(full ? null : cookie, head, full ? [] : ranges), seen: head }, fresh: true, head };
 }
 
-/** 拉一块；catchUp 是连上时的补齐（不列客户端，见末块） */
+/** Pulls one chunk; `catchUp` indicates initial connection handshake (omits explicit client list; see final chunk handling). */
 export function pull(commits: Commits, reader: Reader, request: PullRequest, limit: number, report: Report, catchUp = false): Poke | Chunk {
   const { cookie, cursor } = request;
   const basisOf = (full: boolean) => (full ? null : cookie);
-  // 下载进度随 cursor 带着：总共第一次分块时算，一块拉完的不算
+  // Progress state carried via cursor: initialized on first chunk of multi-chunk pull, omitted on single-chunk pulls.
   let progressed: Progress | undefined;
   const read = reader.read(
     begin(commits, reader, request),
@@ -66,9 +69,9 @@ export function pull(commits: Commits, reader: Reader, request: PullRequest, lim
       { base: cookie, ...continued, next: read.next, patch: read.ops, ...(progressed && { progress: progressed }) },
       read.chars,
     );
-  // HTTP 拉取只带请求列出的客户端（设备待上传的与当前的）处理到第几条：整份落地时设备据此丢掉已处理的，按客户端表的主键查、不随提交记录涨。
-  // 扣下的写只给列出的客户端从各自最早的待上传起的（没有待上传的当前客户端从它下一条写起）：设备只认它这次确认的写里扣下的，别的给了也用不上。
-  // 连上时的补齐是增量（游标在当前历史上才补齐）：带游标之后有提交的客户端（模型的 LmidsSince）与这段里扣下的，都不多于这段读过的提交
+  // HTTP pulls include lmids only for clients listed in the request (clients with pending writes plus current client): devices discard confirmed writes on landing; queried by primary key on client table without scaling with commit log size.
+  // Held writes are delivered only for listed clients starting from their earliest pending write (or next expected write for current client without pending writes): devices process held writes only for writes confirmed in this cycle.
+  // Connection catch-up is always incremental (performed only when cookie is on history): returns clients with commits since cookie (LmidsSince in model) and held writes within that range, bounded by commits read.
   const since = catchUp ? (cookie?.version ?? 0) : undefined;
   const lmids = since === undefined ? commits.lmidsOf(request.clients ?? []) : commits.lmidsSince(since);
   const checksum = request.checksum !== undefined &&

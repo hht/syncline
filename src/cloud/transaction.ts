@@ -3,9 +3,10 @@ import { getTableConfig, type SQLiteAsyncDatabase, type SQLiteTable } from 'driz
 import { type Key, primaryKey } from '../tables/keys.ts';
 
 /**
- * 服务端的写（导入、付费回调等，不经设备）怎么读写空间的表：读用 Drizzle 的 select，写只有按主键的 4 个操作，
- * 所以从参数就知道改到了哪些行。
- * 不该知道的：改到的行拿去做什么。
+ * Executes server writes (imports, payment webhooks, etc., without going through a device) on space tables.
+ *
+ * Reads use Drizzle's select. Writes are restricted to 4 operations by primary key, so touched rows are known directly from parameters.
+ * What it should not know: what the caller does with touched rows.
  * @see https://zero.rocicorp.dev/docs/mutators
  */
 
@@ -13,32 +14,36 @@ export type Database = SQLiteAsyncDatabase<'sync', unknown>;
 
 export type Transaction = {
   select: Database['select'];
-  /** 主键已存在时什么也不做 */
+  /** Does nothing if the primary key already exists. */
   insert<T extends SQLiteTable>(table: T, row: InferInsertModel<T>): void;
-  /** 没有就插入，有就改成 row 里给出的值 */
+  /** Inserts the row if missing, or updates it with the provided values if present. */
   upsert<T extends SQLiteTable>(table: T, row: InferInsertModel<T>): void;
-  /** 行不存在时什么也不做；undefined 的字段不改，null 清空 */
+  /** Does nothing if the row does not exist; leaves undefined fields unchanged and sets null fields to null. */
   update<T extends SQLiteTable>(table: T, row: Partial<InferInsertModel<T>>): void;
-  /** 行不存在时什么也不做 */
+  /** Does nothing if the row does not exist. */
   delete<T extends SQLiteTable>(table: T, key: Partial<InferSelectModel<T>>): void;
 };
 
-/** 一行在哪：表名、调用方给的主键（删除用）、取库里存的主键的 RETURNING 字段、Drizzle 的条件 */
+/** Identifies row location: table name, caller-provided primary key (for deletions), RETURNING fields for stored keys, and Drizzle where condition. */
 function locate(table: SQLiteTable, value: Record<string, unknown>) {
   const columns = primaryKey(table);
   const { name } = getTableConfig(table);
-  for (const [field] of columns) if (value[field] === undefined || value[field] === null) throw new Error(`${name} 的写缺主键 ${field}`);
+  for (const [field] of columns)
+    if (value[field] === undefined || value[field] === null) throw new Error(`Write on table ${name} is missing primary key ${field}`);
   const key = Object.fromEntries(columns.map(([field, column]) => [column.name, column.mapToDriverValue(value[field])]));
-  // 主键各列库里存的值（原样，不经 Drizzle 的解码：布尔列是 0、1）
+  // Primary key values as stored in the database without Drizzle decoding (e.g. booleans as 0 or 1).
   const stored = Object.fromEntries(columns.map(([, column]) => [column.name, sql`${column}`]));
   return { name, key, stored, where: and(...columns.map(([field, column]) => eq(column, value[field]))) };
 }
 
 /**
- * 插入与修改写了就把表名与主键报给 changed（云端据此记下改到的行）：报的是库里存下的值（RETURNING），调用方给的值按列的类型存（整数列把 "5" 存成 5），
- * 同一行在提交记录里只有一种写法，与设备推来的写一样；
- * 删除先攒着，到下一次读写之前、或调用方结束这次写时（返回的 flush）按表一批交给 deleting（云端据此连带删引用它的行、记下删掉的）：
- * deleting 删了就回 true，没删的这里逐行删。一行一交的话每删一个父行，连带删的每层每张子表都多一条语句；攒成一批，语句条数不随父行数涨
+ * Reports touched table names and primary keys to changed on insert and update (for the cloud to record modified rows).
+ *
+ * Reported keys use the values returned from RETURNING, mapped to their storage column types (for example, string "5" to integer 5),
+ * ensuring touched rows are recorded identically to pushed device mutations.
+ * Deletions are batched in pending until the next read/write or until flush is called, then passed to deleting as an array per table
+ * (for cascading deletes and commit recording).
+ * When deleting handles the batch, it returns true; otherwise rows are deleted individually here.
  */
 export function transaction(
   db: Database,
@@ -49,17 +54,17 @@ export function transaction(
   }: {
     changed: (table: string, key: Key) => void;
     deleting: (table: string, keys: Key[]) => boolean;
-    /** 插入、修改一行之前，这一行已在时给出它库里存的主键（共用空间据此记下改前它在的桶）；不给就不查 */
+    /** Emits the existing stored primary key before an insert or update if the row already exists (used by shared spaces to record prior bucket membership). */
     before?: ((table: string, key: Key) => void) | undefined;
   },
 ): { tx: Transaction; flush: () => void } {
-  /** 这一行已在就把库里存的主键给 before */
+  /** Passes the stored primary key of an existing row to before. */
   const prior = (table: SQLiteTable, { name, stored, where }: ReturnType<typeof locate>) => {
     if (!before) return;
     const [row] = db.select(stored).from(table).where(where).all();
     if (row) before(name, row);
   };
-  /** 攒着的删除：表 → 这张表要删的行（主键的几个字段；Drizzle 的条件删的时候再做，攒着的只有主键，一次删很多行也不占多少内存） */
+  /** Batched deletions mapping table to queued row key fields. */
   const pending = new Map<SQLiteTable, Record<string, unknown>[]>();
   const flush = () => {
     for (const [table, values] of pending) {
@@ -71,8 +76,8 @@ export function transaction(
     }
     pending.clear();
   };
-  // 实现按不带泛型的表写：Drizzle 的类型在泛型表上展不开；对外的类型仍是 Transaction
-  // 真写了（RETURNING 有行）才报给 changed，报 RETURNING 的主键：插入已有的行、修改不在的行什么也没改
+  // Implementation works with untyped tables because Drizzle types cannot expand over generic tables; external type remains Transaction.
+  // Only rows that were actually written (RETURNING yielded rows) are reported to changed: inserting an existing row or updating a nonexistent row touches nothing.
   const tx = {
     select: (...fields: Parameters<Database['select']>) => {
       flush();
@@ -99,7 +104,7 @@ export function transaction(
       for (const written of db.update(table).set(row).where(located.where).returning(located.stored).all()) changed(located.name, written);
     },
     delete: (table: SQLiteTable, key: Record<string, unknown>) => {
-      // 主键给全了才收下（缺了 locate 抛错），出错在调用的这一刻；当场取出主键的几个字段，调用方之后改它给的对象也不影响
+      // Enforces complete primary keys immediately on call (locate throws if incomplete) and copies the key fields so later mutations of the caller object do not affect queued deletions.
       locate(table, key);
       const fields = Object.fromEntries(primaryKey(table).map(([field]) => [field, key[field]]));
       const queued = pending.get(table);

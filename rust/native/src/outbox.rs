@@ -1,5 +1,5 @@
-//! 交回 JS 的指令排在这里：核心线程放进来，原生模块的读取线程取走；取的时候攒下的几批合成一个 JSON 数组，一次跨到 JS。
-//! 不该知道的：指令是什么。
+//! Queues instructions returning to JS: the core thread pushes them in, and the native module's reader thread drains them, combining accumulated batches into a single JSON array per FFI crossing.
+//! What it should not know: what the instructions mean.
 
 use std::sync::{Condvar, Mutex, PoisonError};
 
@@ -11,9 +11,9 @@ pub struct Outbox {
 
 #[derive(Default)]
 struct State {
-    /// 一条条编好的指令（JSON 对象）
+    /// Serialized instructions (JSON objects)
     waiting: Vec<String>,
-    /// 核心线程结束了：取完剩下的就没有了
+    /// Core thread has exited; no more instructions arrive once the remaining ones are drained
     finished: bool,
 }
 
@@ -32,7 +32,7 @@ impl Outbox {
         self.ready.notify_one();
     }
 
-    /// 等到有指令（全部取走，编成一个 JSON 数组）或结束（None）
+    /// Blocks until instructions are available (draining all into a single JSON array) or the queue is finished (`None`)
     pub fn next(&self) -> Option<String> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         while state.waiting.is_empty() && !state.finished {
@@ -51,7 +51,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn 攒下的几批合成一个数组_结束后取完剩下的才回空() {
+    fn combines_accumulated_batches_into_one_array_and_returns_none_after_draining_finished_queue() {
         let outbox = Outbox::default();
         outbox.push(["{\"a\":1}".to_owned()]);
         outbox.push(["{\"b\":2}".to_owned(), "{\"c\":3}".to_owned()]);
@@ -61,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn 没有指令时等着_放进来就醒() {
+    fn blocks_when_empty_and_wakes_on_push() {
         let outbox = Arc::new(Outbox::default());
         let reader = {
             let outbox = outbox.clone();

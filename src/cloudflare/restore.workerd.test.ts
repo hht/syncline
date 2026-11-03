@@ -5,23 +5,23 @@ import { restoreSpace } from './durable-object.ts';
 import { object, online, put } from './test-space.ts';
 import type { TestSpace } from './test-worker.ts';
 
-// 本地的运行时没有时间点恢复（getBookmarkForTime 抛「does not implement point-in-time recovery」）：这里只查第 1 步抛错时什么也不改，真的恢复在预发上测
+// Local workerd runtime lacks point-in-time recovery support: verifies error handling during step 1 without restarting the actor.
 
-test('时间点恢复：本地运行时不支持，第 1 步抛错、不重启对象，连着的设备照常连着', async () => {
+test('rejects step 1 when runtime lacks PITR support without restarting actor, leaving connections open', async () => {
   const { name, phone } = await online(1);
   await expect(restoreSpace(env.SPACE, name, Date.now() - 60_000)).rejects.toThrow(/point-in-time|bookmark/i);
   phone.socket.send(JSON.stringify([]));
-  // 连接没断：推一批空的，没有关闭帧
+  // Connection remains open: sends empty batch without receiving a close frame.
   expect(await Promise.race([phone.next(), new Promise((resolve) => setTimeout(() => resolve('still open'), 200))])).toBe('still open');
 });
 
-test('时间点恢复的第 2 步重启对象：连着的 WebSocket 都断开，之后这条旧连接上推来的写不执行（恢复后序号会复用，旧连接上的写不能进新的历史）', async () => {
+test('step 2 aborts actor to disconnect WebSockets and rejects subsequent mutations from stale connections', async () => {
   const { name, phone } = await online(1);
   await object(name)
     .restart()
     .catch(() => undefined);
   expect(await phone.next()).toHaveProperty('close');
-  phone.push({ id: 1, changes: [put('note', { id: 'n1', text: '旧连接上的' })] });
+  phone.push({ id: 1, changes: [put('note', { id: 'n1', text: 'from old connection' })] });
   const notes = await runInDurableObject(object(name), (_: TestSpace, state) => state.storage.sql.exec('SELECT id FROM note').toArray());
   expect(notes).toEqual([]);
 });

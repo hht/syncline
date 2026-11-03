@@ -1,45 +1,48 @@
 import { notifyAll } from '../common/listeners.ts';
 
 /**
- * 云端发生的、接入方要记日志或指标、要告警的事：Space、Server、广播分片照发生的先后同步交给接入方给的回调（events），
- * SDK 不绑定具体产品（照 PowerSync 服务端与 Zero 把指标交给接入方配的后端）：console.log 成 JSON 进 Workers Logs 或 Logpush，
- * 或写 Analytics Engine 的数据点。回调要快；抛了不影响同步，错误照常报出（isolated）。
+ * Cloud events surfaced to the integrator for logging, metrics, or alerts.
+ *
+ * Space, Server, and broadcast shards invoke the integrator-provided callback (events) synchronously as events occur.
+ * The SDK avoids product-specific bindings (similar to PowerSync server and Zero delegating metrics to the integrator's backend):
+ * events can be logged as JSON to Workers Logs, Logpush, or written to Analytics Engine.
+ * Callbacks must complete quickly; thrown exceptions do not disrupt synchronization and are isolated.
  * @see https://developers.cloudflare.com/workers/observability/logs/workers-logs/
  * @see https://developers.cloudflare.com/analytics/analytics-engine/
  */
 export type Event =
-  /** 一条推来的写执行不了，扣下待修复（该告警：要有人修好后重新提交） */
+  /** Pushed write failed execution and was held pending remediation (should alert: requires manual repair and resubmission). */
   | { type: 'write.held'; client: string; id: number; reason: string }
-  /** 推来的写前面还缺（序号空洞）：跳过、不推进序号；正常运行不会出现，出现了是缺陷（该告警） */
+  /** Pushed write skipped earlier missing IDs (sequence gap): skipped without advancing lmid; unexpected during normal operation (should alert). */
   | { type: 'write.skipped'; client: string; id: number; lmid: number }
-  /** 推来的写改了已删的表或列：这部分丢掉（names），其余照常执行 */
+  /** Pushed write modified retired tables or columns: discarded these entries (names) and executed remaining changes. */
   | { type: 'values.dropped'; client: string; id: number; names: string[] }
-  /** 打开时同步的范围变了：进入同步的表与列（设备拉到时重给整张表）、离开同步的不再记 */
+  /** Sync scope changed on open: entered tables/columns (rescanned in full on next pull) and left items (no longer recorded). */
   | { type: 'schema.changed'; entered: string[]; left: string[] }
-  /** 扣下的写重新提交成功 */
+  /** Held write was resubmitted successfully. */
   | { type: 'write.resubmitted'; client: string; id: number }
-  /** 推送处理不了（存储出错这类）：出错的那条起不推进序号，以 1011 关推送方的连接，设备退避重发（该告警） */
+  /** Push processing failed (such as storage errors): lmid was not advanced from the failing write onward, connection closed with 1011, client retries with backoff (should alert). */
   | { type: 'push.failed'; reason: string }
-  /** 共用空间的设备游标不在当前历史上（历史换掉了），回 reset：设备清空重下 */
+  /** Device cookie is off current history in a shared space, returned reset: client clears mirror and pulls from scratch. */
   | { type: 'cookie.reset'; version: number }
-  /** 拉取给出一块：rows 是改动的行数，chars 是改动的 JSON 字符数，last 是不是末块 */
+  /** Pull emitted a chunk: rows is changed row count, chars is JSON character count, last indicates final chunk. */
   | { type: 'chunk.pulled'; space: 'private' | 'shared'; rows: number; chars: number; last: boolean }
-  /** 云端关掉一条连接：pullNeeded（没有游标、游标不在当前历史上）、expired（身份到期）等 */
+  /** Cloud closed a connection: pullNeeded (missing or off-history cookie), expired (auth expired), etc. */
   | { type: 'connection.closed'; code: number; reason: string }
-  /** 共用空间有广播分片这一次没通知到：之后按退避重发到送到为止 */
+  /** Shared space notification failed to deliver to a broadcast shard: will retry with backoff until acknowledged. */
   | { type: 'notice.failed'; shard: string; reason: string }
   /**
-   * 后台收拾的一步（index：给已有的表补还缺的索引、删过时的桶规则索引，drop：删过了宽限期的表，truncate：截日志，count：数共用空间每个桶的行数）这次失败：
-   * 按退避重排，一直重试到成功
+   * Upkeep step failed (index: backfilling missing indexes or dropping obsolete bucket rule indexes, drop: dropping tables past grace period, truncate: commit log truncation, count: counting rows per bucket in a shared space):
+   * rescheduled with backoff and retried until successful.
    */
   | { type: 'upkeep.failed'; step: 'index' | 'drop' | 'truncate' | 'count'; reason: string }
-  /** 一个导出者这次导出失败：按退避重排，一直重试到成功（该告警：一直失败时，统计一直缺这段时间的改动） */
+  /** Exporter run failed: rescheduled with backoff and retried until successful (should alert: downstream destination misses changes during sustained failures). */
   | { type: 'export.failed'; name: string; reason: string };
 
 export type Events = (event: Event) => void;
 
-/** 没给回调时什么也不做 */
+/** Default no-op callback when no listener is provided. */
 export const quiet: Events = () => undefined;
 
-/** 接入方的回调单独调用：抛错不影响同步（推送照样确认、导出照样往前走），错误照常报出、不致命。没给的还是 quiet */
+/** Wraps integrator callback in isolation: exceptions do not disrupt sync (pushes still confirm, exports still advance), and errors are logged without becoming fatal. */
 export const isolated = (events: Events): Events => (events === quiet ? quiet : (event) => notifyAll([events], event));

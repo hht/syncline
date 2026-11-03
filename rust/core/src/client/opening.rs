@@ -1,6 +1,7 @@
-//! 打开一个本机库要给的（手机上的原生模块、web 的 Worker、测试一样）：照编好的声明建表、补列，切到 WAL，再打开设备。
-//! 测试里的库已由测试建好表，仍走这一步（建表对已有的表只补缺的列与索引）。
-//! 不该知道的：库文件在哪、怎么打开。
+//! Parameters required to open a local database (shared across native mobile modules, web workers, and tests):
+//! creates tables and adds missing columns from compiled declarations, switches to WAL, and opens the device.
+//! Databases prepared by tests still run this step (table creation only adds missing columns and indexes to existing tables).
+//! What it should not know: where database files are stored or how they are opened.
 
 use crate::device::Options;
 use crate::error::Error;
@@ -9,7 +10,7 @@ use crate::tables;
 use rusqlite::Connection;
 use serde::Deserialize;
 
-/// 打开要给的（JS 编好的 JSON）：表与它们的用法、私有空间属于谁、换人时丢不丢没上传的写、在线校验和（不给是不核对，rowsPerDay 不给用默认）
+/// Parameters provided to open the database (deserialized from compiled JSON): tables and usages, private space owner, whether to discard pending writes on owner change, and online checksum configuration (omitted means disabled, missing rowsPerDay uses default).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Opening {
@@ -27,12 +28,15 @@ struct Checksum {
 }
 
 impl Opening {
-    /// 在库上建表、切 WAL，交出打开设备要的。建表在切 WAL 之前：新库的 `auto_vacuum` 要在建第一张表之前设，切 WAL 会写下库的文件头，
-    /// 之后再改要 VACUUM。`synchronous = FULL`：WAL 下默认的 NORMAL 断电时可能丢掉已提交的写；WAL 文件在检查点之后截到 1 MiB，
-    /// 不留着整份落地时的大小。库不支持 WAL（web 的 OPFS 上没有共享内存）时 SQLite 照旧用回滚日志，不报错
+    /// Prepares tables and enables WAL mode on the database, producing device [`Options`]. Table creation precedes WAL mode switch:
+    /// `auto_vacuum` on fresh databases must be set before creating the first table, while switching to WAL writes the file header
+    /// (modifying auto-vacuum afterward requires a full VACUUM). `synchronous = FULL`: default NORMAL under WAL risks losing committed writes
+    /// on sudden power loss; WAL files are truncated to 1 MiB after checkpoints instead of preserving full landing sizes.
+    /// If WAL mode is unsupported (such as OPFS without shared memory on web), SQLite falls back to rollback journal mode without error.
     ///
     /// # Errors
-    /// 建表出错（声明与库里的表合不上、执行出错）。
+    ///
+    /// Returns an error if table creation fails (schema mismatch or SQL execution error).
     /// @see <https://sqlite.org/pragma.html#pragma_synchronous>
     /// @see <https://sqlite.org/pragma.html#pragma_journal_size_limit>
     /// @see <https://sqlite.org/wal.html#noshm>

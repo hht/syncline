@@ -1,9 +1,9 @@
-//! 经句柄（与 Swift、Kotlin 同一个入口）测核心线程：开库、读、关库的回复与次序，认不出的调用也有回复。
+//! Host sync thread tests via Handle (same entry point as Swift/Kotlin): verifies order and replies of open, read, and close.
 
 use crate::Handle;
 use serde_json::{Value as Json, json};
 
-/// 一个临时目录里的库；测试结束删掉
+/// A test database in a temporary directory, deleted when dropped.
 struct Library {
     handle: Handle,
     directory: std::path::PathBuf,
@@ -23,10 +23,10 @@ impl Library {
         self.handle.send(call.to_string());
     }
 
-    /// 等到给 id 的回复（跳过别的指令）
+    /// Waits for reply matching id, skipping other instructions.
     fn reply(&self, id: u64) -> Json {
         loop {
-            let batch: Vec<Json> = serde_json::from_str(&self.handle.next().expect("没等到回复就结束了")).unwrap();
+            let batch: Vec<Json> = serde_json::from_str(&self.handle.next().expect("stream ended before reply")).unwrap();
             if let Some(reply) = batch.into_iter().find(|it| it["type"] == "reply" && it["id"] == id) {
                 return reply;
             }
@@ -47,7 +47,7 @@ impl Drop for Library {
 }
 
 #[test]
-fn 开库_读_关库各有回复_关库回复之后再没有别的() {
+fn open_query_close_each_reply_and_stream_ends_after_close() {
     let library = Library::start("lifecycle");
     library.open(1);
     library.send(&json!({ "type": "query", "id": 2, "sql": "SELECT 1 AS one", "params": [] }));
@@ -58,41 +58,41 @@ fn 开库_读_关库各有回复_关库回复之后再没有别的() {
 }
 
 #[test]
-fn 认不出的调用_读得出_id_就回它出错_本机库照常可用() {
+fn unreadable_call_with_id_replies_error_and_database_remains_usable() {
     let library = Library::start("unreadable");
     library.open(1);
-    // JSON.stringify 写得出孤立的代理项，serde_json 读成字符串时报错
+    // JSON.stringify can emit lone surrogates that fail string parsing in serde_json.
     library
         .handle
         .send(r#"{"type":"query","id":2,"sql":"SELECT 'a\ud800b'","params":[]}"#.to_owned());
-    assert!(library.reply(2)["error"]["message"].as_str().unwrap().contains("认不出"));
+    assert!(library.reply(2)["error"]["message"].as_str().unwrap().contains("unrecognized call"));
     library.send(&json!({ "type": "query", "id": 3, "sql": "SELECT 2", "params": [] }));
     assert_eq!(library.reply(3)["value"], json!([[2]]));
 }
 
 #[test]
-fn 还没开库的调用回本机库已关闭() {
+fn call_before_open_replies_closed() {
     let library = Library::start("closed");
     library.send(&json!({ "type": "query", "id": 1, "sql": "SELECT 1", "params": [] }));
-    assert_eq!(library.reply(1)["error"]["message"], "本机库已关闭");
+    assert_eq!(library.reply(1)["error"]["message"], "local database is closed");
 }
 
 fn opening() -> Json {
     json!({ "config": { "synced": [], "localOnly": [], "readOnly": [], "retired": [], "schemas": [] } })
 }
 
-/// 等一个句柄交回的回复，直到给 last 的（跳过别的指令）
+/// Waits for replies on a handle until reply matching last, skipping other instructions.
 fn replies(handle: &Handle, last: u64) -> Vec<Json> {
     let mut replies = Vec::new();
     while replies.last().is_none_or(|it: &Json| it["id"] != last) {
-        let batch: Vec<Json> = serde_json::from_str(&handle.next().expect("没等到回复就结束了")).unwrap();
+        let batch: Vec<Json> = serde_json::from_str(&handle.next().expect("stream ended before reply")).unwrap();
         replies.extend(batch.into_iter().filter(|it| it["type"] == "reply"));
     }
     replies
 }
 
 #[test]
-fn 同一个库文件另几个句柄排着_前面的关掉才轮到下一个_攒着的调用开库之后照先后做() {
+fn queued_handles_on_same_file_run_sequentially_after_preceding_closes() {
     let first = Library::start("queue");
     first.open(1);
     let later: Vec<_> = (0..2)
@@ -116,11 +116,11 @@ fn 同一个库文件另几个句柄排着_前面的关掉才轮到下一个_攒
 }
 
 #[test]
-fn 关掉之后才删得掉() {
+fn file_removable_only_after_close() {
     let library = Library::start("remove");
     library.open(1);
     let path = library.directory.join("test.db");
-    assert!(crate::remove(&path).unwrap_err().to_string().contains("还开着"));
+    assert!(crate::remove(&path).unwrap_err().to_string().contains("still open"));
     library.send(&json!({ "type": "close", "id": 2 }));
     library.reply(2);
     crate::remove(&path).unwrap();
@@ -128,14 +128,14 @@ fn 关掉之后才删得掉() {
 }
 
 #[test]
-fn 排着等开库时关掉_不等前面的让号_开库与之后的调用回已关闭() {
+fn close_while_queued_to_open_fails_buffered_calls_as_closed_without_waiting() {
     let first = Library::start("cancel");
     first.open(1);
     let second = Handle::start(first.directory.join("test.db"));
     second.send(json!({ "type": "open", "id": 1, "options": opening() }).to_string());
     second.send(json!({ "type": "query", "id": 2, "sql": "SELECT 1", "params": [] }).to_string());
     second.send(json!({ "type": "close", "id": 3 }).to_string());
-    // 句柄交给另一条线程等：卡住时这里超时报错，不在丢掉句柄（等核心线程结束）时一起卡住
+    // Handle delegated to another thread to avoid blocking on drop if stuck.
     let (batches, received) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         while let Some(batch) = second.next() {
@@ -146,18 +146,18 @@ fn 排着等开库时关掉_不等前面的让号_开库与之后的调用回已
     while replies.len() < 3 {
         let batch = received
             .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("排着时关不掉：前面的不让号就一直卡着");
+            .expect("timed out waiting for replies while queued to open");
         replies.extend(batch.into_iter().filter(|it| it["type"] == "reply"));
     }
     let ids: Vec<_> = replies.iter().map(|it| it["id"].clone()).collect();
     assert_eq!(ids, [json!(1), json!(2), json!(3)]);
-    assert_eq!(replies[0]["error"]["message"], "本机库已关闭");
-    assert_eq!(replies[1]["error"]["message"], "本机库已关闭");
+    assert_eq!(replies[0]["error"]["message"], "local database is closed");
+    assert_eq!(replies[1]["error"]["message"], "local database is closed");
     assert_eq!(replies[2].get("error"), None);
 }
 
 #[test]
-fn 排着等开库时句柄放掉_马上结束_后面的照样轮得到() {
+fn dropping_handle_while_queued_exits_immediately_and_next_turn_runs() {
     let first = Library::start("shutdown");
     first.open(1);
     let path = first.directory.join("test.db");
@@ -165,7 +165,7 @@ fn 排着等开库时句柄放掉_马上结束_后面的照样轮得到() {
     second.send(json!({ "type": "open", "id": 1, "options": opening() }).to_string());
     let third = Handle::start(path);
     third.send(json!({ "type": "open", "id": 1, "options": opening() }).to_string());
-    // 放掉句柄（JS 那边没了）等核心线程结束：卡住时这里超时报错
+    // Dropping handle waits for sync thread to exit; test fails if it hangs.
     let (done, dropped) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         drop(second);
@@ -173,7 +173,7 @@ fn 排着等开库时句柄放掉_马上结束_后面的照样轮得到() {
     });
     dropped
         .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("排着时放不掉：前面的不让号就一直卡着");
+        .expect("timed out dropping handle while queued to open");
     first.send(&json!({ "type": "close", "id": 2 }));
     first.reply(2);
     assert_eq!(replies(&third, 1)[0].get("error"), None);

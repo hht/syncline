@@ -1,5 +1,6 @@
-//! 设备这一侧接上校验和：开始与推进一段核对，给出核对时设备这一刻的样子（数据的状态、各表的主键、游标）。
-//! 不该知道的：什么时候对、怎么算、对不上怎么办。
+//! Checksum verification integration on device: initiates and steps through range verification,
+//! capturing device snapshot state at the current moment (data status, primary keys per table, cookie).
+//! What it should not know: when verification runs, hash computation algorithms, or how mismatches are repaired.
 
 use super::Device;
 use crate::error::Error;
@@ -8,14 +9,15 @@ use crate::upload_queue::UploadQueue;
 use crate::verifier::{Moment, Progress};
 use std::collections::HashMap;
 
-/// 对一段校验和时设备这一刻的样子（`Device::moment`）
+/// Snapshot of device state at verification moment ([`Device::moment`]).
 type Snapshot = (Option<String>, HashMap<String, Vec<String>>, Option<Cookie>);
 
 impl Device {
-    /// 开始核对一段校验和；没装、不能对返回假（作罢）。live 是连接没停、本机库没关
+    /// Initiates verification of a checksum range; returns false if disabled or unable to run. `live` indicates connection active and database open.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn verify_begin(&mut self, live: bool) -> Result<bool, Error> {
         let (mark, keys, cookie) = self.moment(live)?;
         let db = self.db.connection();
@@ -33,10 +35,11 @@ impl Device {
         }
     }
 
-    /// 核对一步；没在核对是作罢
+    /// Steps through verification; returns [`Progress::Done(None)`] if verification is not active.
     ///
     /// # Errors
-    /// 读写库出错（外层报出、作罢）。
+    ///
+    /// Returns an error if database operations fail.
     pub fn verify_step(&mut self, live: bool, now: f64) -> Result<Progress, Error> {
         let (mark, keys, cookie) = self.moment(live)?;
         let db = self.db.connection();
@@ -56,7 +59,7 @@ impl Device {
         progress
     }
 
-    /// 对一段时设备这一刻的样子：同步的数据的状态（没有待上传、没在分块拉取时是游标的 JSON）、各张同步表的主键、游标
+    /// Captures snapshot of device state: sync state mark (cookie JSON when upload queue is empty and not staging), primary keys per synced table, and cookie.
     fn moment(&self, live: bool) -> Result<Snapshot, Error> {
         let db = self.db.connection();
         let cookie = self.cookie()?;

@@ -1,19 +1,19 @@
-//! 待上传怎么推：离线攒下的写分批推，前一批被云端确认了再推下一批；云端一批只处理了前缀时
-//! 确认的是这批的一部分，也接着推剩下的；换了连接就重推（云端按序号去重，重发安全），同一条连接上不重推同一批。按序号认确认，不比待上传的条数。
-//! push 给出发出了多少字节、confirm 给出这条连接上推的都传完了没有，由调用方告诉心跳。
-//! 不该知道的：连接怎么建、断；不调心跳，只给出它要的。
+//! How pending mutations are pushed: offline writes are pushed in batches, sending the next batch only after the previous one is confirmed by cloud; when cloud only processes a prefix of a batch,
+//! confirmation covers part of the batch and the rest continues to be pushed; reconnecting resends the batch (cloud deduplicates by sequence number, safe to retry), but the same batch is not resent on the same connection. Confirmations match by sequence number, not count of pending mutations.
+//! `push` reports bytes sent, `confirm` reports whether pushed mutations on this connection have finished uploading, which the caller conveys to heartbeat.
+//! What it should not know: how connections are opened or closed; does not invoke heartbeat directly, only returns what it needs.
 
 use crate::sync::SOCKET_LIMIT;
 use crate::sync::instructions::{Instruction, Out};
 use crate::upload_queue::Mutation;
 use std::collections::BTreeMap;
 
-/// 一次推送约多大（改动的 JSON 字节数）：取 WebSocket 一条消息上限的一半，一批在心跳的期限内传完；确认的通知带改到的行的整行，
-/// 可以更大，装不下时云端只发提示、设备连着走 HTTP 拉（末块带着确认）。一批至少一条，单条写可以更大（至多 `WRITE_BYTES`），
-/// 心跳按它的大小推迟 ping
+/// Target size of one push batch (in JSON bytes of changes): set to half of maximum WebSocket message size, ensuring a batch uploads within heartbeat timeout; confirmation notifications carry full modified rows,
+/// which can be larger—when too large, cloud sends a hint and device pulls via HTTP while connected (final chunk carries confirmation). At least one mutation per batch; single writes may be larger (up to `WRITE_BYTES`),
+/// and heartbeat delays ping based on its size.
 pub const PUSH_LIMIT: f64 = SOCKET_LIMIT / 2.0;
 
-/// 推出去的一批：哪条连接上、几条、最后一条是哪个客户端的第几条、各客户端在这批里最早的序号
+/// A batch sent out: which connection, count of mutations, last mutation's client and id, and earliest id per client in this batch.
 #[derive(Clone, PartialEq)]
 struct Batch {
     socket: u32,
@@ -23,7 +23,7 @@ struct Batch {
     firsts: BTreeMap<String, i64>,
 }
 
-/// 确认了在路上的那批：这条连接上推的也都传完了（uploaded）还是只确认了（confirmed）
+/// In-flight batch confirmed: whether all pushes on this connection are uploaded or only confirmed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Confirmed {
     Confirmed,
@@ -33,12 +33,12 @@ pub enum Confirmed {
 #[derive(Default)]
 pub struct Pushes {
     in_flight: Option<Batch>,
-    /// 换连接时旧连接上还没确认的那批：它可能晚到云端、之后才执行
+    /// Unconfirmed batch on previous connection when reconnecting: might arrive later at cloud and execute subsequently.
     elsewhere: Option<Batch>,
     last: Option<Batch>,
-    /// 在哪条连接上收下过补齐（补齐是连接上第一条带确认的消息）
+    /// Socket where catch-up was received (catch-up is the first message carrying confirmation on a connection).
     caught_up_on: Option<u32>,
-    /// 云端认不出推上去的这批（设备的缺陷）时报出的错：不再推
+    /// Error reported when cloud does not recognize this batch (device defect): pushes cease.
     refused: Option<crate::sync::error::Failure>,
 }
 
@@ -52,16 +52,16 @@ impl Pushes {
         self.refused.as_ref()
     }
 
-    /// 重新开始推（start、resync）
+    /// Resumes pushing (start, resync).
     pub fn resume(&mut self) {
         self.refused = None;
     }
 
-    /// 在打开了的 socket 上推待上传的第一批（pending 是前面约 `PUSH_LIMIT` 字节的待上传），返回发出了多少字节（没发是 None）：
-    /// 前一批还在这条连接上没确认就等确认了再推
+    /// Pushes first batch of pending mutations on opened socket (`pending` returns first ~`PUSH_LIMIT` bytes of pending mutations); returns bytes sent (`None` if nothing sent):
+    /// waits for confirmation if previous batch on this connection is still unconfirmed.
     ///
     /// # Panics
-    /// 待上传编不成 JSON（值都是读出来的数、文本、空，不会）。
+    /// Panics if pending mutations cannot be serialized to JSON (contains only numbers, strings, nulls).
     pub fn push(&mut self, out: &mut Out, socket: u32, pending: impl FnOnce() -> Vec<Mutation>) -> Option<usize> {
         if self.refused.is_some() || self.in_flight.as_ref().is_some_and(|batch| batch.socket == socket) {
             return None;
@@ -79,14 +79,14 @@ impl Pushes {
             id: last.id,
             firsts,
         };
-        // 与这条连接上刚推的是同一批：确认到了、本机却没收下，待上传没变，不重推（model/Private.tla 的 Push：同样的推送已在路上就不再发）
+        // Same batch as just pushed on this connection: confirmation arrived but device has not accepted it yet, pending mutations unchanged; do not resend (Push in model/Private.tla: do not resend identical push already in flight).
         if let Some(last) = &self.last
             && same_batch(last, &batch)
         {
             self.in_flight = Some(last.clone());
             return None;
         }
-        let text = serde_json::to_string(&pending).expect("待上传编得成 JSON");
+        let text = serde_json::to_string(&pending).expect("pending mutations serialize to JSON");
         let bytes = text.len();
         out.push(Instruction::Send { socket, data: text });
         self.elsewhere = self.in_flight.take();
@@ -95,11 +95,11 @@ impl Pushes {
         Some(bytes)
     }
 
-    /// socket 上到了一条带确认的消息（各客户端处理到第几条）：在路上的那批确认了没有（全部或前缀都算）。
-    /// 确认也可能是同一批写在别处推的那次执行，这条连接上重推的还在传，不算传完了：补齐里的确认（云端先发补齐、再处理这条连接上的推送），
-    /// 与确认到的没有超出旧连接上那批的（旧连接上的可能晚到云端、之后才执行；待上传只从前面删、往后加，后推的一批的最后一条不会更靠前，
-    /// 客户端不同就是更靠后）。上一次打开时推的、进程没了系统还在发、补齐之后才到云端的，这里分不出来，心跳会早一些发 ping
-    /// （最坏误判断线一次，重连时补齐就确认了）
+    /// A message carrying confirmation arrived on socket (up to which mutation each client was processed): whether the in-flight batch is confirmed (fully or prefix).
+    /// Confirmation might also stem from executing the same writes pushed elsewhere while the retry on this connection is still uploading, so not marked uploaded: confirmations in catch-up (cloud sends catch-up before processing push on this connection),
+    /// or where confirmed id does not exceed the batch from previous connection (pushes from previous connection might arrive late and execute later; pending queue only pops from front and appends to back, so later batch's last mutation is never earlier).
+    /// Pushes from previous session still in OS transmission buffers after process exit and arriving after catch-up cannot be distinguished here, causing heartbeat to ping slightly earlier
+    /// (at worst one false disconnect detection, confirmed via catch-up upon reconnect).
     pub fn confirm(&mut self, socket: u32, lmids: &crate::protocol::Lmids) -> Option<Confirmed> {
         let catch_up = self.caught_up_on != Some(socket);
         self.caught_up_on = Some(socket);
@@ -143,7 +143,7 @@ mod tests {
         }
     }
 
-    /// 发出的各批各有几条写
+    /// Count of mutations in each sent batch.
     fn sent(out: &mut Out) -> Vec<usize> {
         out.take()
             .into_iter()
@@ -155,16 +155,16 @@ mod tests {
     }
 
     #[test]
-    fn 确认来自别处执行的同一批写_本机还没收下_同一条连接上不再推同一批_收下后接着推剩下的() {
+    fn confirmation_from_elsewhere_does_not_resend_same_batch_until_accepted() {
         let (mut pushes, mut out) = (Pushes::default(), Out::default());
         let lmids = Lmids::from([("shared".to_owned(), 11)]);
         pushes.push(&mut out, 1, || vec![mutation("shared", 11), mutation("own", 1)]);
-        // 另一台设备（从备份恢复的，共用客户端）推的 shared 第 11 条执行了：这条连接上的通知带着它的确认，本机落后、没收下，待上传没变
-        // （这条连接上的第一条确认是补齐，不算传完）
+        // Another device (restored from backup, sharing client) pushed mutation 11 of shared which executed: notification on this connection carries its confirmation; local device is behind and has not accepted, pending mutations unchanged
+        // (first confirmation on this connection is catch-up, not considered uploaded).
         assert_eq!(pushes.confirm(1, &lmids), Some(Confirmed::Confirmed));
         pushes.push(&mut out, 1, || vec![mutation("shared", 11), mutation("own", 1)]);
         assert_eq!(sent(&mut out), [2]);
-        // 本机追上了：确认到的那条删掉，剩下的接着推
+        // Local device caught up: confirmed mutation removed, remaining mutations pushed.
         assert_eq!(pushes.confirm(1, &lmids), Some(Confirmed::Uploaded));
         pushes.push(&mut out, 1, || vec![mutation("own", 1)]);
         assert_eq!(sent(&mut out), [1]);

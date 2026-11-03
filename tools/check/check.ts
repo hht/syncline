@@ -6,6 +6,7 @@ import { wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs';
 import { changedFiles } from './changed-files.ts';
 import { checkCommentRules } from './comment-rules.ts';
 import { checkCommands, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
+import { checkEnglish } from './english.ts';
 import { checkForbiddenWords } from './forbidden-words.ts';
 import { biome, deadCode, duplicates, layers, runTool, tests, together, typecheck } from './gates.ts';
 import type { Problem } from './problem.ts';
@@ -16,21 +17,29 @@ const root = resolve(import.meta.dirname, '../..');
 const changed = process.argv.includes('--changed');
 const files = changed ? changedFiles(root) : undefined;
 
-/** 工作区里的文件（含未跟踪）；已删除但未暂存的文件 git 仍会列出，要去掉 */
+/** Files in the workspace (including untracked); git still lists deleted but unstaged files, so filter them out. */
 const workspaceFiles = (...patterns: string[]) =>
   execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', ...patterns], { cwd: root, encoding: 'utf8' })
     .split('\n')
     .filter((file) => file && existsSync(join(root, file)));
 
+const trackedFiles = () =>
+  execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+    .split('\n')
+    .filter((file) => file && existsSync(join(root, file)));
+
 const read = (path: string) => ({ path, text: readFileSync(join(root, path), 'utf8') });
-// .cjs、.mjs 是工具的配置与替身，注释与名字同样要查；Rust 的注释与名字守同样的规则
+const trackedSet = new Set(trackedFiles());
+const tracked = (files ? files.filter((file) => trackedSet.has(file)) : [...trackedSet]).map(read);
+
+// .cjs and .mjs are tool configurations and shims; their comments and names are checked as well; Rust comments and names follow the same rules.
 const sources = (files ?? workspaceFiles('*.ts', '*.tsx', '*.cjs', '*.mjs')).filter((file) => /\.([cm]js|tsx?)$/.test(file)).map(read);
 const rustSources = (files ?? workspaceFiles('*.rs')).filter((file) => file.endsWith('.rs')).map(read);
-// 配置文件的注释同样只写功能与为什么；锁文件是生成的，skill 是外来的
+// Config file comments only describe purpose and why; lockfiles are generated, and skills are external.
 const configs = (files ?? workspaceFiles('*.jsonc', '*.yaml', '*.yml', '.gitignore'))
   .filter((file) => /(\.(jsonc|ya?ml)|\.gitignore)$/.test(file) && !/^\.claude\/|pnpm-lock\.yaml$/.test(file))
   .map(read);
-// JSON 配置（package.json、expo-module.config.json、tsconfig）同样不提接入方的项目
+// JSON configs (package.json, expo-module.config.json, tsconfig) do not mention integrator projects either.
 const jsons = (files ?? workspaceFiles('*.json')).filter((file) => file.endsWith('.json') && !file.startsWith('.claude/')).map(read);
 
 const inProcess = (name: string, icon: string, check: () => Problem[]): Gate => ({
@@ -42,26 +51,26 @@ const inProcess = (name: string, icon: string, check: () => Problem[]): Gate => 
   },
 });
 
-/** --changed 时与改动无关的慢门禁不真跑，如实报「跳过」 */
+/** When running with --changed, slow gates unrelated to the changes are skipped and reported as skipped. */
 const skip = (reason: string) => async () => ({ ok: true, output: reason, problems: [], skipped: true as const });
-// Rust 不引用 TS（TS 引用的 wasm 由下面的 wasm 门禁先编好）：只在 Rust 工作区或门禁本身变了才跑
+// Rust does not reference TS (the wasm referenced by TS is compiled first by the wasm gate below): only run when the Rust workspace or gates themselves change.
 const rustRelevant = !files || files.some((file) => /^(rust\/|tools\/check\/)/.test(file));
-// 测试（vitest 的 globalSetup）开头编 wasm，改了 Rust 时按满核编：先在这里编好，它的 cargo 就无事可做
+// Tests compile wasm at the start (vitest globalSetup); when Rust changes, compile with all cores: compile it here first so its cargo has nothing left to do.
 const wasm = (output: 'node' | 'web') => runTool(root, process.execPath, ['src/build-wasm.mjs', output], () => []);
 
-// 编 Rust 的（rust、wasm）cargo 用满全部核，改了 Rust 时与测试同时跑会把有 5 秒时限的测试挤超时，所以标 first，先跑完再起其余的。
-// 测试（vitest 默认开核数 − 1 个进程）与其余门禁、workerd 同时跑，按满核开会互相抢 CPU，单个测试被拉长到超过 5 秒的时限：只用三分之二的核
+// Cargo building Rust (rust, wasm) uses all cores; running simultaneously with tests when Rust changes causes 5-second timeout tests to time out, so mark them first to finish before starting the rest.
+// Tests (vitest defaults to cores - 1 processes) run concurrently with other gates and workerd; running on all cores contends for CPU and stretches single tests past the 5-second timeout: use only two-thirds of the cores.
 const testWorkers = Math.max(1, Math.floor(availableParallelism() / 1.5));
 
 const gates: Gate[] = [
-  // 图标按检查的类型：🎨 格式与写法 🔷 类型 🧱 分层 🧹 死代码 👯 重复 🧪 测试 🏷️ 命名 💬 注释 📄 文档 🦀 Rust
+  // Icons by check type: 🎨 format and style 🔷 types 🧱 layers 🧹 dead code 👯 duplicates 🧪 tests 🏷️ naming 💬 comments 🔤 english 📄 documentation 🦀 Rust
   { name: 'biome', icon: '🎨', run: biome(root) },
   { name: 'tsc', icon: '🔷', run: typecheck(root, ['.', 'tsconfig.cloudflare.json']) },
   { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools']) },
   { name: 'knip', icon: '🧹', run: deadCode(root) },
-  // 从 30 token 起就报：各模块该共用的逻辑抽成一处；门禁与开发脚本、AGENTS.md 照 .jscpd.json 的 50。
-  // Rust 从 40 起：声明带着 serde 属性，同样一个可选字段（TS 的 after?: Row 约 5 个 token），带上 skip_serializing_if 是二十来个，
-  // 几个消息类型共有两三个字段就过了 30
+  // Report from 30 tokens: shared logic across modules should be extracted to one place; gates, dev scripts, and AGENTS.md follow .jscpd.json at 50.
+  // Rust starts from 40: declarations carry serde attributes; a single optional field (TS after?: Row is ~5 tokens) with skip_serializing_if is around twenty tokens;
+  // sharing two or three fields across message types quickly exceeds 30 tokens.
   {
     name: 'jscpd',
     icon: '👯',
@@ -81,15 +90,16 @@ const gates: Gate[] = [
     first: true,
     run: rustRelevant
       ? rust(root, 'rust', { target: wasmTarget, package: 'syncline-wasm', env: wasmCompilers })
-      : skip('没有改动 Rust 工作区或门禁代码'),
+      : skip('No changes to Rust workspace or gate code'),
   },
   { name: 'wasm', icon: '🦀', first: true, run: async () => together([await wasm('node'), await wasm('web')]) },
   inProcess('forbidden-words', '🏷️', () => checkForbiddenWords([...sources, ...rustSources, ...configs, ...jsons])),
   inProcess('comment-rules', '💬', () => checkCommentRules([...sources, ...rustSources, ...configs])),
+  inProcess('english', '🔤', () => checkEnglish(tracked)),
   inProcess('docs', '📄', checkDocs),
 ];
 
-/** 文档与仓库实际状态对照；门禁名包括钩子里的提交说明检查 */
+/** Cross-check documentation against actual repository state; gate names include the commit message check in git hooks. */
 function checkDocs() {
   const agents = read('AGENTS.md').text;
   const docs = workspaceFiles('AGENTS.md', 'README.md', 'docs')
@@ -104,7 +114,7 @@ function checkDocs() {
   ];
 }
 
-console.log(changed ? `只查相对 HEAD 改动的 ${files?.length ?? 0} 个文件（部分门禁照常全量查）` : '全量检查');
+console.log(changed ? `Checking ${files?.length ?? 0} files changed relative to HEAD (some gates still run fully)` : 'Full check');
 const { ok, lines } = await runGates(gates, files, join(root, '.check'));
 for (const line of lines) console.log(line);
 process.exitCode = ok ? 0 : 1;

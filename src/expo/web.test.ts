@@ -5,10 +5,9 @@ import type { Received } from './client.ts';
 import { openSyncline } from './web.ts';
 import type { HostMessage } from './worker.ts';
 
-// web 上页面这一头：Worker 坏了在途的调用都失败、状态记成出错；替 Worker 取 token 时 token() 同步抛错也回「取不到」，不让 Worker 一直等；
-// 换了人登录时旧的那次打开不收新开的事。Worker 由 openSyncline 自己建，这里换成替身
+// Verifies web client: fails in-flight calls on Worker error, forwards synchronous token() throw, and isolates instances across accounts.
 
-/** 替身 Worker：记下页面发来的消息，测试替它回话、出错 */
+/** Mock Worker recording posted messages and dispatching mock responses or errors. */
 class FakeWorker {
   static created: FakeWorker[] = [];
   readonly posted: HostMessage[] = [];
@@ -29,14 +28,14 @@ class FakeWorker {
     this.terminated = true;
   }
 
-  /** 页面发来的某种调用（最近的一条） */
+  /** Returns the most recent call of specified type posted by page. */
   last(type: string) {
     const message = this.posted.findLast(({ call }) => call.type === type);
-    if (!message) throw new Error(`没有 ${type}`);
+    if (!message) throw new Error(`No message of type ${type}`);
     return message;
   }
 
-  /** 替某一次打开交回一批 */
+  /** Delivers received events to a specific instance. */
   deliver(instance: number, ...received: Received[]) {
     this.onmessage?.({ data: { instance, received } });
   }
@@ -44,20 +43,20 @@ class FakeWorker {
 
 vi.stubGlobal('Worker', FakeWorker);
 
-/** 整个页面一个 Worker：每条测试之后让它坏掉，下一条新建 */
+/** Single Worker per page: triggers error after each test to force recreation on next test. */
 afterEach(() => {
   FakeWorker.created.at(-1)?.onerror?.({ message: '' });
 });
 
 const worker = () => {
   const created = FakeWorker.created.at(-1);
-  if (!created) throw new Error('还没有建 Worker');
+  if (!created) throw new Error('Worker has not been created');
   return created;
 };
 
 const open = (token: () => Promise<string>) => openSyncline({ name: 'web-test', schema: {}, url: 'https://sync.test/space', token });
 
-/** 打开一个库并替 Worker 回「开好了」，回这一次打开的编号 */
+/** Opens database, mocks successful Worker open reply, and returns instance ID. */
 async function opened() {
   const space = open(async () => 'valid');
   const { instance, call } = worker().last('open');
@@ -66,7 +65,7 @@ async function opened() {
   return { space, instance };
 }
 
-/** 替 Worker 回最近一次关库，等关完 */
+/** Mocks successful Worker reply for the latest close call. */
 async function closed(instance: number, closing: Promise<void>) {
   worker().deliver(instance, { type: 'reply', id: worker().last('close').call.id ?? -1 });
   await closing;
@@ -74,10 +73,10 @@ async function closed(instance: number, closing: Promise<void>) {
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 
-/** Drizzle 把下面的错包成 Failed query，原来的错在 cause 里 */
-const closedError = { cause: expect.objectContaining({ message: '本机库已关闭' }) };
+/** Drizzle wraps underlying error in Failed query with original error in cause. */
+const closedError = { cause: expect.objectContaining({ message: 'Local database is closed' }) };
 
-/** run 里报出（reportError）的错 */
+/** Captures errors reported via global reportError during callback execution. */
 function reportedIn(run: () => void) {
   const reported: unknown[] = [];
   const reportError = globalThis.reportError;
@@ -90,13 +89,13 @@ function reportedIn(run: () => void) {
   return reported;
 }
 
-test('Worker 加载失败：在途的读写与 sync() 都以这个错失败，同步状态记成下载出错，下次打开时新建 Worker', async () => {
+test('fails queries and sync on Worker load failure, marks downloadError on status, and recreates Worker on next open', async () => {
   const space = open(async () => 'valid');
   const first = worker();
   const syncing = space.sync().catch((error: Error) => error);
   first.onerror?.({ message: '' });
-  expect((await syncing) as Error).toEqual(expect.objectContaining({ message: expect.stringContaining('Worker 出错') }));
-  expect(space.status().downloadError?.message).toContain('Worker 出错');
+  expect((await syncing) as Error).toEqual(expect.objectContaining({ message: expect.stringContaining('Syncline worker error') }));
+  expect(space.status().downloadError?.message).toContain('Syncline worker error');
   expect(first.terminated).toBe(true);
 
   open(async () => 'valid');
@@ -104,74 +103,74 @@ test('Worker 加载失败：在途的读写与 sync() 都以这个错失败，�
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open']);
 });
 
-test('替 Worker 取 token：token() 同步抛错也回「取不到」，Worker 不一直等', async () => {
+test('relays synchronous token() throw back to Worker as error so Worker does not stall', async () => {
   open(() => {
-    throw new Error('还没登录');
+    throw new Error('Not signed in');
   });
   const { instance } = worker().last('open');
   worker().deliver(instance, { type: 'token', request: 7, channel: '' });
   await flush();
-  expect(worker().posted.at(-1)).toEqual({ instance, call: { type: 'token', request: 7, error: '还没登录' } });
+  expect(worker().posted.at(-1)).toEqual({ instance, call: { type: 'token', request: 7, error: 'Not signed in' } });
 });
 
-test('Worker 转来它照常报出的错（Worker 里没接住的）：在页面报出，不当成 Worker 坏了', async () => {
+test('reports unhandled Worker error on page without treating Worker as broken', async () => {
   const space = open(async () => 'valid');
-  const reported = reportedIn(() => worker().onmessage?.({ data: { type: 'error', error: { message: '校验和对不上' } } }));
-  expect(reported).toEqual([expect.objectContaining({ message: '校验和对不上' })]);
+  const reported = reportedIn(() => worker().onmessage?.({ data: { type: 'error', error: { message: 'Checksum mismatch' } } }));
+  expect(reported).toEqual([expect.objectContaining({ message: 'Checksum mismatch' })]);
   expect(worker().terminated).toBe(false);
   expect(space.status().downloadError).toBeUndefined();
 });
 
-test('页面上的订阅者照 notifyAll 调用：一个抛错不影响后面的，报出来', async () => {
+test('notifies subscribers via notifyAll: throwing subscriber does not prevent subsequent notifications and reports error', async () => {
   const space = open(async () => 'valid');
   const seen: ReadonlySet<string>[] = [];
   space.onChange(() => {
-    throw new Error('界面出错');
+    throw new Error('UI error');
   });
   space.onChange((tables) => seen.push(tables));
   const reported = reportedIn(() => worker().deliver(worker().last('open').instance, { type: 'changed', tables: ['note'] }));
-  expect([seen, reported]).toEqual([[new Set(['note'])], [new Error('界面出错')]]);
+  expect([seen, reported]).toEqual([[new Set(['note'])], [new Error('UI error')]]);
 });
 
-test('换了人登录：关掉的上一次打开再读写就以「本机库已关闭」失败、不发给 Worker；交给新开的事不交给旧的订阅者', async () => {
+test('queries on closed database fail with "Local database is closed"; new events are not delivered to old subscribers', async () => {
   const first = open(async () => 'valid');
   const firstInstance = worker().last('open').instance;
   const seen: string[] = [];
-  first.onChange(() => seen.push('旧的'));
+  first.onChange(() => seen.push('old'));
   await closed(firstInstance, first.close());
   const second = open(async () => 'valid');
-  second.onChange(() => seen.push('新的'));
+  second.onChange(() => seen.push('new'));
   const secondInstance = worker().last('open').instance;
   expect(secondInstance).not.toBe(firstInstance);
   const posted = worker().posted.length;
   await expect(first.db.select().from(note).all()).rejects.toMatchObject(closedError);
   expect(worker().posted).toHaveLength(posted);
   worker().deliver(secondInstance, { type: 'changed', tables: ['note'] });
-  expect(seen).toEqual(['新的']);
+  expect(seen).toEqual(['new']);
 });
 
-test('开库出错（如别的标签页开着这个库）：私有空间与之后开的共用空间都记成下载出错，不停在占位的「在连」', async () => {
+test('marks downloadError on private space and shared spaces when open fails without lingering in connecting state', async () => {
   const space = open(async () => 'valid');
   const { instance, call } = worker().last('open');
   const catalog = space.shared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
-  worker().deliver(instance, { type: 'reply', id: call.id ?? -1, error: { message: '本机库在另一个标签页里开着' } });
+  worker().deliver(instance, { type: 'reply', id: call.id ?? -1, error: { message: 'Local database is open in another tab' } });
   await flush();
-  const failed = { connecting: false, downloadError: expect.objectContaining({ message: '本机库在另一个标签页里开着' }) };
+  const failed = { connecting: false, downloadError: expect.objectContaining({ message: 'Local database is open in another tab' }) };
   expect([space.status(), catalog.status()]).toEqual([expect.objectContaining(failed), expect.objectContaining(failed)]);
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open']);
 });
 
-test('同样的共用空间（名字、地址、登录的人）再开一次：给开着的那份，不再开（React 的 StrictMode 里 effect 跑两次）；地址或登录的人不同就抛错', async () => {
+test('reopening identical shared space returns open instance without reopening; throws when url or owner differs', async () => {
   const { space } = await opened();
   const options = { schema: {}, url: 'https://sync.test/catalog', owner: 'u1' };
   const first = space.shared('catalog', options);
   expect(space.shared('catalog', options)).toBe(first);
   await flush();
   expect(worker().posted.filter(({ call }) => call.type === 'shared')).toHaveLength(1);
-  expect(() => space.shared('catalog', { ...options, owner: 'u2' })).toThrow('已经');
+  expect(() => space.shared('catalog', { ...options, owner: 'u2' })).toThrow('already open');
 });
 
-test('关库的回复到了：之前发出、还没回复的调用以「本机库已关闭」失败，不一直等（Worker 交回的已不再分给这一次打开）', async () => {
+test('in-flight calls fail with "Local database is closed" when close reply arrives without waiting indefinitely', async () => {
   const { space, instance } = await opened();
   const closing = space.close();
   const reading = space.db.select().from(note).all();
@@ -179,7 +178,7 @@ test('关库的回复到了：之前发出、还没回复的调用以「本机�
   await expect(reading).rejects.toMatchObject(closedError);
 });
 
-test('接入方的 Standard Schema 返回了 Promise：带着这个错回 validated（核心回滚这次写），同一批后面的事照常交', async () => {
+test('relays error to core when Standard Schema returns a Promise, rolling back write while processing remaining events', async () => {
   const asynchronous = { '~standard': { version: 1 as const, vendor: 'test', validate: async () => ({ value: {} }) } };
   const space = openSyncline({
     name: 'web-test',
@@ -196,11 +195,11 @@ test('接入方的 Standard Schema 返回了 Promise：带着这个错回 valida
     { type: 'validate', write: 1, rows: [{ table: 'note', row: { id: 'n1' } }] },
     { type: 'changed', tables: ['note'] },
   );
-  expect(worker().last('validated').call).toEqual({ type: 'validated', write: 1, error: expect.stringContaining('返回了 Promise') });
+  expect(worker().last('validated').call).toEqual({ type: 'validated', write: 1, error: expect.stringContaining('returned a Promise') });
   expect(changed).toEqual([new Set(['note'])]);
 });
 
-test('先关库再删库：库文件照样删（关库只发一次，删库另发一次只删文件的）', async () => {
+test('deletes database file after closing, issuing separate removal instance to remove file', async () => {
   const { space, instance } = await opened();
   await closed(instance, space.close());
   const deleting = space.delete();
@@ -213,7 +212,7 @@ test('先关库再删库：库文件照样删（关库只发一次，删库另�
   expect(worker().posted.filter(({ call }) => call.type === 'close')).toHaveLength(2);
 });
 
-test('Worker 坏了之后删库：关库不以 Worker 的错失败（库已随 Worker 关掉），新建 Worker 照样删文件', async () => {
+test('deleting database after Worker crash succeeds by spawning a new Worker to remove file', async () => {
   const { space } = await opened();
   const first = worker();
   first.onerror?.({ message: '' });

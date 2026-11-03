@@ -1,5 +1,6 @@
-//! Syncline 的设备一侧：本机库、本机写、待上传、收下云端的改动与同步的状态机。不做网络与计时，由外层驱动。
-//! 只公开外层（wasm 与原生模块）要用的模块，其余在 crate 内：没人用的代码由编译器的 `dead_code` 报出。
+//! Syncline device core: local database, local writes, pending writes, applying cloud changes, and sync state machines.
+//! Does not perform networking or timing, which are driven by outer layers.
+//! Exposes only modules required by outer layers (wasm and native modules), keeping the rest crate-private so unused code is flagged by `dead_code`.
 
 mod change;
 mod changeset;

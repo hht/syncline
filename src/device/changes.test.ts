@@ -6,14 +6,15 @@ import { Device } from '../test/test-device.ts';
 import { createWorkout, unchunked, workout, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
-// 界面的查询：读排在本机写后面、只读到已提交的；每次本机事务提交后报出改到的表，查询读到的表变了才重跑
+// UI query change tracking: reads queue behind active local writes, seeing committed rows only;
+// commits notify modified tables, re-running queries only when read tables change.
 
 const exercise = sqliteTable('exercise', { id: text().primaryKey(), workout_id: text().references(() => workout.id) });
 const createExercise = 'CREATE TABLE exercise (id TEXT PRIMARY KEY, workout_id TEXT)';
 const createIndex = 'CREATE INDEX exercise_workout ON exercise (workout_id)';
 const tables = [workout, exercise];
 
-/** 云端与两台已整份拉过的设备；changes 记下每台设备收到的每次报告 */
+/** Cloud space and two fully-pulled devices; changes records each notification received per device. */
 async function withDevices() {
   const space = new Space(cloudStorage(createWorkout, createExercise), tables);
   const install = async () => {
@@ -30,20 +31,20 @@ async function withDevices() {
   return { space, phone: await install(), tablet: await install(), upload };
 }
 
-test('本机写提交后报出改到的表；抛错回滚的写、什么也没改的写不报', async () => {
+test('local write commit notifies modified tables; rolled back or no-op writes do not notify', async () => {
   const { phone } = await withDevices();
   await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w1' }));
   await expect(
     write(phone.device, async (tx) => {
       await tx.insert(workout).values({ id: 'x' });
-      throw new Error('坏了');
+      throw new Error('failed');
     }),
-  ).rejects.toThrow('坏了');
+  ).rejects.toThrow('failed');
   await write(phone.device, (tx) => tx.update(workout).set({ note: null }).where(eq(workout.id, 'w1')));
   expect(phone.changes).toEqual([['workout']]);
 });
 
-test('收到云端改动：报出改动的表，连同撤回又重放的待上传改到的表；重放时预判拒收的那条确认时没有要撤回的，不报', async () => {
+test('cloud changes notify modified tables, including tables touched by reverted and replayed pending writes', async () => {
   const { phone, tablet, upload } = await withDevices();
   await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w1' }));
   await upload(phone.device, tablet.device);
@@ -57,11 +58,11 @@ test('收到云端改动：报出改动的表，连同撤回又重放的待上�
   expect(phone.changes).toEqual([['exercise'], ['exercise', 'workout']]);
 });
 
-test('收到既没有改动、也没确认待上传的通知（连上时的空补齐、续约重连）：不撤回重放，不报；游标照样往前走', async () => {
+test('empty poke or renewal without changes or confirmations does not revert/replay or notify; cookie advances', async () => {
   const { space, phone, tablet, upload } = await withDevices();
   await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w1' }));
   await write(tablet.device, (tx) => tx.insert(workout).values({ id: 'w2' }));
-  // 平板的写只改云端，不发给手机：手机之后拉到的不是空的
+  // Tablet write updates cloud only: phone pulls non-empty patch later.
   space.push(tablet.device.private.pending());
   const changed = space.pull(phone.device.private.pullRequest(), unchunked);
   expect(changed).toMatchObject({ patch: [{ row: { id: 'w2' } }] });
@@ -74,13 +75,13 @@ test('收到既没有改动、也没确认待上传的通知（连上时的空�
   expect(phone.device.private.pending()).toEqual([]);
 });
 
-test('清空重下时清空本机：报出全部同步表', async () => {
+test('resync with clear notifies all synced tables', async () => {
   const { phone } = await withDevices();
   await phone.device.private.resync(true);
   expect(phone.changes).toEqual([['exercise', 'workout']]);
 });
 
-test('读排在开着的本机写后面：读到的都是已提交的，回滚的读不到', async () => {
+test('reads queue behind active local writes: sees committed changes only, rolled-back writes invisible', async () => {
   const { phone } = await withDevices();
   const ids = () => phone.device.query('SELECT id FROM workout ORDER BY id', []);
   let committed: Promise<unknown[][]> | undefined;
@@ -93,25 +94,25 @@ test('读排在开着的本机写后面：读到的都是已提交的，回滚�
     write(phone.device, async (tx) => {
       await tx.insert(workout).values({ id: 'w2' });
       rolledBack = ids();
-      throw new Error('坏了');
+      throw new Error('failed');
     }),
-  ).rejects.toThrow('坏了');
+  ).rejects.toThrow('failed');
   expect(await committed).toEqual([['w1']]);
   expect(await rolledBack).toEqual([['w1']]);
 });
 
-test('本机写的 body 里用 query 读（该用 tx）：排在这次写后面、一直等下去；等满 5 秒警告一次，说明怎么改', async () => {
+test('using query inside local write body queues behind active write, warning after 5s stall with remediation instructions', async () => {
   const { phone } = await withDevices();
   vi.useFakeTimers();
   const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
-    // 关库时排着的读以「本机库已关闭」失败，这次写跟着失败
+    // Database close fails queued query with "local database is closed", failing the write.
     write(phone.device, () => phone.device.query('SELECT id FROM workout', [])).catch(() => undefined);
     await vi.advanceTimersByTimeAsync(4999);
     expect(warned).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(warned).toHaveBeenCalledOnce();
-    expect(warned.mock.calls[0]?.[0]).toContain('只用 tx');
+    expect(warned.mock.calls[0]?.[0]).toContain('use only tx');
   } finally {
     phone.device.close();
     warned.mockRestore();
@@ -119,7 +120,7 @@ test('本机写的 body 里用 query 读（该用 tx）：排在这次写后面�
   }
 });
 
-test('查询只能读：经它写同步表抛错、库不变（绕过本机写的改动既不上传，手机上撤回时还会被改动集静默覆盖）；之后照常读写', async () => {
+test('queries are read-only: mutating synced tables throws without modifying database; reads/writes proceed normally', async () => {
   const { phone } = await withDevices();
   await expect(phone.device.query("INSERT INTO workout (id) VALUES ('w1')", [])).rejects.toThrow();
   await expect(phone.device.query('DELETE FROM workout', [])).rejects.toThrow();
@@ -129,7 +130,7 @@ test('查询只能读：经它写同步表抛错、库不变（绕过本机写�
   expect(phone.device.private.pending()).toHaveLength(1);
 });
 
-test('查询读到的表：连接与子查询里的表都在，只扫索引时给出索引所属的表', async () => {
+test('extracts tables read by query: includes join and subquery tables, maps index scans to underlying table', async () => {
   const { phone } = await withDevices();
   expect(phone.device.tablesOf('SELECT note FROM workout WHERE id = ?')).toEqual(['workout']);
   expect(phone.device.tablesOf('SELECT workout_id FROM exercise WHERE workout_id = ?')).toEqual(['exercise']);

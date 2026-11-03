@@ -2,13 +2,13 @@ import type { BindableValue, Database, PreparedStatement, Sqlite3Static, SqlValu
 import type { Storage } from '../common/storage.ts';
 import { cursor, savepoint, statementCache } from './test-driver.ts';
 
-/** 超出 JS 精确范围的整数值（如 1e300）：oo1 照整数按 int64 绑，超出 int64 就写坏，要按小数绑 */
+/** Numeric integer values outside JS safe range (e.g. 1e300): oo1 binds as int64 which corrupts large values; bind as double instead. */
 const wide = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value);
 
 /**
- * 执行一条编译好的语句，执行完回到开头、清掉绑定，下次重用时从头执行。列名在执行之后取：缓存的语句遇到改表结构（加列）时
- * SQLite 在执行时重新编译，执行之前取的是旧的
- * @see https://sqlite.org/c3ref/prepare.html（sqlite3_prepare_v2 重新编译）
+ * Executes a prepared statement, resetting statement and clearing bindings on completion.
+ * Column names are retrieved post-execution to reflect dynamic re-compilation after schema alterations (e.g. added columns).
+ * @see https://sqlite.org/c3ref/prepare.html (sqlite3_prepare_v2 re-compilation)
  */
 function run(
   bindDouble: (statement: PreparedStatement, index: number, value: number) => void,
@@ -22,7 +22,7 @@ function run(
     }
     const rows: SqlValue[][] = [];
     while (statement.step()) rows.push(statement.get([]));
-    // 没有结果列的语句（建表、写）取列名会抛错
+    // Statements without result columns (DDL, DML) throw when fetching column names.
     const columns = statement.columnCount > 0 ? statement.getColumnNames() : [];
     return cursor(columns, rows);
   } finally {
@@ -31,13 +31,13 @@ function run(
 }
 
 /**
- * 官方 SQLite WASM 的库怎么当作 Storage 用：测试里云端（DO 的 ctx.storage）的替身。
+ * Wraps official SQLite WASM database as a Storage test double for Durable Object ctx.storage in tests.
  * @see https://sqlite.org/wasm/doc/trunk/api-oo1.md
  */
 export function sqliteWasmStorage(sqlite3: Sqlite3Static, db: Database): Storage {
   const { capi } = sqlite3;
   const check = (code: number) => {
-    if (code !== capi.SQLITE_OK) throw new Error(`SQLite 返回 ${capi.sqlite3_js_rc_str(code)}`);
+    if (code !== capi.SQLITE_OK) throw new Error(`SQLite returned ${capi.sqlite3_js_rc_str(code)}`);
   };
   const inTransaction = () => capi.sqlite3_get_autocommit(db) === 0;
   const prepared = statementCache(

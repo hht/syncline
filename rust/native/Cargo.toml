@@ -4,7 +4,7 @@ version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 
-# iOS 链静态库（Xcode 链进 App），Android 加载动态库（System.loadLibrary）；rlib 给 cargo test
+# iOS links a static library (Xcode links into the app); Android loads a dynamic library (System.loadLibrary); rlib is for cargo test
 [lib]
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -13,25 +13,25 @@ syncline = { path = "../core" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# 网络：WebSocket（只用它的握手与帧，TLS 自己接上）、HTTP 拉取（gzip：请求带 Accept-Encoding、自动解压，拉取的 JSON 约小九成）
+# Networking: WebSocket (handshake and framing only; TLS wired up manually), HTTP pull (gzip: sends Accept-Encoding and decompresses automatically, reducing pull JSON by ~90%)
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 ureq = { version = "3.5.0", default-features = false, features = ["rustls", "gzip"] }
-# TLS 显式用 ring（两种加密实现都编进来时 rustls 不知道用哪个，握手时 panic）；随机数也从 ring 取
+# Explicitly use ring for TLS (rustls panics at handshake if both crypto providers are compiled in); random bytes also come from ring
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17.14"
-# 等 socket 与唤醒用的管道（poll）
+# Wait on sockets and wake pipes (poll)
 libc = "0.2.191"
 
-# 测试里造 gzip 的正文（ureq 的 gzip 本来就带着它）
+# Construct gzipped bodies in tests (already pulled in by ureq's gzip feature)
 [dev-dependencies]
 flate2 = "1.1.10"
 
-# Kotlin 调 Rust：只有 Android 用；宿主上 clippy 也查它（src/android.rs 的 cfg）
+# Kotlin-to-Rust FFI: used on Android only; host clippy also checks it (see cfg in src/android.rs)
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 jni = "0.22.4"
 
-# 证书怎么校验（src/socket.rs 的 Network、src/http.rs 的 agent）：苹果的系统上交给系统，其余（Android）用内置的 Mozilla 根证书，理由见 docs/internals/adr.md；
-# 宿主 macOS 上 clippy 与测试也编苹果这一路
+# Certificate verification (Network in src/socket.rs, agent in src/http.rs): delegates to the OS on Apple platforms, and uses bundled Mozilla root certificates elsewhere (Android); see docs/internals/adr.md.
+# Host macOS clippy and tests also compile the Apple path
 [target.'cfg(target_vendor = "apple")'.dependencies]
 ureq = { version = "3.5.0", default-features = false, features = ["platform-verifier"] }
 rustls-platform-verifier = "0.7.1"

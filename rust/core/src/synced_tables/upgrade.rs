@@ -1,6 +1,6 @@
-//! 打开时把本机的同步表升到这次的表定义：新出现的列从 _extra 还原，不再声明的列挪进 _extra，本机原来没有的表从 `_syncline_unknown` 还原，
-//! 不重新下载。
-//! 不该知道的：要不要整份重拉、撤回与重放。
+//! Upgrades local synced tables to current table definitions on open: newly appeared columns are restored from `_extra`, undeclared columns moved into `_extra`, tables previously absent locally restored from `_syncline_unknown`,
+//! without redownloading.
+//! What it should not know: whether to trigger full resync, rollback, and replay.
 
 use super::SyncedTables;
 use crate::effects::Effects;
@@ -12,11 +12,11 @@ use rusqlite::{Connection, params};
 use std::collections::HashMap;
 
 impl SyncedTables {
-    /// 升级后第一次打开：新出现的表搬进先前存着的行，表上新出现的列从 _extra 还原，都不重新下载。
-    /// 私有空间在这之前撤回了待上传、之后重放，升级前记的改动集不会再把旧的 _extra 插回来
+    /// First open after upgrade: newly added tables populate previously retained rows, new columns on existing tables are restored from `_extra`, all without redownloading.
+    /// Private space rolled back pending mutations before this and replays them afterwards, ensuring pre-upgrade changesets do not reinsert stale `_extra`.
     ///
     /// # Errors
-    /// 读写库出错。
+    /// Returns an error if reading or writing the database fails.
     pub fn upgrade(&self, db: &Connection, effects: &mut Effects) -> Result<(), Error> {
         let mut seen = HashMap::new();
         for row in db
@@ -24,20 +24,21 @@ impl SyncedTables {
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         {
             let (name, columns) = row?;
-            let columns: Vec<String> = serde_json::from_str(&columns).map_err(|error| Error::Failed(format!("记下的列读不出：{error}")))?;
+            let columns: Vec<String> =
+                serde_json::from_str(&columns).map_err(|error| Error::Failed(format!("failed to parse recorded columns: {error}")))?;
             seen.insert(name, columns);
         }
         for name in &self.names {
             upgrade_table(db, &self.tables[name], seen.get(name), effects)?;
         }
-        // 先前放不进本机的列、先存着的行（write）：再试着写回，App 更新到类型一致后就还原了
+        // Rows previously retained because values did not fit local columns (write): reattempt restore, recovering once app updates to matching types.
         for name in &self.names {
             self.restore_unknown(db, name, effects)?;
         }
         Ok(())
     }
 
-    /// 本机还没有的表的行里存着这张同步表的（升级前存的、放不进本机的列的）：写进表里，写进去了就不再存着
+    /// Rows stored in unknown rows for this synced table (stored before upgrade or with incompatible values): write into table, clearing from unknown once written.
     pub(super) fn restore_unknown(&self, db: &Connection, name: &str, effects: &mut Effects) -> Result<(), Error> {
         for taken in self.unknown.take(db, name)? {
             self.write(
@@ -54,12 +55,15 @@ impl SyncedTables {
     }
 }
 
-/// 一张同步表：before 是上次打开时记下的列，没记过就是新出现的表
+/// Synced table upgrade: `before` is the list of columns recorded on previous open, or None if newly added table.
 fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<String>>, effects: &mut Effects) -> Result<(), Error> {
     let record = || {
         db.execute(
             "INSERT OR REPLACE INTO _syncline_columns VALUES (?, ?)",
-            params![table.name, serde_json::to_string(&table.columns).expect("列名编得成 JSON")],
+            params![
+                table.name,
+                serde_json::to_string(&table.columns).expect("column names serialize to JSON")
+            ],
         )
     };
     let Some(before) = before else {
@@ -69,7 +73,7 @@ fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<Strin
     };
     let added: Vec<&String> = table.columns.iter().filter(|column| !before.contains(column)).collect();
     for column in &added {
-        // 值从 _extra 搬出来，_extra 剩下空对象时清成 NULL
+        // Move values out of `_extra`; set `_extra` to NULL when left with an empty object.
         let path = json_path(column);
         let mv = format!(
             "UPDATE {} SET {} = json_extract(_extra, ?), _extra = nullif(json_remove(_extra, ?), '{{}}') WHERE json_type(_extra, ?) IS NOT NULL",
@@ -77,7 +81,7 @@ fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<Strin
             quote(column)
         );
         if let Err(error) = db.execute(&mv, params![path, path, path]) {
-            // 有的值放不进这一列（两端这一列的类型不一致）：一行行搬，放不进的留在 _extra、报出来，不让打开失败（每次打开都会再失败）
+            // Some values do not fit this column (incompatible column types across sides): move row-by-row, leaving incompatible values in `_extra` and reporting without failing open (which would fail repeatedly).
             let error = Error::from(error);
             if !error.is_constraint() {
                 return Err(error);
@@ -91,8 +95,8 @@ fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<Strin
     Ok(())
 }
 
-/// 照 mv（把 _extra 里 path 的值搬进 column 的 UPDATE）按 rowid 一批批、一行行搬，放不进的留在 _extra，报出几行。
-/// 第一批不设下限、之后从上一批最后的 rowid 往后：整数主键的表 rowid 就是主键，可以是 0、负数
+/// Moves row-by-row in batches by rowid using `mv` (UPDATE moving path from `_extra` into column), leaving values that do not fit in `_extra` and reporting row count.
+/// First batch has no lower bound; subsequent batches advance past the last rowid (for INTEGER PRIMARY KEY tables, rowid is the primary key and can be 0 or negative).
 fn move_each(db: &Connection, name: &str, column: &str, mv: &str, path: &str, effects: &mut Effects) -> Result<(), Error> {
     let mut kept = 0;
     let rows = format!("SELECT rowid FROM {} WHERE json_type(_extra, ?1) IS NOT NULL", quote(name));
@@ -120,6 +124,8 @@ fn move_each(db: &Connection, name: &str, column: &str, mv: &str, path: &str, ef
         }
         last = Some(end);
     }
-    effects.report(format!("Syncline：{name}.{column} 有 {kept} 行的值放不进本机的列，留在 _extra"));
+    effects.report(format!(
+        "syncline: {name}.{column} has {kept} row(s) whose values do not fit the local column, kept in _extra"
+    ));
     Ok(())
 }

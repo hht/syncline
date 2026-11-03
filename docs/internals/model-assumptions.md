@@ -1,58 +1,58 @@
-# 模型的前提
+# Model assumptions
 
-[模型与检查](model.md)的细节：模型的结论只在这些前提成立时管用。每条写前提是什么、为什么模型可以这样简化，以及靠什么保证（测试、平台或概率）。
+Details for [Models and model checking](model.md): model conclusions hold only when these assumptions are satisfied. Each item describes what the assumption is, why the model can simplify it, and how it is guaranteed (by tests, platform guarantees, or probability).
 
-## 由实现保证的前提
+## Assumptions guaranteed by the implementation
 
-- 一次本机写是原子的：改动与序号同时生效，接入方的语句开不了、关不了事务。
-- 设备应用一份云端改动是一个本机事务：撤回、应用、丢掉已确认的、重放、推进游标同时生效。同步表被绕过 Syncline 改过、撤回对不上时报出并整份重拉（`conflicts.test.ts`）。
-- 一个库同一时刻只有一个 Device，一台设备同一时刻只有一条连接、一个拉取；客户端编号各不相同；系统备份是一致的快照。同一时刻至多一条连接由模拟每步查着；上一次连接的拉取晚到时按连接作废（模拟的退到后台覆盖它）。
-- 范围变化与它那一版提交在同一个事务里，扫描先清空再按主键给当前的行，所以模型里一步 `Enter`、`Leave` 就能代表；加列、删列与表一样（模型里一列是一格）。
-- HTTP 拉取的末块只带请求列出的客户端处理到第几条，模型里带全部：设备列出待上传的与当前的客户端，客户端只在重启、清空时换（有游标时之后的结果接不上、被丢掉；没游标时收下也无妨，新客户端按 0 算），只用得到列出的那几个，结果相同。
-- 错误只分两类：扣下并推进序号的（拒收、不合声明、认不出、改到只由云端写的表），与暂时的存储出错（不推进、重试）；分类由实现与测试负责。
-- 本机写的序号在写的事务里从库里定，提交报错却已落盘的也不重号，所以同一个客户端的序号各不相同。
-- 一批推送可以只处理一个执行了至少一条的前缀（模型 `HandlePush` 的第二支），设备确认到其中任一条就接着推剩下的。
-- 推送带的 `first` 是这个客户端本机最早的待上传，不是这一批的第一条：分批推时拿这一批的第一条跳号，会越过前一批没送到的写。模型一次推全部，两者相同。
-- 扇出发给同一个分片的各轮按序送到（同一个 stub 的调用按发出次序送到，[Durable Object Stub](https://developers.cloudflare.com/durable-objects/api/stub/) 的 E-order）。不同 stub 之间不保序，换代时旧一代的一轮可能晚到；代是随机数、分不出新旧，所以分片见到一条连接上出现不同的代就当作不连续，再问最新一版。这条由 `Shared.tla` 的 `LatePush` 查。超时后重发的一轮另取 stub、可能先于卡住的那一轮送到：分片不收版本不比已知的新的一轮，晚到的丢掉。
-- 「消息丢了就是连接断了、两头都知道」：设备靠心跳发现，云端只往打开着的连接发、不要了就关；网速低到一条消息在心跳期限内传不完时可能被误判断线，按断线重连处理。
-- 表结构变化（删表删列、App 回滚又升级、两端不兼容）不在模型里，兼容之后才进入模型里的同步（`src/device/evolution.test.ts`、`schemas.test.ts`）。
-- 每一版的随机数各不相同：不靠测试，概率上成立。空间的这一代建空间时定一次，截日志不丢；清空重建只在 `Shared.tla` 里。
-- 提交落盘之后才发通知：不靠测试，由 Durable Object 的输出门保证。
-- 时间点恢复的次数：模型只查有限几次，实现不限；模拟里比模型多一次。
-- 云端算一块是一步：每次请求读的量有上界，由规模门禁守着（`src/test/scale/`）。
-- 截日志：模型里随时可以截、一次截到任一版；实现只在超了上限时分步截，结果是模型允许的执行之一。缓存里截日志之前算的旧副本，模型按现在的下限算（多给整份），实现按当时的下限，结果同样落在当时的历史上。
-- 一批推送逐条提交；推到一半存储出错时，已提交的留着、出错那条起不处理，平台随即重置对象。
-- 一批推送执行时超出 CPU 被平台中止：这一轮的整批都不提交（隐式事务在这一轮之后才提交），设备原样重推，模型里是这次推送丢了；由 `probes/cloudflare/kill.ts` 在真实的 Cloudflare 上核对。一条写在上限之内不会超出：最费 CPU 的约 8 秒，是上限 30 秒的四分之一（`push-size.ts`、`cascade.ts`）。
-- 恢复点之后提交、恢复生效之前发出的确认仍可能送到设备，设备据此删掉的待上传随恢复丢掉：P8k 把它们算作回滚掉的。
-- 云端单独关掉一条连接（身份过期、连接太多、超了写入额度）：模型里只有断连，设备按断线重连处理。
+- A local write is atomic: row changes and the mutation ID take effect simultaneously; integrator SQL statements cannot begin or commit transactions directly.
+- Applying a cloud patch on a device is a single local transaction: reverting pending writes, applying ops, deleting confirmed writes, replaying remaining writes, and advancing the cookie take effect simultaneously. If synced tables were modified outside Syncline and revert fails to match, an error is raised and a full refetch is triggered (`conflicts.test.ts`).
+- Exactly one `Device` instance exists per database at any time; a device maintains at most one connection and one pull concurrently; client IDs are mutually distinct; system backups produce consistent snapshots. At most one connection at a time is verified at every simulation step; late-arriving pull responses from a prior connection are invalidated by connection identity (covered by simulation backgrounding).
+- Scope changes commit in the same transaction as their commit version; scans drop existing rows before emitting current rows in primary-key order, so a single `Enter` or `Leave` step in the model represents the entire transition; adding or dropping columns behaves identically to tables (in the model, a column is a cell).
+- The final chunk of an HTTP pull returns `lmids` only for clients listed in the request, while the model returns `lmids` for all clients: devices list pending and current clients; client IDs change only on restart or database clear (with a cookie, subsequent results cannot chain and are discarded; without a cookie, accepting extra `lmids` is harmless, treating new clients as 0); because devices use only the requested clients, behavior is identical.
+- Errors are strictly partitioned into two categories: those held while advancing the mutation ID (business rejections, schema violations, unrecognizable mutations, and writes touching cloud-written tables) and transient storage errors (mutation ID not advanced, retried); partitioning is guaranteed by implementation and tests.
+- Local mutation IDs are assigned from the database within the write transaction; writes that error on commit but were already persisted do not reuse IDs, ensuring mutation IDs within a client are strictly distinct.
+- A push batch may process any prefix that successfully executes at least one mutation (the second branch of `HandlePush` in the model); confirming any mutation in the batch allows the device to continue pushing remaining writes.
+- The `first` flag on a push indicates the client's earliest pending write locally, not the first mutation of the batch: jumping mutation IDs based on the batch's first mutation would skip unacknowledged mutations from previous batches. The model pushes all pending writes in one step, where both concepts coincide.
+- Fanout rounds delivered to the same broadcast shard arrive in order (invocations on the same stub arrive in order of sending, via [Durable Object Stub](https://developers.cloudflare.com/durable-objects/api/stub/) E-order). Order is not guaranteed across different stubs; during a rebuild, rounds from an older incarnation may arrive late. Because incarnations are random nonces without inherent ordering, shards treat differing incarnations on a connection as non-consecutive and query for head. This behavior is verified by `LatePush` in `Shared.tla`. A round retried after timeout uses a fresh stub and may arrive before a stalled round: shards reject rounds whose version is not newer than known versions, dropping late arrivals.
+- "Message loss implies connection drop, recognized by both endpoints": devices detect disconnects via heartbeats; the cloud sends only to open connections and closes them when done; network speeds so low that a message cannot transit within the heartbeat deadline may be misclassified as a disconnect and handled via reconnect.
+- Schema migrations (dropped tables and columns, app rollbacks followed by upgrades, incompatible schemas) are omitted from the model; sync in the model begins only after compatibility is established (`src/device/evolution.test.ts`, `schemas.test.ts`).
+- Commit nonces are unique per version: not verified by tests, guaranteed probabilistically. A space's incarnation is chosen once on creation and survives log truncation; space rebuilds are modeled only in `Shared.tla`.
+- Commits are persisted to storage before notifications are sent: not verified by tests, guaranteed by Durable Object output gates.
+- Point-in-time recovery count: models check a bounded number of recoveries; the implementation is unbounded; the simulation tests one more recovery than the model.
+- Cloud chunk generation is atomic in the model: the volume read per request is bounded, guarded by scale gates (`src/test/scale/`).
+- Log truncation: the model may truncate at any time to any version; the implementation truncates in steps only when exceeding byte limits, which is one valid execution allowed by the model. When cache contains stale copies computed before truncation, the model evaluates against the current floor (falling back to a full pull), while the implementation evaluates against the floor at computation time, both remaining valid on their respective histories.
+- Push batches commit per mutation; when a storage error occurs midway through a push batch, committed mutations are retained, subsequent mutations from the error point onward are uncommitted, and the platform resets the actor.
+- A push batch aborted by the platform for exceeding CPU limits commits no mutations in that round (implicit transactions commit only after the round completes); the device retries the push unchanged, modeled as push message loss; verified on real Cloudflare infrastructure by `probes/cloudflare/kill.ts`. Individual writes within limits do not exceed CPU thresholds: the most expensive write takes ~8 s, well within the 30 s limit (`push-size.ts`, `cascade.ts`).
+- Confirmations emitted before recovery takes effect for commits after the recovery point may still reach devices; pending writes dropped by devices based on those confirmations are lost upon recovery: invariant P8k accounts for them as rolled back.
+- Individual connection termination by the cloud (expired auth, connection limit reached, write quota exceeded): represented in the model as disconnects, handled by devices via reconnect.
 
-## 没放进模型的：私有空间
+## Omitted from the model: private spaces
 
-- 游标不在当前历史上时，模型里连不上、只能拉；实现里关掉连接、让设备走 HTTP 拉取，效果相同。
-- 待上传分批推。
-- 在线校验和：模型里设备知道坏的是哪几行；实现只知道对不上的是哪一段主键范围，重下这一整段，段里含坏行，多重下好行无害。
-- 表结构的兼容判断、改列类型与主键（不支持）。
-- 同时连着的连接上限。
-- 撤回待上传失败（同步表被绕过 Syncline 改了）、升级本机表时的整份重拉：实现里连接不断、连着走 HTTP 拉；模型的 `Refetch` 只有用户要的整份重下（先断开、拉到最新再连），撤回也总是成功。落地与 `Refetch` 一样（整份、待上传照常重放），由 `src/device/conflicts.test.ts`、`src/device/upgrade.test.ts` 守着。
+- When a cookie is off the current history, the model disallows connections and permits only pulls; the implementation closes the connection and directs the device to pull over HTTP, producing the same result.
+- Pushing pending writes in multiple batches.
+- Online checksums: in the model, devices know exactly which rows are corrupted; in the implementation, devices detect only the mismatched primary-key range and re-download that entire range; the range contains the corrupted rows, and re-downloading uncorrupted rows is harmless.
+- Schema compatibility evaluation, altering column types, and modifying primary keys (unsupported).
+- Maximum concurrent connection limits.
+- Full refetch on failed revert of pending writes (synced tables modified outside Syncline) or local table upgrades: in the implementation, the connection stays open while pulling over HTTP; `Refetch` in the model covers only user-requested resyncs (disconnect, pull to head, reconnect), where revert always succeeds. Landing matches `Refetch` (full pull with pending writes replayed), guarded by `src/device/conflicts.test.ts` and `src/device/upgrade.test.ts`.
 
-## 没放进模型的：共用空间
+## Omitted from the model: shared spaces
 
-- 分片问不到最新一版时，只能推提示或不补齐，不能发接在设备游标上的空补齐：那样会漏掉（设备的游标, 分片知道的] 里的改动（把 `Fanout.tla` 的补齐改成这样，`MCFanout` 报出 `Covers`）。
-- 退避只影响多久，不影响会不会：模型的活性假设故障有次数上限。
-- 时间点恢复：共用空间不做，因为恢复点之前的各版随机数不变，缓存里按位置存的块会把恢复前后的两段历史拼起来。
+- When a shard cannot retrieve the head version, it may send only a hint or omit catch-up, and must not send an empty catch-up chained onto the device's cookie: doing so would drop changes in `(device cookie, shard version]` (mutating catch-up in `Fanout.tla` this way causes `MCFanout` to report a `Covers` violation).
+- Backoff affects only timing, not eventual execution: model liveness assumes a finite bound on failures.
+- Point-in-time recovery: omitted for shared spaces because version nonces prior to the recovery point remain unchanged, causing chunk cache keyed by position to splice together histories from before and after recovery.
 
-## 没放进模型的：两种空间都有
+## Omitted from the model: both spaces
 
-- 身份与 token 续约、协议版本、导出、本机专用的表。
-- 一个进程里一个库只开一份，后台同步开着时前台接管。
+- Auth and token renewal, protocol versions, exports, and local-only tables.
+- Opening a database at most once per process, with foreground taking over from background sync.
 
-## 还没在真机上确认的平台行为
+## Platform behaviors not yet verified on physical devices
 
-实现依赖它们，测试只在 node 或模拟器上守着：
+The implementation relies on these behaviors, while tests currently verify them only on Node.js or simulators:
 
-- 系统叫醒的后台任务与界面同在一个 JS 运行时。
-- 同步表上有视图时换上影子表：改名时临时开 `legacy_alter_table`，在设备库上视图照常读到新表（node 上有测试）。
-- web 上本机行被改坏后按范围重下（手机上实测修回过）。
-- 低端 Android 上校验和每天至多 100 万行的耗时（只有模拟器与 node 的数字）。
-- web 上页面与 Worker 之间的消息：页面一头有测试，Worker 一头靠浏览器里实测。
-- 空间的身份：设备第一次同步时记下，之后对不上就停下；第一次同步之前就换了账号的认不出。
+- System-woken background tasks share the same JavaScript runtime with the UI.
+- Swapping in shadow tables when views exist on synced tables: temporarily enabling `legacy_alter_table` during renames allows views to read from the new table on device databases (tested on Node.js).
+- Web recovery via range pulls after local rows are corrupted (tested and repaired on physical mobile devices).
+- Daily execution time for checksum verification of up to 1,000,000 rows on low-end Android hardware (measured only on simulators and Node.js).
+- Message passing between the main page and Worker on web: page-side behavior is tested, while Worker-side behavior relies on browser manual testing.
+- Space identity: recorded by the device on initial sync, halting on subsequent mismatches; account switches before initial sync cannot be identified.

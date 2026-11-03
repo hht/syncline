@@ -1,6 +1,6 @@
-// Syncline 的原生模块：Kotlin 的 Expo 模块（SynclineModule.kt）加 Rust 的设备一侧（rust/native）。构建前用 cargo-ndk 把后者编成各个 ABI 的
-// 动态库（只编这次构建要的 ABI，reactNativeArchitectures），放进 jniLibs 打进包里；cargo 是增量编译，没改时一两秒。
-// 用 rustup 的 cargo 代理并清掉 RUSTUP_TOOLCHAIN：版本只认 rust/rust-toolchain.toml
+// Syncline native module: Kotlin Expo module (`SynclineModule.kt`) bridging native Rust sync engine (`rust/native`).
+// Compiles dynamic libraries across target ABIs (`reactNativeArchitectures`) via cargo-ndk into jniLibs before build.
+// Invokes rustup cargo wrapper with cleared RUSTUP_TOOLCHAIN respecting rust/rust-toolchain.toml.
 // @see https://github.com/bbqsrc/cargo-ndk
 plugins {
   id 'com.android.library'

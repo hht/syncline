@@ -1,15 +1,16 @@
-//! 暂存的改动（已按主键去重）怎么一次写进同步表，都在 SQLite 里做、不读回：上万行时逐条解析、写，内存与时间都受不了。
-//! put 整行插入或覆盖、del 删掉；整份与整张表重给的行不经暂存、直接写进影子表，按行写的语句与这里共用。
-//! 先照记下的清空、删表、删列、清一段主键清，再按表写暂存的行，由 `SyncedTables::land` 编排。
-//! 不该知道的：一条改动怎么写、本机还没有的表的行怎么存。
+//! Writing staged changes (deduplicated by primary key) into synced tables in a single SQLite transaction
+//! without reading back to host: parsing and writing tens of thousands of rows individually in memory is too slow.
+//! put inserts or overwrites full row, del deletes; full pull and whole-table rows bypass staging and write
+//! directly into shadow tables, sharing the per-row statements defined here.
+//! Executes clears, dropped tables, dropped columns, and dropped key ranges first, then writes staged rows by table, orchestrated by `SyncedTables::land`.
+//! What it should not know: how an individual change is written or how rows for unknown tables are stored.
 
 use crate::error::Error;
 use crate::sql::{json_path, literal, quote, quote_all};
 use crate::stage::Stage;
 use rusqlite::{Connection, params_from_iter};
 
-/// 一张同步表：本机的列（表定义里的，加上库里已有的——App 回滚到少一列的发布时，后来加的列还在库里，照样写进去）、主键，
-/// 与按主键插入或整行覆盖的语句与它的 ON CONFLICT 子句
+/// A synced table: local columns (declared plus existing in database: if app rolls back to release with fewer columns, newly added columns remain in database and continue to be written), primary key, and insert-or-overwrite statement with ON CONFLICT clause
 pub struct SyncedTable {
     pub name: String,
     pub columns: Vec<String>,
@@ -45,13 +46,13 @@ impl SyncedTable {
     }
 }
 
-/// source 里每行的 JSON（row 是取它的表达式）里 column 的值
+/// Expression extracting column value from row JSON in source (row is expression evaluating to JSON)
 fn field(row: &str, column: &str) -> String {
     format!("json_extract({row}, {})", literal(&json_path(column)))
 }
 
-/// 把 source（FROM 之后的部分）里每行的 JSON 按主键插入或整行覆盖进 target 表（同步表或它的影子表），row 是取这行 JSON 的表达式：
-/// 本机表定义里没有的列整体存进 _extra，没有就是 NULL（同 `SyncedTables::write`）
+/// Generates SQL statement to insert or overwrite rows from source (FROM clause) into target table (synced table or shadow table), where row evaluates to row JSON:
+/// undeclared columns are packed into _extra (or NULL if none, matching `SyncedTables::write`)
 #[must_use]
 pub fn insert_rows(table: &SyncedTable, target: &str, row: &str, source: &str) -> String {
     let paths: Vec<String> = table.columns.iter().map(|column| literal(&json_path(column))).collect();
@@ -69,7 +70,7 @@ pub fn insert_rows(table: &SyncedTable, target: &str, row: &str, source: &str) -
     )
 }
 
-/// 按 source 里每行 JSON（row 取它）里的主键删掉 target 表的行
+/// Generates SQL statement to delete rows from target table matching primary keys in source row JSON (row evaluates to JSON)
 #[must_use]
 pub fn delete_rows(table: &SyncedTable, target: &str, row: &str, source: &str) -> String {
     let key: Vec<String> = table.key.iter().map(|column| field(row, column)).collect();
@@ -81,10 +82,10 @@ pub fn delete_rows(table: &SyncedTable, target: &str, row: &str, source: &str) -
     )
 }
 
-/// target 表（同步表或它的影子表）上云端不再同步的列：本机声明了的（云端回滚了加列）清空，与云端整份给的行（不带这一列）一样；没声明的从 _extra 去掉
+/// Clears columns no longer synced by cloud on target table (synced table or shadow table): declared columns (cloud rolled back column addition) are set to NULL, matching cloud full-table rows without this column; undeclared columns are stripped from _extra
 ///
 /// # Errors
-/// 写库出错。
+/// Database write error.
 pub fn clear_columns(db: &Connection, table: &SyncedTable, target: &str, columns: &[String]) -> rusqlite::Result<()> {
     let paths: Vec<String> = columns.iter().map(|column| json_path(column)).collect();
     let cleared: String = columns
@@ -103,11 +104,11 @@ pub fn clear_columns(db: &Connection, table: &SyncedTable, target: &str, columns
     Ok(())
 }
 
-/// 一张表的暂存改动在 SQLite 里一次写：put 的整行插入或覆盖，del 的删掉；没有暂存的行返回假。
-/// 有的行放不进本机的列时报违反约束，调用方改成一条条写（放不进的那几行先存着）
+/// Writes staged changes for a table in a single SQLite transaction: put inserts or overwrites full row, del deletes; returns false if table has no staged rows.
+/// If rows fail local column constraints, returns constraint error, allowing caller to fall back to row-by-row writes (preserving invalid rows).
 ///
 /// # Errors
-/// 写库出错，含违反约束。
+/// Database write error, including constraint violations.
 pub fn write_table(db: &Connection, stage: &Stage, table: &SyncedTable) -> Result<bool, Error> {
     if !stage.has_entries(db, &table.name)? {
         return Ok(false);

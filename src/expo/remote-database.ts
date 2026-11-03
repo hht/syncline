@@ -1,14 +1,14 @@
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
 
-// 本机写里怎么用 Drizzle：交下去执行的 execute 包成 Drizzle 的库。不该知道的：同步
+// Wraps execute callback into a Drizzle proxy database for local write transactions. What this module must not know: Sync.
 
-/** 本机写里执行一条 SQL，返回按列排的行 */
+/** Executes a SQL statement within a local write transaction, returning column-ordered rows. */
 export type Execute = (sql: string, params: unknown[]) => unknown[][];
 
-/** 把 execute 包成 Drizzle 的异步库（sqlite-proxy）：本机写里照常用 Drizzle 读写；execute 可以是异步的（web 上隔着 Worker） */
+/** Wraps an execute callback into an asynchronous Drizzle proxy, supporting synchronous native calls or asynchronous Worker messaging. */
 export const remoteDatabase = (execute: (sql: string, params: unknown[]) => unknown[][] | Promise<unknown[][]>) =>
   drizzle(async (sql, params, method) => {
     const rows = await execute(sql, params);
-    // get 要的是那一行本身，没有行时给 undefined（Drizzle 的 mapGetResult 照样处理），类型声明里没写
+    // Drizzle get query expects the single row array or undefined when empty.
     return { rows: method === 'get' ? (rows[0] as unknown[]) : rows };
   });

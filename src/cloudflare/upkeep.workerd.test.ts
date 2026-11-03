@@ -6,20 +6,20 @@ import { object, online } from './test-space.ts';
 import type { TestSpace } from './test-worker.ts';
 import { Upkeep } from './upkeep.ts';
 
-// 打开对象时只登记、不做的收拾：过了宽限期的删掉的同步表、已有的表还缺的外键索引，在 alarm 里做（测试环境到时候了就自己跑 alarm）
+// Deferred maintenance on object open: drops retired tables past grace period and builds missing foreign-key indexes via alarms.
 
-/** 在对象里执行 SQL，取出结果 */
+/** Executes SQL in the Durable Object and returns the resulting rows. */
 const sql = (name: string, query: string, ...bindings: unknown[]) =>
   runInDurableObject(object(name), (_: TestSpace, state) => state.storage.sql.exec(query, ...bindings).toArray());
 
 const has = async (name: string, schema: string) => (await sql(name, 'SELECT 1 FROM sqlite_schema WHERE name = ?', schema)).length > 0;
 
-/** 对象重启（部署、被驱逐）：下一次调用重新构造 */
+/** Restarts the Durable Object actor to force reconstruction on the next invocation. */
 async function restart(name: string) {
-  await expect(runInDurableObject(object(name), (_, state) => state.abort('重启'))).rejects.toThrow();
+  await expect(runInDurableObject(object(name), (_, state) => state.abort('Restart'))).rejects.toThrow();
 }
 
-test('已有的表缺外键索引（新加的外键、升级前建的表）：打开对象时不建，alarm 里建', async () => {
+test('builds missing foreign key indexes during alarms instead of blocking object open', async () => {
   const { name } = await online(1);
   await sql(name, 'DROP INDEX "tag.note_id"');
   await restart(name);
@@ -27,11 +27,11 @@ test('已有的表缺外键索引（新加的外键、升级前建的表）：�
   await vi.waitFor(async () => expect(await has(name, 'tag.note_id')).toBe(true));
 });
 
-test('删掉的同步表过了宽限期：打开对象时不删，在 alarm 里删；还没到宽限期的不删，到时候的 alarm 排着', async () => {
+test('drops retired tables past grace period in alarms while scheduling future alarms for pending tables', async () => {
   const { name } = await online(1);
   await sql(name, 'CREATE TABLE archived (id TEXT PRIMARY KEY) WITHOUT ROWID');
   await sql(name, 'CREATE TABLE draft (id TEXT PRIMARY KEY) WITHOUT ROWID');
-  // draft 再过一小时到宽限期
+  // draft reaches grace period in one hour.
   const hour = 3_600_000;
   await sql(
     name,
@@ -48,7 +48,7 @@ test('删掉的同步表过了宽限期：打开对象时不删，在 alarm 里�
   expect(Number(await object(name).alarmAt()) - Date.now()).toBeGreaterThan(hour - 60_000);
 });
 
-/** 在一个对象里试 Upkeep：make 造一个只有给的那件事的（没有索引、要删的表），timetable 是它登记用的定时表 */
+/** Test helper running Upkeep scenarios in an isolated Durable Object. */
 async function withUpkeep(run: (make: (options: ConstructorParameters<typeof Upkeep>[5]) => Upkeep, timetable: Schedule) => Promise<void>) {
   const { name } = await online(1);
   await runInDurableObject(object(name), async (_: TestSpace, state) => {
@@ -58,7 +58,7 @@ async function withUpkeep(run: (make: (options: ConstructorParameters<typeof Upk
   });
 }
 
-test('日志超了上限：打开时与有了新的一版时登记截日志，alarm 里一步一步截到不用再截', async () => {
+test('schedules commit log truncation on open and after commits when over limit, stepping until complete', async () => {
   await withUpkeep(async (make, timetable) => {
     const steps = [true, false];
     let full = true;
@@ -77,7 +77,7 @@ test('日志超了上限：打开时与有了新的一版时登记截日志，al
   });
 });
 
-test('共用空间每个桶的行数还有要数的：打开时登记，alarm 里一步一步做到没有要做的；没有要做的不登记', async () => {
+test('schedules bucket row counting on open when work is pending, stepping until finished', async () => {
   await withUpkeep(async (make, timetable) => {
     const steps = [true, false];
     const counting = { pending: () => true, step: () => steps.shift() ?? false };

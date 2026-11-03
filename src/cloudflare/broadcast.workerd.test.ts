@@ -8,11 +8,11 @@ import { subHeader, subscriptionHeader } from './shared-forward.ts';
 import { fannedOut } from './test-shared.ts';
 import { inbox } from './test-socket.ts';
 
-// 广播分片只接经入口转来的连接：入口总会带上到期时刻、订阅与订阅的指纹，缺了或是空的就不是经入口来的
+// Broadcast shards accept only forwarded connections carrying expiry epoch ms, subscription, and hash headers.
 
 afterAll(() => fannedOut('catalog'));
 
-/** 直接对分片发 WebSocket 升级，headers 是入口该加的头；给出接没接受 */
+/** Sends a direct WebSocket upgrade request to a broadcast shard with simulated forwarded headers. */
 async function accepted(headers: Record<string, string>) {
   const cookie: Cookie = { version: 0, nonce: 0 };
   try {
@@ -28,12 +28,12 @@ async function accepted(headers: Record<string, string>) {
   }
 }
 
-/** 经入口的头直接连分片 shard，身份在 expiresAt 到期；按到达顺序取消息与关闭 */
+/** Connects directly to a broadcast shard with forwarded headers expiring at expiresAt epoch ms. */
 async function connect(shard: DurableObjectStub, expiresAt: number) {
   const response = await shard.fetch(pullURL('https://sync.test/catalog', { cookie: { version: 0, nonce: 0 } }), {
     headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': subprotocol, [expiresHeader]: String(expiresAt), ...subscription, ...sub },
   });
-  if (!response.webSocket) throw new Error('没有升级成 WebSocket');
+  if (!response.webSocket) throw new Error('Expected WebSocket upgrade response');
   return inbox(response.webSocket);
 }
 
@@ -41,23 +41,23 @@ const expires = { [expiresHeader]: String(Date.now() + 60_000) };
 const subscription = { [subscriptionHeader]: '["[\\"all\\"]"]' };
 const sub = { [subHeader]: 'h' };
 
-test('三个头都在：接受', async () => {
+test('accepts when all three required headers are present', async () => {
   expect(await accepted({ ...expires, ...subscription, ...sub })).toBe(true);
 });
 
-test('缺到期头、缺订阅的指纹头、到期头是空串：都不接受', async () => {
+test('rejects when expiry header is missing or empty, or when subscription hash is missing', async () => {
   const cases = {
-    缺到期头: { ...subscription, ...sub },
-    缺指纹头: { ...expires, ...subscription },
-    到期头是空串: { [expiresHeader]: '', ...subscription, ...sub },
+    missingExpiry: { ...subscription, ...sub },
+    missingHash: { ...expires, ...subscription },
+    emptyExpiry: { [expiresHeader]: '', ...subscription, ...sub },
   };
   const outcomes = Object.fromEntries(
     await Promise.all(Object.entries(cases).map(async ([label, headers]) => [label, await accepted(headers)])),
   );
-  expect(outcomes).toEqual({ 缺到期头: false, 缺指纹头: false, 到期头是空串: false });
+  expect(outcomes).toEqual({ missingExpiry: false, missingHash: false, emptyExpiry: false });
 });
 
-test('身份到期、其间没有写：分片按 alarm 以 4001 关掉到期的连接，没到期的照常开着，alarm 改排到它到期的那一分钟', async () => {
+test('closes expired connections via alarm with 4001 without active writes and reschedules alarm to next expiry minute', async () => {
   const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
   const later = Date.now() + 3_600_000;
   const soon = await connect(shard, Date.now() + 50);

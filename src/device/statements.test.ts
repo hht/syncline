@@ -4,8 +4,9 @@ import { remoteDatabase } from '../expo/remote-database.ts';
 import { Device } from '../test/test-device.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 
-// 本机写与界面的读能执行哪些语句：只放行读（SELECT、WITH、VALUES）与本机写里的改行（INSERT、UPDATE、DELETE、REPLACE），事务控制、PRAGMA、
-// 改表结构、ATTACH、EXPLAIN 等一律拒绝，否则提交了却没记进待上传、序号复用、读把别人的写回滚掉、改掉连接的设置；事务被 SQLite 回滚了就整条作废
+// Allowed statements in local writes and UI queries: allow only reads (SELECT, WITH, VALUES) and row mutations in local writes
+// (INSERT, UPDATE, DELETE, REPLACE); transaction control, PRAGMA, DDL, ATTACH, EXPLAIN, etc. are rejected to avoid uncommitted
+// pending writes, sequence reuse, reads rolling back concurrent writes, or mutating connection settings; voided if transaction rolled back by SQLite.
 
 const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)';
@@ -31,7 +32,7 @@ const refused = [
   "ATTACH DATABASE ':memory:' AS other",
   'DETACH DATABASE other',
   'VACUUM',
-  '  /* 先注释 */ -- 再一行\n  commit',
+  '  /* comment first */ -- another line\n  commit',
   ';COMMIT',
   'EXPLAIN PRAGMA synchronous = OFF',
   'EXPLAIN QUERY PLAN PRAGMA ignore_check_constraints = 1',
@@ -41,33 +42,36 @@ const refused = [
   '',
 ];
 
-test.for(refused)('本机写里执行「%s」：拒绝、整条回滚，之前写的行不留下、不记进待上传；之后的写照常', async (sql) => {
-  const { device, notes } = opened();
-  await expect(
-    device.write(async (execute) => {
-      execute("INSERT INTO note (id) VALUES ('n1')", []);
-      execute(sql, []);
-    }),
-  ).rejects.toThrow('本机写里不能执行');
-  expect(notes()).toEqual([]);
-  expect(device.private.pending()).toEqual([]);
+test.for(refused)(
+  'executing "%s" in local write: rejected and rolled back completely, no rows retained or staged; subsequent writes proceed normally',
+  async (sql) => {
+    const { device, notes } = opened();
+    await expect(
+      device.write(async (execute) => {
+        execute("INSERT INTO note (id) VALUES ('n1')", []);
+        execute(sql, []);
+      }),
+    ).rejects.toThrow('is not allowed inside a local write');
+    expect(notes()).toEqual([]);
+    expect(device.private.pending()).toEqual([]);
 
-  await device.write(async (execute) => execute("INSERT INTO note (id) VALUES ('n3')", []));
-  expect(notes()).toEqual([{ id: 'n3' }]);
-  expect(device.private.pending()).toHaveLength(1);
-});
+    await device.write(async (execute) => execute("INSERT INTO note (id) VALUES ('n3')", []));
+    expect(notes()).toEqual([{ id: 'n3' }]);
+    expect(device.private.pending()).toHaveLength(1);
+  },
+);
 
-test.for(refused)('界面的读执行「%s」：拒绝，库照常；查读到哪些表时也拒绝', async (sql) => {
+test.for(refused)('executing "%s" in UI read: rejected, database unaffected; tablesOf also rejects', async (sql) => {
   const { device, notes } = opened();
-  await expect(device.query(sql, [])).rejects.toThrow('读本机库时不能执行');
-  // 查读到哪些表时拼上 EXPLAIN 编译：QUERY PLAN 开头的拼出来就是 EXPLAIN QUERY PLAN，照样要拒
-  expect(() => device.tablesOf(sql)).toThrow('读本机库时不能执行');
+  await expect(device.query(sql, [])).rejects.toThrow('is not allowed when reading the local database');
+  // Compiles with EXPLAIN when resolving read tables: statements starting with QUERY PLAN become EXPLAIN QUERY PLAN and must also be rejected
+  expect(() => device.tablesOf(sql)).toThrow('is not allowed when reading the local database');
   await device.write(async (execute) => execute("INSERT INTO note (id) VALUES ('n1')", []));
   expect(notes()).toEqual([{ id: 'n1' }]);
   expect(await device.query('SELECT id FROM note', [])).toEqual([['n1']]);
 });
 
-/** 接入方的语句里编译时就生效的 PRAGMA 不生效：本机写、读、查读到哪些表执行它之后（只执行第一条或整条拒绝都对），连接的设置不变 */
+/** PRAGMA that takes effect at compile time has no effect: after local write, query, or tablesOf executes it (executing first statement or rejecting entirely), connection settings remain unchanged. */
 async function pragmaStays(sql: string) {
   const { storage, device } = opened();
   await device.write(async (execute) => execute(sql, [])).catch(() => undefined);
@@ -75,32 +79,32 @@ async function pragmaStays(sql: string) {
   try {
     device.tablesOf(sql);
   } catch {
-    // 整条拒绝也对
+    // Rejecting entirely is also valid
   }
   expect(storage.sql.exec('PRAGMA ignore_check_constraints').toArray()).toEqual([{ ignore_check_constraints: 0 }]);
 }
 
 test.for([
   'SELECT 1; PRAGMA ignore_check_constraints = 1',
-  // 带括号的参数（$名字(…)）里的引号、分号都算参数的一部分：照字符串与注释切分的找不到这个分号
+  // Quotes and semicolons inside parenthesized parameter ($name(...)) are part of parameter: simple string/comment splitters cannot find this semicolon
   "SELECT $a(');PRAGMA ignore_check_constraints = 1;--')",
-])('一次传了多条语句「%s」：句尾编译时就生效的 PRAGMA 不生效', pragmaStays);
+])('multiple statements in one string "%s": trailing compile-time PRAGMA has no effect', pragmaStays);
 
-// 把 SQL 当参数、执行时才编译的表值函数（SQLite 的 bytecode、tables_used 虚表）：编 wasm 时去掉，原生本来就没有
+// Table-valued functions compiling SQL argument at execution time (SQLite bytecode, tables_used virtual tables): excluded in wasm, absent in native
 test.for([
   "SELECT count(*) FROM bytecode('PRAGMA ignore_check_constraints = 1')",
   "SELECT count(*) FROM tables_used('PRAGMA ignore_check_constraints = 1')",
-])('执行时才编译传进来的 SQL「%s」：里面编译时就生效的 PRAGMA 不生效', pragmaStays);
+])('executing SQL compiled at runtime "%s": embedded compile-time PRAGMA has no effect', pragmaStays);
 
-test('本机写里直接改库文件的页（SQLite 的 sqlite_dbpage 虚表，连接开着 defensive）：拒绝，库文件不变', async () => {
+test('directly mutating db pages in local write (SQLite sqlite_dbpage virtual table with defensive enabled): rejected, file unchanged', async () => {
   const { storage, device } = opened();
-  // 第 1 页的第 61 到 64 字节是 user_version（按十六进制拼：|| 会把 BLOB 变成文本）
+  // Bytes 61 to 64 of page 1 contain user_version (hex concatenated: || casts BLOB to text)
   const sql = "UPDATE sqlite_dbpage SET data = unhex(substr(hex(data), 1, 120) || '0000002A' || substr(hex(data), 129)) WHERE pgno = 1";
   await device.write(async (execute) => execute(sql, [])).catch(() => undefined);
   expect(storage.sql.exec('PRAGMA user_version').toArray()).toEqual([{ user_version: 0 }]);
 });
 
-test('本机写里用 Drizzle 的 transaction：拒绝（本机写本来就是一个事务），整条回滚；Drizzle 把错包在 cause 里', async () => {
+test('using Drizzle transaction inside local write: rejected (local write is already a transaction), rolled back; Drizzle wraps error in cause', async () => {
   const { device, notes } = opened();
   const error = await device
     .write((execute) =>
@@ -109,24 +113,26 @@ test('本机写里用 Drizzle 的 transaction：拒绝（本机写本来就是�
       }),
     )
     .catch((caught: unknown) => caught);
-  expect((error as Error).cause).toEqual(expect.objectContaining({ message: expect.stringContaining('本机写里不能执行 BEGIN') }));
+  expect((error as Error).cause).toEqual(
+    expect.objectContaining({ message: expect.stringContaining('BEGIN is not allowed inside a local write') }),
+  );
   expect(notes()).toEqual([]);
 });
 
-test('普通的读写照常：WITH 开头的查询、带注释的插入、列名或字符串里有关键字的', async () => {
+test('standard reads and writes operate normally: WITH queries, commented inserts, identifiers or strings with keywords', async () => {
   const { device, notes } = opened();
   await device.write(async (execute) => {
-    execute("-- 加一条\nINSERT INTO note (id, body) VALUES ('n1', 'commit; pragma; yes or rollback')", []);
+    execute("-- add row\nINSERT INTO note (id, body) VALUES ('n1', 'commit; pragma; yes or rollback')", []);
     execute("WITH x AS (SELECT 'n2' AS id) INSERT INTO note (id) SELECT id FROM x", []);
   });
   expect(notes()).toEqual([{ id: 'n1' }, { id: 'n2' }]);
   expect(await device.query('WITH x AS (SELECT id FROM note) SELECT count(*) FROM x', [])).toEqual([[2]]);
   expect(await device.query('VALUES (1)', [])).toEqual([[1]]);
-  await device.write(async (execute) => execute("REPLACE INTO note (id, body) VALUES ('n1', '换了')", []));
+  await device.write(async (execute) => execute("REPLACE INTO note (id, body) VALUES ('n1', 'replaced')", []));
   expect(device.tablesOf('SELECT id FROM note')).toEqual(['note']);
 });
 
-test('本机写里的事务被 SQLite 回滚了（OR ROLLBACK 撞上冲突）：body 接住错接着写也不执行，整条作废，不记进待上传', async () => {
+test('transaction rolled back by SQLite inside local write (OR ROLLBACK on conflict): body swallowing error and continuing write is aborted, transaction voided and not staged', async () => {
   const { device, notes } = opened();
   await device.write(async (execute) => execute("INSERT INTO note (id) VALUES ('dup')", []));
   const swallowed = device.write(async (execute) => {
@@ -134,19 +140,19 @@ test('本机写里的事务被 SQLite 回滚了（OR ROLLBACK 撞上冲突）：
     try {
       execute("INSERT OR ROLLBACK INTO note (id) VALUES ('dup')", []);
     } catch {
-      // 接住冲突的错，接着写
+      // Catch conflict error and continue writing
     }
     execute("INSERT INTO note (id) VALUES ('y')", []);
   });
-  await expect(swallowed).rejects.toThrow('已被 SQLite 回滚');
+  await expect(swallowed).rejects.toThrow('SQLite rolled back the transaction');
   const silent = device.write(async (execute) => {
     try {
       execute("INSERT OR ROLLBACK INTO note (id) VALUES ('dup')", []);
     } catch {
-      // 接住冲突的错，什么也不再写就返回
+      // Catch conflict error and return without further writes
     }
   });
-  await expect(silent).rejects.toThrow('已被 SQLite 回滚');
+  await expect(silent).rejects.toThrow('SQLite rolled back the transaction');
   expect(notes()).toEqual([{ id: 'dup' }]);
   expect(device.private.pending()).toHaveLength(1);
 

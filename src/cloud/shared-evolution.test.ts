@@ -9,8 +9,9 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { noticeFor } from './broadcast.ts';
 import { Space } from './space.ts';
 
-// 共用空间的同步范围随部署与 App 的发布变：App 回滚又升级时设备整份重拉；云端回滚期间不再声明的表离开同步、再声明时这张表重扫；
-// 桶规则的写法只差空白与大小写的不算改了
+// Shared space sync scope evolves with schema deployments and app releases: when an app rolls back then re-upgrades, devices refetch from scratch;
+// when cloud rollbacks undeclare a table, it leaves sync; re-declaring it later triggers a whole-table rescan;
+// superficial formatting differences in bucket rule filters (whitespace, keyword case) do not trigger rescans.
 
 const program = sqliteTable('program', { id: text().primaryKey() });
 const plan = sqliteTable('plan', { id: text().primaryKey() });
@@ -18,11 +19,11 @@ const schema = ['CREATE TABLE program (id TEXT PRIMARY KEY)', 'CREATE TABLE plan
 const shared = { buckets: { all: { program: {}, plan: {} } }, chunkRows: 2 };
 const everything = subscribed(['all']);
 
-/** 照设备的请求一块块拉到不再落后；收不下就抛错 */
+/** Pulls chunks until device mirror is caught up; throws if receive fails. */
 async function pullAll(mirror: Shared, space: Space) {
   for (let step = 0; mirror.behind(); step += 1) {
-    if (step > 20) throw new Error('拉不完');
-    if (!(await mirror.receive(space.pullShared(mirror.pullRequest(), everything)))) throw new Error('收不下');
+    if (step > 20) throw new Error('Pull did not complete');
+    if (!(await mirror.receive(space.pullShared(mirror.pullRequest(), everything)))) throw new Error('Receive rejected');
   }
 }
 
@@ -33,7 +34,7 @@ const plans = (storage: ReturnType<typeof deviceStorage>) =>
     .all()
     .map(({ id }) => id);
 
-test('App 回滚到不认识 plan、再升级回来：回滚期间它的删除没人记，共用空间从头整份重拉（没有待上传，游标清掉），拉得完、不落后', async () => {
+test('app rolls back past plan declaration then upgrades again: refetches shared space from scratch, catching up completely without falling behind', async () => {
   const space = new Space(cloudStorage(...schema), [program, plan], { shared });
   space.mutate((tx) => {
     for (const id of ['p1', 'p2', 'p3']) tx.insert(program, { id });
@@ -41,7 +42,7 @@ test('App 回滚到不认识 plan、再升级回来：回滚期间它的删除�
   });
   const storage = deviceStorage(...schema);
   await pullAll(new Device(storage, []).shared('catalog', [program, plan]), space);
-  // 回滚期间照常收到分片转来的通知：plan 的改动进 _syncline_unknown，表里的 a 没人删
+  // During rollback, notifications from shards are processed normally: plan changes enter _syncline_unknown; row "a" remains in the table.
   const rolledBack = new Device(storage, []).shared('catalog', [program]);
   const base = space.head();
   space.mutate((tx) => {
@@ -57,7 +58,7 @@ test('App 回滚到不认识 plan、再升级回来：回滚期间它的删除�
   expect(plans(storage)).toEqual(['c']);
 });
 
-test('云端回滚期间不再声明 plan、又声明回来：离开记删掉、回来再重给整张表，都随增量到设备，离开期间删掉的不复活、加上的也到（不重置）', async () => {
+test('cloud rollback undeclares plan then re-declares it: records table drop upon leave and rescans whole table upon re-entry; incremental pull delivers drop and additions without reset', async () => {
   const cloud = cloudStorage(...schema);
   const both = new Space(cloud, [program, plan], { shared });
   both.mutate((tx) => tx.insert(plan, { id: 'a' }));
@@ -71,14 +72,14 @@ test('云端回滚期间不再声明 plan、又声明回来：离开记删掉、
   const again = new Space(cloud, [program, plan], { shared });
   expect(again.evolvedFrom).toBeDefined();
   const next = again.pullShared(mirror.pullRequest(), everything);
-  if ('reset' in next) throw new Error('不应重置');
+  if ('reset' in next) throw new Error('Pull should not reset');
   expect(next.patch.slice(0, 1)).toEqual([{ op: 'drop', table: 'plan' }]);
   await mirror.receive(next);
   await pullAll(mirror, again);
   expect(plans(storage)).toEqual(['c']);
 });
 
-test('落下的分片记着的一版早于 plan 离开同步：跨过离开同步的一轮不带行，分片只发提示，设备去拉、先删掉 plan', () => {
+test('lagged shard holding version prior to table departure receives round without row data: shard pushes hint prompting device to pull and drop table', () => {
   const cloud = cloudStorage(...schema);
   const both = new Space(cloud, [program, plan], { shared });
   const base = both.head();
@@ -90,11 +91,11 @@ test('落下的分片记着的一版早于 plan 离开同步：跨过离开同�
 });
 
 const rewrites = [
-  { label: '多一个空格', before: "id > '' AND id < 'z'", after: "id > ''  AND id < 'z'" },
-  { label: '关键字大小写', before: "id > '' AND id < 'z'", after: "id > '' and id < 'z'" },
+  { label: 'extra whitespace', before: "id > '' AND id < 'z'", after: "id > ''  AND id < 'z'" },
+  { label: 'keyword casing', before: "id > '' AND id < 'z'", after: "id > '' and id < 'z'" },
 ];
 for (const { label, before, after } of rewrites)
-  test(`桶规则的条件${label}、看得见的行没变：部署后按原游标拉，不重给行`, () => {
+  test(`bucket rule filter with ${label} preserving identical visibility: incremental pull with existing cookie does not resend rows`, () => {
     const cloud = cloudStorage(...schema);
     const open = (where: string) => new Space(cloud, [program], { shared: { buckets: { v: { program: { where } } }, chunkRows: 2 } });
     const viewer = subscribed(['v']);

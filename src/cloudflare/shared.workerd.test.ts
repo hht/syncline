@@ -11,7 +11,8 @@ import { fannedOut } from './test-shared.ts';
 import { inbox } from './test-socket.ts';
 import { alarmAfter } from './test-space.ts';
 
-// 共用空间接到 Workers 上：入口按 token 定订阅，HTTP 拉取经开了缓存的入口、带缓存头；WebSocket 随机连一个广播分片，后台写之后收到按订阅筛的通知
+// Shared spaces on Workers: entry resolves subscriptions from tokens, cached entrypoint serves HTTP pulls with cache headers,
+// and broadcast shards fan out subscription-filtered notices following server writes.
 
 afterAll(async () => {
   await fannedOut('catalog');
@@ -21,17 +22,17 @@ afterAll(async () => {
 
 const url = 'https://sync.test/catalog';
 const _program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
-/** 测试 Worker 的 token：admin 订阅全部的桶，public 订阅公开的桶 */
+/** Test token helper: admin subscribes to all buckets, public subscribes to public bucket. */
 const token = (who: string) => `${who}.${Number.MAX_SAFE_INTEGER}`;
 const catalog = () => env.CATALOG.getByName('catalog');
 
-/** 入口转给共用空间时加的头（订阅与它的指纹）：直接调共用空间时照样带上 */
+/** Generates forwarded entry headers (subscription and hash) for direct invocations. */
 async function entryHeaders(who: string) {
   const subscription = [JSON.stringify([who === 'admin' ? 'all' : who])];
   return { [subscriptionHeader]: JSON.stringify(subscription), [subHeader]: await subscriptionHash(subscription) };
 }
 
-/** 一块块拉到末块，返回各块、回给设备的缓存头，与共用空间回给入口的缓存头（入口后面的缓存照它存） */
+/** Pulls chunks sequentially until final chunk, capturing client Cache-Control and cached entry headers. */
 async function pullAll(who: string) {
   const chunks: { chunk: Poke | Chunk; cache: string | null; stored: string | null }[] = [];
   for (let cursor: string | undefined; chunks.length < 20; ) {
@@ -43,34 +44,34 @@ async function pullAll(who: string) {
     if ('cookie' in chunk) return chunks;
     cursor = chunk.next;
   }
-  throw new Error('拉不完');
+  throw new Error('Pull did not terminate within chunk limit');
 }
 
-/** 带游标连上（入口随机给一个分片），按到达顺序取消息 */
+/** Connects with cookie through entry to random shard, returning arriving messages. */
 async function connect(who: string, cookie: Cookie) {
   const response = await exports.default.fetch(pullURL(url, { cookie }), {
     headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}${token(who)}` },
   });
   const socket = response.webSocket;
-  if (!socket) throw new Error('没有升级成 WebSocket');
+  if (!socket) throw new Error('Expected WebSocket upgrade response');
   const next = inbox(socket);
   return {
     next: async () => {
       const event = await next();
-      if (!('message' in event)) throw new Error(`应是通知：${JSON.stringify(event)}`);
+      if (!('message' in event)) throw new Error(`Expected notice message: ${JSON.stringify(event)}`);
       return event.message;
     },
   };
 }
 
-test('HTTP 拉取按 token 定的订阅给：公开的桶只有已发布的，全部的桶都给；入口后面的缓存按订阅存，中间块一天、首个请求一分钟、末块几秒；回给设备的不让设备与途中的缓存存（同一个网址换了订阅会拿到上一份订阅的块）', async () => {
+test('serves HTTP pulls by subscription with cache headers: intermediate 1 day, first 1 min, final 5 sec, no-store for client', async () => {
   for (const [id, status] of [['p1'], ['p2', 'draft'], ['p3'], ['p4']] as const) await catalog().publish(id, status);
   const rows = (chunks: Awaited<ReturnType<typeof pullAll>>) =>
     chunks.flatMap(({ chunk }) => chunk.patch.flatMap((op) => (op.op === 'put' ? [op.row.id] : [])));
   const viewer = await pullAll('public');
   expect(rows(viewer)).toEqual(['p1', 'p3', 'p4']);
   expect(rows(await pullAll('admin')).sort()).toEqual(['p1', 'p2', 'p3', 'p4']);
-  // 草稿长到几行就满一块：管理员的订阅分几块拉
+  // Long draft rows fill chunk threshold: admin subscription pulls across multiple chunks.
   for (const id of ['b1', 'b2', 'b3', 'b4', 'b5']) await catalog().publish(id, 'x'.repeat(chunkLimit / 2));
   const admin = await pullAll('admin');
   expect(admin.length).toBeGreaterThan(2);
@@ -81,11 +82,11 @@ test('HTTP 拉取按 token 定的订阅给：公开的桶只有已发布的，�
     'public, max-age=5',
   ]);
   expect((await exports.default.fetch(pullURL(url, { cookie: null }))).status).toBe(401);
-  // 协议版本对不上的先于认 token 回 409
+  // Protocol version mismatches return 409 before token validation.
   expect((await exports.default.fetch(`${url}?v=999`)).status).toBe(409);
 });
 
-test('WebSocket：游标是最新一版就收到空的补齐；后台写之后两种订阅的设备各收到按自己的订阅筛的通知，出了桶的给删除', async () => {
+test('delivers empty catch-up on connect at head, filters live notices by subscription, and delivers del ops for removed rows', async () => {
   await catalog().publish('q1');
   const { chunk: last } = (await pullAll('public')).at(-1) as { chunk: Poke };
   const { chunk: adminLast } = (await pullAll('admin')).at(-1) as { chunk: Poke };
@@ -99,7 +100,7 @@ test('WebSocket：游标是最新一版就收到空的补齐；后台写之后�
   expect((await admin.next()).patch).toEqual([{ op: 'put', table: 'program', key: { id: 'q1' }, row: { id: 'q1', status: 'draft' } }]);
 });
 
-/** 发布 id，一台按管理员订阅的设备拉完、连上、收完补齐；shards 是两个广播分片 */
+/** Publishes id, connects an admin device, and awaits catch-up across broadcast shards. */
 async function adminOnline(id: string) {
   await catalog().publish(id);
   const { chunk: last } = (await pullAll('admin')).at(-1) as { chunk: Poke };
@@ -109,10 +110,10 @@ async function adminOnline(id: string) {
   return { last, device, shards };
 }
 
-test('一次后台写改得太多（通知按 UTF-8 字节装不下）：分片给连着的设备发提示（最新一版），不关连接，之后的通知照常收到', async () => {
+test('sends hint without closing connection when live notice exceeds UTF-8 byte budget and resumes normal notices thereafter', async () => {
   const { device } = await adminOnline('h1');
-  // 汉字一个 3 字节：字符数在上限之内、字节数超过
-  await catalog().publish('h2', '深'.repeat(socketLimit / 2));
+  // Multi-byte characters exceed UTF-8 byte budget within character count limit.
+  await catalog().publish('h2', '€'.repeat(socketLimit / 2));
   const hint = (await device.next()) as unknown as { hint: Cookie };
   const { chunk: latest } = (await pullAll('admin')).at(-1) as { chunk: Poke };
   expect(hint).toEqual({ hint: latest.cookie, spread: expect.any(Number), incarnation: expect.any(Number), sub: expect.any(String) });
@@ -120,11 +121,11 @@ test('一次后台写改得太多（通知按 UTF-8 字节装不下）：分片�
   expect(await device.next()).toMatchObject({ base: latest.cookie, patch: [{ op: 'put', row: { id: 'h3' } }] });
 });
 
-test('分片没收到通知：连着的设备先收不到；共用空间按退避重发（alarm），分片好了之后设备收到这次漏掉的改动', async () => {
+test('retries fanout to broadcast shards via alarm backoff until shards acknowledge and devices receive missing changes', async () => {
   const { last, device, shards } = await adminOnline('r1');
   for (const shard of shards) await shard.broken(true);
   await catalog().publish('r1', 'draft');
-  // 第一次重发在 1 秒后（后台写登记的），之后按退避
+  // Initial retry at 1 second scheduled by server write; subsequent retries back off.
   expect(await alarmAfter(catalog(), 1000)).toBe(true);
   for (const shard of shards) await shard.broken(false);
   expect(await alarmAfter(catalog(), 2000)).toBe(true);
@@ -132,15 +133,15 @@ test('分片没收到通知：连着的设备先收不到；共用空间按退�
     base: last.cookie,
     patch: [{ op: 'put', table: 'program', row: { id: 'r1', status: 'draft' } }],
   });
-  // 送完了只排着定时醒的那一次（一小时后）
+  // Once delivered, only periodic wakeup remains scheduled (1 hour later).
   const at = await runInDurableObject(catalog(), (_, state) => state.storage.getAlarm());
   expect(at).toBeGreaterThan(Date.now() + 3_500_000);
 });
 
-test('两次后台写交错（第二次在第一轮等分片回话时提交）：第一轮送到、合并的第二轮没送到，照退避再发（不推到一小时后的定时醒），分片好了之后设备收到', async () => {
+test('coalesces interleaved server writes, retrying failed subsequent round via backoff instead of waiting for hourly wakeup', async () => {
   const { device, shards } = await adminOnline('c1');
   for (const shard of shards) await shard.breakAfter(1);
-  // 同时调：第二次在第一次等分片回话时提交，合并成发完再发一轮
+  // Concurrent server writes: second commit while first is awaiting response coalesces into subsequent round.
   await Promise.all([catalog().publish('c1', 'draft'), catalog().publish('c2')]);
   expect(await device.next()).toMatchObject({ patch: [{ row: { id: 'c1' } }] });
   const at = await runInDurableObject(catalog(), (_, state) => state.storage.getAlarm());
@@ -150,10 +151,10 @@ test('两次后台写交错（第二次在第一轮等分片回话时提交）�
   expect(await device.next()).toMatchObject({ patch: [{ row: { id: 'c2' } }] });
 });
 
-test('一个分片卡住：别的分片照常收到之后的写，不等它的超时（每个分片各自一条，卡住的只拖它自己）', async () => {
+test('isolates hanging broadcast shards so healthy shards receive subsequent writes without awaiting timeouts', async () => {
   const { last } = await adminOnline('k1');
   const [stuck, healthy] = [0, 1].map((index) => env.CATALOG_BROADCAST.getByName(`catalog#${index}`));
-  // 直接连到不卡的分片（入口随机给一个）
+  // Connects directly to healthy shard.
   const response = await healthy?.fetch(pullURL(url, { cookie: last.cookie }), {
     headers: {
       Upgrade: 'websocket',
@@ -162,11 +163,11 @@ test('一个分片卡住：别的分片照常收到之后的写，不等它的�
       ...(await entryHeaders('admin')),
     },
   });
-  if (!response?.webSocket) throw new Error('没有升级成 WebSocket');
+  if (!response?.webSocket) throw new Error('Expected WebSocket upgrade response');
   const next = inbox(response.webSocket);
   await next();
   await stuck?.hangNext(1);
-  // 两次发布都要等卡住的分片（至多 notifyTimeout），不等它们返回
+  // Both publishes wait for stuck shard up to notifyTimeout; proceeds without waiting for them to settle.
   void catalog()
     .publish('k1', 'draft')
     .catch(() => undefined);
@@ -175,12 +176,12 @@ test('一个分片卡住：别的分片照常收到之后的写，不等它的�
     .publish('k2')
     .catch(() => undefined);
   expect(await next()).toMatchObject({ message: { patch: [{ row: { id: 'k2' } }] } });
-  // 清掉卡着的调用：重置后 alarm 照落库的那一版重发；等它送完，不留在路上的一轮给下一条测试（会吃掉它设的卡住）
-  await expect(runInDurableObject(catalog(), (_, state) => state.abort('重置'))).rejects.toThrow();
+  // Resets actor to clear stalled calls; awaits fanout delivery so in-flight rounds do not bleed into subsequent tests.
+  await expect(runInDurableObject(catalog(), (_, state) => state.abort('Reset'))).rejects.toThrow();
   await fannedOut('catalog');
 });
 
-test('换了订阅（令牌换了、去掉了桶）：拿着全部的桶落地的游标、用公开的桶的 token 拉，整份重下（先清空），只给公开的行', async () => {
+test('performs fresh full pull with clear op when client subscription narrows to public bucket using old landed cookie', async () => {
   await catalog().publish('s1', 'draft');
   const { chunk: last } = (await pullAll('admin')).at(-1) as { chunk: Poke };
   const response = await exports.default.fetch(
@@ -194,7 +195,7 @@ test('换了订阅（令牌换了、去掉了桶）：拿着全部的桶落地�
   expect(chunk.patch.some((op) => op.op === 'put' && op.row.id === 's1')).toBe(false);
 });
 
-test('带下限的拉取：云端还没到下限时（只可能是伪造的请求）算出的响应不进缓存，那个网址上只缓存到了下限之后算的', async () => {
+test('bypasses cache with no-store when pull request specifies floor version not yet reached by cloud', async () => {
   await catalog().publish('a1');
   const { chunk: last } = (await pullAll('public')).at(-1) as { chunk: Poke };
   const ahead = pullURL(url, { cookie: null, cursor: last.next ?? '', atLeast: last.cookie.version + 100 });
@@ -202,7 +203,7 @@ test('带下限的拉取：云端还没到下限时（只可能是伪造的请�
   expect(response.headers.get('Cache-Control')).toBe('no-store');
 });
 
-test('带这一代的拉取：云端不在这一代（分片记着的是过时的、或伪造的）时算出的响应不进缓存，在这一代时照常缓存', async () => {
+test('bypasses cache when incarnation does not match space incarnation and caches responses matching current incarnation', async () => {
   await catalog().publish('a2');
   const headers = await entryHeaders('public');
   const ask = (incarnation: number) => catalog().fetch(new Request(pullURL(url, { cookie: null, incarnation }), { headers }));
@@ -211,28 +212,28 @@ test('带这一代的拉取：云端不在这一代（分片记着的是过时�
   expect((await ask(incarnation)).headers.get('Cache-Control')).toBe('public, max-age=5');
 });
 
-test('后台写提交后、通知送到分片之前对象被重置（部署、超时）：重启后 alarm 照样把这次的通知送到', async () => {
+test('delivers pending fanout round via alarm after actor reset occurs between commit and broadcast delivery', async () => {
   const { device, shards } = await adminOnline('h1');
   for (const shard of shards) await shard.hangNext(1);
-  // 发布在等分片回话（先接住它的结果：对象重置时它失败）
+  // Publish awaits shard response; caught here since aborting the actor causes it to fail.
   const publishing = catalog()
     .publish('h1', 'draft')
     .then(
       () => undefined,
       (error: unknown) => error,
     );
-  // 等通知真的发到分片、卡住了，再在对象等分片回话时重置它
+  // Awaits notification dispatch to shard before aborting the actor.
   await vi.waitFor(async () => {
     for (const shard of shards) expect(await shard.hangsLeft()).toBe(0);
   });
-  await expect(runInDurableObject(catalog(), (_, state) => state.abort('重置'))).rejects.toThrow();
+  await expect(runInDurableObject(catalog(), (_, state) => state.abort('Reset'))).rejects.toThrow();
   expect(await publishing).toBeInstanceOf(Error);
-  // 重排的 alarm 可能已经自己跑过：不论哪一次，这次通知都要送到
+  // Rearmed alarm delivers pending notice following actor restart.
   await alarmAfter(catalog(), 1000);
   expect(await device.next()).toMatchObject({ patch: [{ op: 'put', table: 'program', row: { id: 'h1', status: 'draft' } }] });
 });
 
-test('定时醒（全部分片都已跟上、这次没有要发的）之后照样排着下一次，不断：部署改了规则、一直没有请求时，记下的重扫靠它发出去', async () => {
+test('perpetuates periodic wakeup alarms when all shards are caught up to deliver rule evolution rescans without client traffic', async () => {
   await catalog().publish('w1');
   const refreshAt = () =>
     runInDurableObject(catalog(), (_, state) => {
@@ -244,12 +245,12 @@ test('定时醒（全部分片都已跟上、这次没有要发的）之后照�
   expect(await refreshAt()).toBeGreaterThan(3_500_000);
 });
 
-test('接入方自己的定时：与发通知的重发、定时醒共用一个 alarm，互不覆盖；后台写经 RPC 调不到', async () => {
+test('multiplexes integrator schedule with fanout alarms without conflict and protects mutate from RPC access', async () => {
   const hour = 3_600_000;
   await catalog().remind('nightly', Date.now() + hour / 2);
   await catalog().publish('n1');
   const alarmAt = () => runInDurableObject(catalog(), (_, state) => state.storage.getAlarm());
-  // 送完了：排着的是自己的定时（半小时后），早于定时醒（一小时后）
+  // Once delivered, integrator chore scheduled for 30 minutes takes priority over 1-hour periodic wakeup.
   expect(Number(await alarmAt()) - Date.now()).toBeLessThanOrEqual(hour / 2);
   await alarmAfter(catalog(), hour / 2);
   expect(await catalog().fired()).toContain('nightly');
@@ -259,27 +260,27 @@ test('接入方自己的定时：与发通知的重发、定时醒共用一个 a
     await expect(Promise.resolve().then(() => stub[method]?.())).rejects.toThrow();
 });
 
-test('令牌给的订阅里规则名是原型上的键（__proto__、constructor）：不当规则、抛错（接入方的 verify 写错了），不给不过滤的全表', async () => {
+test('rejects prototype property names like __proto__ or constructor in bucket rules with error instead of bypassing filters', async () => {
   await catalog().publish('x1', 'draft');
   for (const rule of ['__proto__', 'constructor'])
     await expect(
       exports.default.fetch(pullURL(url, { cookie: null }), { headers: { Authorization: `Bearer ${token(rule)}` } }),
-    ).rejects.toThrow(`没有这条规则：${rule}`);
+    ).rejects.toThrow(`Unknown bucket rule: ${rule}`);
 });
 
-test('空的共用空间（新建、清空重建之后、还没有写）：对象一启动就给各分片发一轮最新一版（分片据此知道这一代），不等有写；都确认了落库的是第 0 版', async () => {
+test('dispatches head version round to shards on startup for empty shared space and confirms version 0', async () => {
   const fresh = env.CATALOG.getByName('fresh');
   const head = await runInDurableObject(fresh, (_, state) =>
     state.storage.sql.exec<{ nonce: number }>('SELECT nonce FROM _syncline_commit WHERE version = 0').one(),
   );
-  // 登记的是马上发：测试环境到时候了就自己跑 alarm
+  // Dispatches immediately on startup so test environment arms alarms without waiting for writes.
   await vi.waitFor(async () => {
     const confirmed = await runInDurableObject(fresh, (_, state) => state.storage.kv.get('syncline:fanout'));
     expect(confirmed).toEqual({ version: 0, nonce: head.nonce });
   });
 });
 
-test('每个桶的行数：新建的对象打开时登记，在 alarm 里数完（数之前的写由数补上），之后的后台写跟着增减', async () => {
+test('counts bucket rows in background alarm and updates counts incrementally on subsequent server writes', async () => {
   const space = env.CATALOG.getByName('counting');
   await space.publish('c1');
   await space.publish('c2', 'draft');

@@ -1,110 +1,110 @@
-# 限制
+# Limits
 
-接入前先看这几条：表的列只能存成 integer、real、text，不支持唯一索引，每张表都要有主键；一次写至多 8 MiB、改到 10 万行（共用空间的服务端写 1 万行）；一行同步的列至多约 1.9 MB；一个空间至多 10 GB；共用空间一台设备的订阅至多 8 KB。平台要求见文末。
+Review these limits before integrating: table columns support only integer, real, and text storage types; unique indexes are not supported; every table must have a primary key; a single write caps at 8 MiB and 100,000 modified rows (10,000 rows for server writes in shared spaces); synced columns in a row cap at roughly 1.9 MB; a space caps at 10 GB; a device's subscription in a shared space caps at 8 KB. See platform requirements at the end of this document.
 
-下面按大小、时长、取舍与已知行为、关闭码分节，大小再按表与列、写与上传、下载、云端存储、共用空间分组。
+The sections below cover sizes, durations, trade-offs and known behaviors, and close codes. Sizes are further grouped into tables and columns, writes and uploads, downloads, cloud storage, and shared spaces.
 
-## 大小
+## Sizes
 
-### 表与列
+### Tables and columns
 
-| 项 | 上限 | 超了会怎样 |
+| Item | Limit | Behavior when exceeded |
 |---|---|---|
-| 列的类型 | 只支持存成 integer、real、text 的（不支持 BLOB、bigint、numeric）；已有的列不能改存储类型；已有的表加非空的列要给固定的默认值；本机专用的表也一样 | 打开库、建 `SynclineSpace` 时就报错 |
-| 表与列的名字、主键、外键 | 名字只能用英文字母、数字、下划线，不以数字开头；表名不能以 `_syncline_` 开头，列不能叫 `_extra`（留给 Syncline）；每张表（含本机专用的）都要有主键；外键只能引用同一个空间的同步表 | 打开库、建 `SynclineSpace` 时就报错 |
-| 索引 | 不支持唯一索引、带条件或按表达式的索引；默认值只支持固定的值 | 打开库时就报错 |
-| 同步表一行的主键 | 编成 JSON 共 512 字节（UTF-8；分块下载接着拉的位置带着它，共用空间要放进网址） | 本机写时就抛 `ValidationError`、整条回滚；云端扣下推来的写，服务端的写抛 `ValidationError` |
-| 一行 | 同步的列共 1,900,000 字节（DO 一行最多 2 MB，留出余地） | 本机写时就抛 `ValidationError`、整条回滚；Syncline 自己存的值都按 2 MB 拆 |
+| Column types | Supports only integer, real, and text storage types (BLOB, bigint, and numeric are not supported); existing columns cannot change storage types; adding non-null columns to existing tables requires a constant default value; applies equally to local-only tables | Throws on opening the database or instantiating `SynclineSpace` |
+| Table and column names, primary keys, foreign keys | Names must use only ASCII letters, digits, and underscores, and cannot start with a digit; table names cannot start with `_syncline_`; columns cannot be named `_extra` (reserved for Syncline); every table (including local-only tables) must have a primary key; foreign keys can only reference synced tables in the same space | Throws on opening the database or instantiating `SynclineSpace` |
+| Indexes | Unique indexes, partial indexes, and expression-based indexes are not supported; default values support only constants | Throws on opening the database |
+| Primary key for a synced row | 512 bytes encoded as JSON (UTF-8; carried in the resume position of chunked downloads, and placed in URLs for shared spaces) | Local writes throw `ValidationError` and roll back entirely; the cloud holds pushed writes; server writes throw `ValidationError` |
+| Single row | Synced columns total 1,900,000 bytes (DO rows cap at 2 MB, leaving headroom) | Local writes throw `ValidationError` and roll back entirely; Syncline splits its own internal stored values in 2 MB chunks |
 
-### 写与上传
+### Writes and uploads
 
-| 项 | 上限 | 超了会怎样 |
+| Item | Limit | Behavior when exceeded |
 |---|---|---|
-| 一次本机写的改动 | 8 MiB（UTF-8） | 写入时抛错、整条回滚 |
-| 一次写改到的行 | 10 万行（共用空间只有服务端写，至多 1 万行：每行还要维护它在的桶），主键编成 JSON 共 16 MB（UTF-8；外键引用的不是主键时连同被引用的列），连带删的也算（设备推来的、服务端的、本机写都是） | 本机写时就抛错、整条回滚；云端扣下推来的写，服务端的写抛错；连带删超了的，先分批删子行再删父行 |
-| 一次服务端的写 | 几千行一批 | 30 万行一次写实测超出 DO 的 CPU 时间、对象被重置；共用空间一条按列分桶的规则、2 万行实测：各进一个新桶 3–7 秒 CPU，各从一个桶挪到另一个桶 13–26 秒，都进同一个桶 3–5 秒（同样的写两次差一倍） |
-| 一条推送的大小 | 超过 9 MiB（UTF-8）云端不解析就拒收；设备推的一批是至多一条 8 MiB 的写加上前面一小段，在其内 | 只有有缺陷或改过的客户端推得出：以 1007 关连接、报 `push.failed`，这台设备不再推 |
-| 一批上传 | 改动约 1.2 万字节（UTF-8，至少一条写），至多 1000 条写；云端处理一批时写的行（计费的行写，连带删的、回滚的都算）累计到一次写的上限就停在那条之后 | 分几批推，前一批确认了（全部或前缀）再推下一批；云端拒收超过条数的（以 1007 关连接） |
-| 一个私有空间的上传（配了 `writeQuota` 时） | 每秒补 `rate` 行、至多攒 `burst` 行；一批比 `burst` 大时攒满就放行 | 这批不执行，以 1013 关连接，设备退避后重推 |
-| 一个私有空间每天的上传（配了 `dailyWrites` 时） | 当天（UTC）上传的写共写 `dailyWrites` 行（计费的行写，含索引与提交记录；服务端的写与 Syncline 排导出的写不算）；没到就执行，可以超出一批 | 之后的上传不执行，以 1013 关连接，设备退避后重推，第二天照常 |
-| 一个私有空间的连接 | 同时 32 条（`connections` 可调） | 再连上来就以 1008 关掉最早的一条 |
+| Single local write changes | 8 MiB (UTF-8) | Throws during write, rolls back entirely |
+| Rows modified by a single write | 100,000 rows (shared spaces support only server writes, up to 10,000 rows: each row must also maintain its buckets), and primary keys total 16 MB encoded as JSON (UTF-8; including referenced columns when a foreign key references a non-primary key); cascaded deletes also count (for device pushes, server writes, and local writes alike) | Local writes throw and roll back entirely; the cloud holds pushed writes, and server writes throw; if cascaded deletes exceed the limit, delete child rows in batches before deleting the parent row |
+| Single server write | Batches of a few thousand rows | A single write of 300,000 rows was measured to exceed Durable Object CPU time limits and reset the object. In shared spaces with a column-based bucket rule, measuring 20,000 rows showed: inserting into separate new buckets took 3–7 seconds of CPU; moving each row from one bucket to another took 13–26 seconds; inserting all rows into the same bucket took 3–5 seconds (identical writes can differ twofold) |
+| Single push payload size | The cloud rejects payloads exceeding 9 MiB (UTF-8) without parsing; a device push batch contains at most one 8 MiB write plus a small header, staying within this limit | Pushed only by defective or modified clients: closes the connection with 1007, emits `push.failed`, and the device stops pushing |
+| Upload batch | Roughly 12,000 bytes of changes (UTF-8, at least one mutation), up to 1,000 mutations; when processing a batch on the cloud, if billed row writes (including cascaded deletes and rolled-back writes) reach the single-write row limit, execution stops after that mutation | Pushes in batches, waiting for the previous batch to be confirmed (in whole or prefix) before pushing the next; the cloud rejects batches exceeding the mutation count (closing the connection with 1007) |
+| Upload quota for a private space (when `writeQuota` is configured) | Refills `rate` rows per second up to `burst` rows; if a batch exceeds `burst`, it is allowed once fully accumulated | The batch is not executed; closes the connection with 1013, and the device retries after backoff |
+| Daily upload limit for a private space (when `dailyWrites` is configured) | Uploaded writes write up to `dailyWrites` rows for the current UTC day (billed row writes, including indexes and commit log; server writes and Syncline export writes do not count); executes if not yet reached, even if exceeding the batch limit | Subsequent uploads are not executed; closes the connection with 1013, and the device retries after backoff, resuming normally the next day |
+| Connections to a private space | 32 concurrent connections (`connections` is configurable) | Additional incoming connections close the oldest connection with 1008 |
 
-### 下载
+### Downloads
 
-| 项 | 上限 | 超了会怎样 |
+| Item | Limit | Behavior when exceeded |
 |---|---|---|
-| WebSocket 上的补齐与通知 | 整条消息 2.4 万字节（UTF-8；最慢按每秒 1 KB 算，一条要在心跳的期限内传完） | 云端只发提示、不关连接，设备连着走 HTTP 下载 |
-| HTTP 下载的一块 | 私有空间约 100 万字符，另一块（连上时的补齐也是）至多读库里 2 万行（`readRows`）：表的每行算两遍、约 1 万行，跳过的提交与项也算；共用空间一样。共用空间整份下载从最近的块边界起（每满默认 1000 行（`chunkRows`）改到的行一个），同一段时间里新装的设备共用缓存的块 | 分块；一次写的改动可以分在几块里，一行不拆（可以超过）；每块至少前进一行或一项 |
-| 私有空间下载时带上的客户端（待上传的与当前的） | 放在 POST 的正文里，每个约 80 字节（客户端与它最早的待上传序号各一项）；连接的网址只带游标，不列客户端。云端把列出的客户端作一个 SQL 参数查（DO 一个值至多 2 MB），约 4.8 万个（每次启动有写、一直没同步过才会攒多）；拉取的正文超过 8 MB（UTF-8）云端不读完、回 413 | 超了下载一直失败、重试 |
-| 设备整份下载 | 各块的行边下边写进与同步表一样的新表，末块在一个本机事务里删掉旧表、换上新表。首次下载的本机磁盘峰值约为最终库文件的 1.1 倍（实测 2 万行、2.8 MB：预写日志下 3.1 MB，回滚日志下 2.9 MB）；已有数据时整份重拉峰值约 2 倍（旧表加新表，实测 5.1 MB），之后分几步截掉旧表空出的页，预写日志下另多一个检查点阈值（约 4 MB，实测 8.6 MB），截完缩回 | 中途被打断（退到后台被杀、磁盘满），下次从最后一块接着拉；拉到一半时 App 更新给这些表加了列、删了列或加了索引，从头拉。接入方自己在同步表上建的触发器换表时随旧表删掉；索引照建的只有按列的普通索引（唯一、带条件、按表达式的不照建），名字换成「原名#编号」 |
-| 部署时进入同步的表、加了同步的列、改了桶规则的表 | 打开对象时只在范围表里记下这张表从下一版起、记一版不带键的提交，不随表的行数涨；之后每台游标在它之前的设备拉取时先清掉这张表、按主键分块重下、末块换上（之前看到的是旧的行；共用空间按表记，改了一条规则，订阅了哪个桶的设备都重下这张表）。一块与整份下载一样约 100 万字符；Cloudflare 上实测一块 40 到 50 毫秒 CPU | 在线设备收到提示、走 HTTP 拉取；每台落后的设备各重下一遍这张表（共用空间订阅相同的设备共用缓存的块）；规则的条件只改了空白与大小写的不算改了，别的写法改了、看得见的行没变也重下；本机磁盘峰值与整份重拉一样 |
-| 在线校验和 | 设备该对了（新装、被重置后、上次对完一轮满一天）、没有待上传时，拉取的末块带上云端当场算的一段：按整份扫描的先后至多 2 万行、约 800 万字符、100 张表（Cloudflare 上实测当场算 100 万行两列的短行约 3.6 秒、9 列的约 7 秒 CPU，一段在 0.2 秒之内），空间多大都算得完；一段对上了接着要下一段，下一段从哪起记在本机库里、App 重启后接着对。对的途中库变了（本机写、收到改动）就作罢、这一段减半，至多减到 200 行，对完一轮再从最长的段起。每台设备每天至多要 100 万行（`checksumRowsPerDay` 可调，云端每读一行计费，一个月约 $0.03）。对不上只重下这一段（拉取带上这一段的各张表与主键范围，不清空、不丢没上传的写），之后再对它 | 没对成的一段（拉取失败）至多每分钟再要一次；一轮没对完不算对过，之后接着对没对的那几段；当天的行数用完了等这一天过完；大空间一轮要很多天（1000 万行约 10 天）；重下之后仍对不上只报出、跳过这一段 |
+| Catch-up and notices over WebSocket | 24,000 bytes per entire message (UTF-8; assuming a minimum transfer rate of 1 KB/s, a message must finish transmitting within the heartbeat timeout) | The cloud sends a hint instead without closing the connection; the device stays connected and downloads over HTTP |
+| HTTP download chunk | Roughly 1,000,000 characters for private spaces, and any chunk (including catch-up on connect) reads at most 20,000 rows from the database (`readRows`): each table row counts twice, roughly 10,000 rows, with skipped commits and items also counted; same for shared spaces. Full downloads in shared spaces start from the nearest chunk boundary (recorded every 1,000 modified rows by default (`chunkRows`)), so devices newly installed around the same time share cached chunks | Chunked. Changes from a single write can span multiple chunks without splitting individual rows (which can exceed the chunk size); each chunk advances at least one row or item |
+| Clients sent during private space downloads (pending and current) | Placed in the POST body, roughly 80 bytes each (one entry each for the client and its earliest pending mutation ID); the connection URL carries only the cookie, without listing clients. The cloud queries the listed clients as a single SQL parameter (DO values cap at 2 MB), accommodating roughly 48,000 clients (accumulated only when an app writes on every launch without ever syncing); if the pull request body exceeds 8 MB (UTF-8), the cloud terminates reading and returns 413 | Exceeding this causes downloads to continuously fail and retry |
+| Full device download | Rows in each chunk are written into shadow tables identical to synced tables as they arrive; the final chunk deletes old tables and swaps in the new tables in a single local transaction. Peak local disk usage during initial download is roughly 1.1x the final database file (measured at 2.8 MB for 20,000 rows: 3.1 MB with WAL, 2.9 MB with rollback journal). Peak usage during full refetch with existing data is roughly 2x (old tables plus new tables, measured at 5.1 MB), after which freed pages are reclaimed in steps; under WAL mode an additional checkpoint threshold applies (roughly 4 MB, measured at 8.6 MB total), shrinking back once complete | If interrupted mid-download (killed in background, disk full), resumes from the last chunk next time. If an app update adds columns, drops columns, or adds indexes to these tables mid-pull, restarts from scratch. Custom triggers created by integrators on synced tables are dropped with the old tables on swap. Only standard column indexes are recreated (unique, partial, or expression-based indexes are omitted), renamed to `<originalName>#<number>` |
+| Tables entering sync on deploy, added synced columns, modified bucket rules | When the object opens, it records in the scope table that the table starts from the next version, recording a commit without keys that does not scale with row count. Afterwards, each device with a cookie predating this commit drops the table, re-downloads in chunks by primary key, and swaps it in on the final chunk (observing old rows until then; shared spaces track by table, so modifying a rule causes all devices subscribed to that bucket to re-download the table). A chunk is roughly 1,000,000 characters, same as full downloads; measured on Cloudflare at 40–50 ms of CPU per chunk | Online devices receive a hint and pull over HTTP. Each lagging device re-downloads the table once (devices with identical subscriptions in shared spaces share cached chunks). Rule predicates modified only in whitespace or casing do not count as changes; other predicate rewrites trigger re-downloads even if visible rows are unchanged. Peak local disk usage matches full refetches |
+| Online checksums | When due for verification (newly installed, after a reset, or a full day after the previous round completed) with no pending writes, the final pull chunk includes a section computed on-demand by the cloud: in full-scan order, at most 20,000 rows, roughly 8,000,000 characters, and 100 tables (measured on Cloudflare at ~3.6s CPU for 1,000,000 two-column short rows and ~7s CPU for 9-column rows, completing a section within 0.2s), capable of verifying spaces of any size. If a section matches, the device requests the next section, recording the resume point in the local database to survive app restarts. If the database changes during verification (from local writes or incoming updates), verification aborts and the section halves down to 200 rows, restarting from the maximum section size once a round completes. Each device requests at most 1,000,000 rows per day (`checksumRowsPerDay` is configurable; billed per row read on the cloud, roughly \$0.03/month). Mismatches re-download only that section (the pull specifies tables and primary-key ranges for that section without clearing or dropping pending writes), and re-verify it afterwards | Failed sections (pull failures) are requested again at most once per minute. Incomplete rounds do not count as verified, resuming the remaining sections later. Once the daily row budget is exhausted, waits until the day ends. Large spaces take multiple days per round (roughly 10 days for 10,000,000 rows). Repeated mismatches after re-download are reported and skipped |
 
-### 云端存储
+### Cloud storage
 
-| 项 | 上限 | 超了会怎样 |
+| Item | Limit | Behavior when exceeded |
 |---|---|---|
-| 一个空间的数据 | 10 GB（DO 的存储上限） | 写不进；上传会一直失败（`push.failed`） |
-| 私有空间的提交记录（日志） | 约 64 MiB 与数据（库文件减日志）的 1/4 中大的那个：按各版的主键字节加每版约 72 字节估（设备的写另有客户端编号，按有算） | 后台任务截掉最早的，截到上限的 3/4，每次 alarm 至多删 1 万版、主键共 64 MiB；游标早于日志下限（截到的那一版）的设备、导出者从头整份重下（待上传留着） |
+| Single space data | 10 GB (Durable Object storage limit) | Cannot write; uploads continuously fail (`push.failed`) |
+| Private space commit log | The greater of roughly 64 MiB and 1/4 of data (database file minus log), estimated by primary-key bytes per commit plus roughly 72 bytes per version (client ID included for device writes) | Background maintenance truncates the oldest commits down to 3/4 of the cap, deleting at most 10,000 commits and 64 MiB of primary keys per alarm; devices and exporters with cookies earlier than the log floor (the truncated version) must re-download from scratch (keeping pending writes) |
 
-### 共用空间
+### Shared spaces
 
-| 项 | 上限 | 超了会怎样 |
+| Item | Limit | Behavior when exceeded |
 |---|---|---|
-| 共用空间一台设备的订阅 | 入口按 token 算出（接入方的 `verify`），桶的规范写法排好编成 JSON 至多 8192 字节（一条规则一个参数、参数是 UUID 时约 170 个桶）；一个桶至多 256 字节 | 订阅超了入口抛错；行所在的桶超了写不进（服务端的写抛错） |
-| 共用空间订阅变了（token 换了） | 加了桶只扫新加的桶、原有的行留着；去掉了桶整份重下（落地之前看到的是旧的行）；连着的设备在 token 到期重连、App 调 `reconnect()`、或拉取落地后换连接时才认新订阅（见下文「取舍与已知行为」） | 换了登录的人时 App 传新的 `owner`，打开时先清掉上一个人看过的行 |
-| 共用空间的桶规则 | 每条有条件或分桶列的规则在云端建一个索引（只收满足条件的行，按分桶列、主键）：插入一行、改到索引里的列各多计 1 行写；新加的规则在已有的表上由后台任务建索引，建好之前按桶扫扫整张表。每个桶的行数（下载进度用）另记一行 | 一张表至多在 4064 条规则里 |
-| 共用空间通知里带的改动 | 发给分片的一轮约 24 万字符（改到的行连同它们在的桶；这段提交记录的主键超过约 24 万字节也算，同一行改了几次算几次）；分片按每条连接的订阅筛出的一条 2.4 万字节（UTF-8）；字符数 × 一片里订阅相同的连接数不超过 1,600 万 | 分片只发提示，设备连着下载 |
-| 共用空间一个请求里连着发布 | 每次发给全部分片（默认 128 片）；Workers 付费计划一个请求的子请求默认至多 1 万个（免费计划 50 个）（[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)） | 连着发布很多次时分到几个请求里 |
+| Subscription per device in a shared space | Computed by the entrypoint from the token (the integrator's `verify`), sorted canonical bucket names formatted as JSON total at most 8,192 bytes encoded as JSON (roughly 170 buckets when rules have a single UUID parameter); at most 256 bytes per bucket | The entrypoint throws if the subscription exceeds the limit; row writes fail if their bucket exceeds the limit (server write throws) |
+| Subscription changes in a shared space (token rotation) | Adding buckets scans only added buckets, keeping existing rows; removing buckets triggers a full re-download (viewing old rows until landed); connected devices adopt the new subscription only on reconnecting after token expiration, when the app calls `reconnect()`, or when switching connections after a pull lands (see "Trade-offs and known behaviors" below) | When switching logged-in users, the app passes a new `owner`, clearing previously viewed rows on open |
+| Bucket rules in a shared space | Each rule with a predicate or bucket columns builds an index on the cloud (filtering matching rows, indexed by bucket columns and primary key): inserting a row or updating indexed columns adds 1 billed row write each; new rules on existing tables build indexes via background maintenance, scanning the entire table by bucket until complete. Row counts per bucket (used for download progress) are stored in separate rows | A table can belong to at most 4,064 rules |
+| Changes carried in shared space notices | A round sent to shards is roughly 240,000 characters (modified rows along with their buckets; primary keys in the commit log exceeding roughly 240,000 bytes also count, with multiple updates to the same row counted repeatedly); a single message filtered by shard per connection's subscription is 24,000 bytes (UTF-8); characters multiplied by the number of connections with identical subscriptions in a shard does not exceed 16,000,000 | Shards send hints instead; devices download over HTTP |
+| Consecutive publishes within a single request in a shared space | Broadcasts to all shards on each publish (default 128 shards); Cloudflare Workers paid plans allow up to 10,000 subrequests per request by default (50 on the free plan) ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)) | Split into multiple requests when publishing consecutively many times |
 
-## 时长
+## Durations
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 网络不通 | 建连接起（含握手）、HTTP 下载中 30 秒没收到任何数据，就当失败、按退避重来 |
-| 心跳 | 空闲 25 秒发一次 ping，30 秒内没有任何消息就当连接已断；刚发出一批推送时按每秒 1 KB 算它传完之前、被确认之前不发 ping（这段时间里悄悄断了发现不了） |
-| 断线重连 | 全抖动退避：第 n 次在 0 到 max(spread, min(30 秒, 1 秒 × 2ⁿ)) 之间随机等；`spread` 是共用空间的分片按它连着的设备数给的（每秒 500 台），私有空间是 0 |
-| 收到 4000 之后 | 在 0 到 max(spread, 1 秒) 之间随机等，再下载、再连，不算失败 |
-| 共用空间要追的时候 | 收到提示、或接不上的通知后，在 0 到 max(spread, 1 秒) 之间随机等再拉；连着时拉取出错按断线重连的退避重试 |
-| 导出 | 写了之后 60 秒（`exportDelay`）；失败后翻倍重排，最多 1 小时；一次 alarm 最多导 10 分钟（`exportBudget`），导出者到时候还没回话就算这次失败 |
-| 时间点恢复 | 只有私有空间（`restoreSpace`），30 天内；对象新建后约 1 分钟内还没有可恢复的历史。共用空间不能时间点恢复（缓存里按位置存的块会把恢复前后的两段历史拼起来），要回到之前的数据就重新导入；清空重建（换一个空的对象再导入）可以 |
-| 共用空间部署后重给的表 | 最迟一小时通知到在线设备（对象每小时醒一次；有后台写、新设备拉取时更早） |
-| 共用空间的缓存 | 第一个请求 60 秒，中间块 1 天，最后一块 5 秒（只在云端按订阅缓存，设备上不存） |
+| Network stall | From connection start (including handshake) and during HTTP downloads, if no data is received for 30 seconds, treats it as a failure and retries with backoff |
+| Heartbeat | Sends a ping after being idle for 25 seconds, and if no message arrives within 30 seconds, treats the connection as broken; after sending an upload batch, pings are suppressed until transmission finishes (calculated at 1 KB/s) and confirmations arrive (silent disconnects during this window are undetected) |
+| Reconnection backoff | Full jitter backoff: retry n waits a random duration between 0 and max(spread, min(30 seconds, 1 second * 2ⁿ)); `spread` is provided by shared space shards based on connected device count (500 devices per second), and is 0 for private spaces |
+| After receiving 4000 | Waits a random duration between 0 and max(spread, 1 second), then pulls and reconnects; not treated as a failure |
+| Catching up in shared spaces | After receiving a hint or an unchainable notice, waits a random duration between 0 and max(spread, 1 second) before pulling; pull errors while connected retry with reconnection backoff |
+| Exports | 60 seconds after a write (`exportDelay`); doubles on failure up to 1 hour; exports for at most 10 minutes per alarm (`exportBudget`), failing if the exporter does not respond before timeout |
+| Point-in-time recovery | Private spaces only (`restoreSpace`), within 30 days; freshly created objects have no restorable history for roughly the first minute. Shared spaces do not support point-in-time recovery (cached chunks stored by position would splice histories before and after recovery); re-import to revert data; rebuilds (replacing with an empty object and re-importing) are supported |
+| Re-scanned tables after shared space deployment | Online devices are notified within 1 hour at latest (objects wake once per hour; earlier on server writes or new device pulls) |
+| Shared space cache | First request: 60 seconds; intermediate chunks: 1 day; final chunk: 5 seconds (cached only on the cloud by subscription; not cached on devices) |
 
-## 取舍与已知行为
+## Trade-offs and known behaviors
 
-- 重新提交一条扣下的写（`resubmit`），它没改到任何同步的行时，这条写不再扣着，也不多记一版。
-- 连带删：每批先数一遍要删几行、读回的值共多少字节，装得下才删。先数与再删都按外键的索引查子表，读的行数约是只删一遍的两倍。已有的表新加了外键（或是在云端开始给外键建索引之前建的）时，这个索引由后台任务建，建好之前连带删扫子表。
-- 后台任务每次 alarm 只做一步（建一个索引、删一张过了宽限期的表），一步要在一次调用的 CPU 上限之内（默认 30 秒，可在 wrangler 配置里调高）；单张表大到一步做不完时，对象会反复被重置。
-- 外键引用的不是主键时，连带删读回的被引用列也算进一次写的字节上限：删一张表的一批行、连带删出的各层，按删到现在的总和算（已经删完的那几层不减），好几层都引用非主键列时，比实际占的内存更早拒收。
-- 私有空间的下载进度是按字节估的比例，不数行：整份按已发改动的字符数 ÷（库文件的大小 − 提交记录的字节），增量按追过的提交记录的字节 ÷ 游标之后的；库文件里还有索引与 Syncline 自己的表，增量途中进入同步的表的重下不计进总共，已下超过总共时总共跟着涨。
-- 共用空间的整份下载按行报进度：总共是开始时订阅里各桶的行数之和（一行在几个桶里算几次），已下是扫过的行；增量不报。各桶的行数由云端记着：后台写让一行进出某个桶时，这次写每个变了行数的桶多 1 到 2 行写；部署改了一张表的桶规则、表进入同步时，这张表的行数由后台任务从头数（每步至多 2 万行，读整张表一遍；每步写这些行所在的不同桶的个数那么多行，按人分桶的大表数一遍约等于再写一遍表），数完之前开始的整份下载不报进度。
-- 共用空间清空重建（换一个空的对象再导入）后约 60 秒内，还不知道这一代的设备（新装的）可能拿到缓存里上一代的第一块；接着拉时云端认不出它带的上一代的游标，让它重置、重拉，60 秒内可能来回几次。已经知道这一代的设备不受影响。
-- 共用空间给没确认的分片再发一轮：对象在再发途中被重置时，最多晚一小时补发。
-- 共用空间的令牌变了（看得见的范围随之变）而 App 没调 `reconnect()`：连着的连接仍按旧令牌筛推送，到下一次 HTTP 拉取落地新范围才按新的；至迟在旧令牌到期后的那一分钟，分片关掉这条连接、设备取新令牌重连（至多一个令牌的有效期）。
-- 广播分片空闲一阵后被逐出内存，就不知道共用空间到了哪一版：下一次后台写时给这片连着的设备都推提示，设备走 HTTP 拉（经缓存），不直接收改动。写得稀的共用空间几乎每次写都这样。
-- 后台同步打开过库、App 回到前台接管时，沿用后台打开时的那份库：前台这次传的地址、token、表结构、本机专用的表、删掉的名字与校验都不生效。
-- 设备与云端对同一列的类型声明不一致时：放不进本机的列的值，打开时留在 `_extra`，收下时先存进本机另存的地方，都会报出来；这样的行被云端再改写一次，在线校验就对不上、重下它所在的那一段，之后对得上。
+- Resubmitting a held write (`resubmit`): If it modifies no synced rows, it is unheld without recording an extra commit.
+- Cascaded deletes: Each batch first counts how many rows to delete and the total bytes of read values, deleting only if they fit. Both counting and deleting query child tables via foreign-key indexes, reading roughly double the rows of a single-pass delete. When foreign keys are added to existing tables (or created before cloud foreign-key indexing was introduced), background maintenance builds this index; until built, cascaded deletes perform full table scans on child tables.
+- Background maintenance runs only one step per alarm (building one index, dropping one table past its grace period). Each step must finish within the CPU time limit of a single invocation (default 30 seconds, configurable in wrangler); if a single table is too large to complete in one step, the object resets repeatedly.
+- When foreign keys reference non-primary key columns, read values of referenced columns also count toward the single-write byte limit: deleting a batch of parent rows and cascaded child rows accumulates across all levels (without subtracting already-deleted levels). When multiple levels reference non-primary key columns, writes are rejected sooner than actual memory usage warrants.
+- Private space download progress is estimated by byte ratio, not row counts: full downloads compute emitted change characters / (database file size − commit log bytes); incremental downloads compute chased commit log bytes / bytes after cookie. The database file also contains indexes and Syncline internal tables; tables re-downloaded mid-incremental pull are not counted in the total, causing total bytes to expand when downloaded bytes exceed the total.
+- Shared space full downloads report progress by row count: total is the sum of row counts across subscribed buckets at start (counting rows repeatedly if present in multiple buckets); downloaded is scanned rows. Incremental pulls do not report progress. Bucket row counts are tracked by the cloud: when a server write moves a row in or out of a bucket, it adds 1 to 2 row writes per modified bucket; when deployment alters bucket rules or a table enters sync, background maintenance recounts table rows from scratch (up to 20,000 rows per step, reading the whole table once; each step writes as many rows as distinct buckets touched, so recounting large user-partitioned tables roughly equals rewriting the table), during which full downloads do not report progress.
+- Within roughly 60 seconds after a shared space rebuild (replacing with an empty object and re-importing), newly installed devices unaware of the new incarnation may receive the first chunk of the previous incarnation from cache. When resuming, the cloud rejects the previous incarnation cookie and instructs the device to reset and refetch, which may repeat several times within the 60-second window. Devices already aware of the new incarnation are unaffected.
+- Retrying broadcast rounds to unconfirmed shards in shared spaces: If the object resets during retransmission, redelivery may be delayed by up to 1 hour.
+- Token rotation in shared spaces (changing visible scope) without calling `reconnect()`: Active connections continue filtering live notices by the old token until the next HTTP pull lands the new scope. At latest within one minute after the old token expires, the shard closes the connection and the device reconnects with a fresh token (bounded by token lifetime).
+- Broadcast shards evicted from memory after idle lose track of the latest shared space version: On the next server write, the shard pushes hints to all connected devices, directing them to pull over HTTP (via cache) instead of streaming changes directly. Low-frequency shared spaces exhibit this on almost every write.
+- When background sync opens a database and the app resumes to the foreground and takes over, it reuses the database instance opened in the background: connection URL, token, schema, local-only tables, retired names, and validation passed in the foreground do not take effect.
+- Schema mismatches between device and cloud for column types: Values incompatible with local column types remain in `_extra` on open and are staged in local unknown storage on arrival, with warnings emitted. If the cloud modifies such rows again, online checksums will detect a mismatch and re-download that section, matching afterwards.
 
-## 关闭码
+## Close codes
 
-云端关掉 WebSocket 时给的码，设备都会自动处理：
+WebSocket close codes sent by the cloud; handled automatically by devices:
 
-| 码 | 原因 | 设备怎么做 |
+| Code | Reason | Device action |
 |---|---|---|
-| 4000 | 没有游标；私有空间另有：游标不在当前历史上（先整份重拉） | 见上文「时长」一节的「收到 4000 之后」 |
-| 1007 | 云端认不出推上去的这批：解析不了、超过上限、认不出哪条写是哪个客户端的第几条（设备的缺陷；只是一条写的改动认不出的，云端扣下这一条，不关连接） | 报 `uploadError`，这次打开之内不再推，下载照常；`sync()` 立刻失败，`resync({ discardPending: true })` 丢掉没上传的写才解开 |
-| 4001 | token 到期 | 退避后取新 token 重连 |
-| 4002 | 协议版本对不上，原因是云端的版本 | 云端的新：停下、`updateNeeded` 为真；云端的旧：退避后重连 |
-| 4003 | 表结构的指纹对不上（HTTP 下载回 412、正文是云端的表结构） | 先 HTTP 下载，由设备判断：兼容就照常连上；`retired`（用到了云端已删的表或列）：停下、`updateNeeded` 为真；`ahead`（云端还没有、或对不上）：退避后重连 |
-| 1011 | 上传处理不了（存储出错这类） | 退避后重连、重发 |
-| 1008 | 这个私有空间同时连着的太多，关掉最早连上的一条 | 退避后重连 |
-| 1013 | 上传超过写入额度（`writeQuota`）或当天的上限（`dailyWrites`，原因 `daily writes`） | 报 `uploadError`，退避后重连、重发 |
-| 1003 | 收到了非文本消息，或往共用空间推送 | 退避后重连 |
-| 其他（含 1006） | 部署、断网、握手被拒（401；网址的查询串认不出，400） | 退避后重连 |
+| 4000 | Missing cookie; in private spaces: cookie is off current history (requires full refetch) | See "After receiving 4000" under "Durations" above |
+| 1007 | Cloud rejects pushed batch: unparseable, exceeds limits, or cannot determine client mutation sequence (device defect; unparseable individual mutations are held without closing the connection) | Emits `uploadError`, stops pushing for the remainder of this session while downloads continue; `sync()` fails immediately; cleared only by `resync({ discardPending: true })` to drop pending writes |
+| 4001 | Token expired | Reconnects with fresh token after backoff |
+| 4002 | Protocol version mismatch, caused by cloud version | Cloud is newer: halts, `updateNeeded` is true; cloud is older: reconnects after backoff |
+| 4003 | Schema fingerprint mismatch (HTTP pull returns 412 with cloud schema body) | Downloads over HTTP first, evaluated on device: connects normally if compatible; `retired` (uses table or column deleted on cloud): halts, `updateNeeded` is true; `ahead` (cloud lacks tables or mismatches): reconnects after backoff |
+| 1011 | Upload processing failure (storage error, etc.) | Reconnects and retries push after backoff |
+| 1008 | Too many concurrent connections for this private space; closes the oldest connection | Reconnects after backoff |
+| 1013 | Upload exceeds write quota (`writeQuota`) or daily limit (`dailyWrites`, reason `daily writes`) | Emits `uploadError`, reconnects and retries push after backoff |
+| 1003 | Received non-text message, or push attempted on shared space | Reconnects after backoff |
+| Other (including 1006) | Deployment, network drop, rejected handshake (401; unrecognized URL query string, 400) | Reconnects after backoff |
 
-## 平台要求
+## Platform requirements
 
-- Cloudflare：DO 用 SQLite 存储；兼容日期不早于 2026-04-07（运行时自动回复设备的 Close 帧）。
-- 设备：iOS、Android 用 Syncline 的原生模块（要 development build，Expo Go 里没有）；web 的本机库在 OPFS，要浏览器的专用 Worker 支持 `createSyncAccessHandle`；同一个网站同一时刻只有一个标签页能开着库，另一个再开就报错。
-- `drizzle-orm` 1.0.0-rc.4。
+- Cloudflare: Durable Objects backed by SQLite storage; compatibility date no earlier than 2026-04-07 (runtime automatically replies to client Close frames).
+- Devices: iOS and Android require Syncline's native module (requires development build, not available in Expo Go); web local database runs in OPFS, requiring browser dedicated Web Workers to support `createSyncAccessHandle`; only one browser tab per site can keep the database open at any given moment; opening another tab throws an error.
+- `drizzle-orm` 1.0.0-rc.4.

@@ -7,12 +7,12 @@ import { serving } from '../test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test-storage.ts';
 import { Connection } from '../test-sync.ts';
 
-// 设备一侧随数据量、表数涨的工作量：每条断言一个与规模无关的上界
+// Device workload scaling with data volume and table count: asserts an invariant upper bound independent of scale.
 
 const item = sqliteTable('item', { id: text().primaryKey(), note: text() });
 const createItem = 'CREATE TABLE item (id TEXT PRIMARY KEY, note TEXT)';
 
-/** 设备每读本机一批要对的行之前调 before：设备一步读一批，步与步之间让出线程，下一步是一个计时器到时（这里没有连接，到时的只有这个） */
+/** Invokes before() prior to reading each local batch during verification: steps yield the thread, resuming on fired timer events. */
 function beforeEachBatch(storage: ReturnType<typeof deviceStorage>, before: () => void) {
   const rust = storage.database;
   const control = rust.control.bind(rust);
@@ -23,9 +23,10 @@ function beforeEachBatch(storage: ReturnType<typeof deviceStorage>, before: () =
 }
 
 /**
- * 空间里 rows 行，设备已整份同步；之后空间持续有写：每读本机 200 行（一批）就数一次，数到 every 的倍数时收下一次改动。
- * 每一轮：到了该要校验和的时刻（假的 Date 往前拨 61 秒）、设备带 checksum 拉一次、对一段；一轮对完（_syncline_verified.at > 0）就停，至多 maxRounds 轮。
- * 返回对完没有、每轮的结果（matched 对上一段，aborted 作罢，mismatch 对不上）
+ * Fully synced space with rows rows subject to continuous writes: counts every 200 local rows (one batch), receiving a change every `every` batches.
+ * In each round, when checksum verification is due (advancing fake Date by 61s), pulls with checksum and verifies one range.
+ * Stops once a full verification round completes (_syncline_verified.at > 0), up to maxRounds rounds.
+ * Returns completion status, outcomes per round ('matched', 'aborted', 'mismatch'), and total writes.
  */
 async function verifiedWhileWriting({ rows, every, maxRounds }: { rows: number; every: number; maxRounds: number }) {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -39,13 +40,13 @@ async function verifiedWhileWriting({ rows, every, maxRounds }: { rows: number; 
   captureReported();
   try {
     await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000_000));
-    // 之后才计数、才注入写
+    // Starts counting and injecting writes only after initial sync.
     const writes: Promise<unknown>[] = [];
     let written = 0;
     let batches = 0;
     beforeEachBatch(storage, () => {
       batches += 1;
-      // 下一批读之前，云端写了一行、设备收下
+      // Before reading the next batch, cloud mutates one row and device receives.
       if (batches % every === 0)
         setTimeout(() => {
           written += 1;
@@ -68,23 +69,24 @@ async function verifiedWhileWriting({ rows, every, maxRounds }: { rows: number; 
   }
 }
 
-// 云端一段至多 2 万行，5000 行（25 批）的空间一段就是整张表，每 10 批收下一次改动：段不变时每一轮都作罢、一轮对不完。
-// 作罢就把段减半（最小一段 = 一批）、一轮里只减不增：25 批的段至多减半 5 次到 1 批，其间每次作罢对应一次改动；
-// 之后每轮对一批，25 批共 25 轮，这 25 批里改动至多 3 次（每 10 批一次），各让一轮作罢；合计至多 5 + 25 + 3 = 33 轮，在 40 轮之内
-test('持续有写的空间上，校验和 40 轮内对完一轮', async () => {
+// Cloud verifies ranges up to 20k rows; in a 5,000-row space (25 batches), a single range spans the whole table, receiving changes every 10 batches.
+// Aborted rounds halve the range down to a single batch; a 25-batch range halves at most 5 times to 1 batch, each abort corresponding to a write.
+// Subsequently verifying 1 batch per round across 25 batches encounters at most 3 writes (every 10 batches), each aborting 1 round.
+// Total rounds: at most 5 + 25 + 3 = 33 rounds, well within 40.
+test('checksum verification finishes within 40 rounds under continuous writes', async () => {
   const { completed, outcomes, written } = await verifiedWhileWriting({ rows: 5000, every: 10, maxRounds: 40 });
   const count = (outcome: string) => outcomes.filter((one) => one === outcome).length;
-  // 写真的插进了对校验和的中途（读本机一批的语句换了写法就插不进，这条会无写地变绿）
+  // Writes genuinely interleave during verification; if batch statement formulation changes, writes fail to interleave.
   expect(
     { completed, written: written > 0 },
-    `${outcomes.length} 轮：对上 ${count('matched')} 段、作罢 ${count('aborted')} 次，写 ${written} 次`,
+    `${outcomes.length} rounds: matched ${count('matched')}, aborted ${count('aborted')}, wrote ${written}`,
   ).toEqual({
     completed: true,
     written: true,
   });
 });
 
-/** 500 张表、每张 10 列的声明 */
+/** Declaration of 500 tables with 10 columns each. */
 const manyTables = Array.from({ length: 500 }, (_, index) =>
   sqliteTable(`table_${index}`, {
     id: text().primaryKey(),
@@ -92,7 +94,7 @@ const manyTables = Array.from({ length: 500 }, (_, index) =>
   }),
 );
 
-test('握手带的表结构不随表数涨：500 张表、每张 10 列时，请求头与子协议里都只有指纹，不超过 1 KB', async () => {
+test('handshake schema payload does not grow with table count: remains a fingerprint under 1 KB across 500 tables', async () => {
   const creates = manyTables.map(
     (_, index) =>
       `CREATE TABLE table_${index} (id TEXT PRIMARY KEY, ${Array.from({ length: 9 }, (_, column) => `column_${column} ${column % 2 === 0 ? 'TEXT' : 'INTEGER'}`).join(', ')})`,
@@ -100,7 +102,7 @@ test('握手带的表结构不随表数涨：500 张表、每张 10 列时，请
   const { network } = serving(new Space(cloudStorage(...creates), manyTables));
   const device = new Device(deviceStorage(...creates), manyTables);
   const options = network.options(0);
-  // 截下设备真发出的：HTTP 拉取的请求头、拉完之后连 WebSocket 的子协议
+  // Intercepts outgoing requests: HTTP pull header and subsequent WebSocket subprotocol.
   let header = '';
   let protocol = '';
   const connection = new Connection(device.private, {
@@ -123,7 +125,5 @@ test('握手带的表结构不随表数涨：500 张表、每张 10 列时，请
   await vi.waitFor(() => expect(protocol).not.toBe(''));
   connection.stop();
   expect(header).not.toBe('');
-  expect(Math.max(header.length, protocol.length), `请求头里 ${header.length} 字节、子协议里 ${protocol.length} 字节`).toBeLessThanOrEqual(
-    1024,
-  );
+  expect(Math.max(header.length, protocol.length), `header ${header.length}B, subprotocol ${protocol.length}B`).toBeLessThanOrEqual(1024);
 });

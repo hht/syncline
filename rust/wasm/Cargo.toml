@@ -9,21 +9,21 @@ crate-type = ["cdylib"]
 
 [dependencies]
 syncline = { path = "../core" }
-# serialize：从整库导出恢复（测试里当作系统备份）；trace（与工作区开着的 hooks）：测试注入故障（faults）
+# serialize: restore from whole-database export (used as system backup in tests); trace (with workspace hooks): inject storage faults for tests
 rusqlite = { workspace = true, features = ["serialize", "trace"] }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
 
-# rusqlite 在 wasm 上用的 SQLite：它要的宿主函数（休眠、随机数、时钟、本地时间）用它带的 wasm-bindgen 实现；版本跟 rusqlite 用的那份
+# SQLite used by rusqlite on WebAssembly: host functions (sleep, random numbers, clock, local time) are implemented via its bundled wasm-bindgen; version matches rusqlite
 [target.'cfg(target_family = "wasm")'.dependencies]
 sqlite-wasm-rs = { version = "0.6.2", features = ["wasm-bindgen"] }
-# web 上的库文件放在 OPFS（src/opfs.rs）
+# Local database on the web is stored in OPFS
 sqlite-wasm-vfs = { version = "0.3.0", features = ["sahpool"] }
-# 导出的 async 函数（装 OPFS）经它变成 Promise，版本跟 wasm-bindgen
+# Exported async functions (installing OPFS) convert to Promise via this crate, version matches wasm-bindgen
 wasm-bindgen-futures = "=0.4.80"
 
-# 测试的构建打开：注入存储故障（src/faults.rs），核心收测试直接喂的拉取结果与消息（client 的 Probe）
+# Enabled for test builds: inject storage faults, receive directly fed pull results and messages via client Probe
 [features]
 testing = ["syncline/testing"]
 

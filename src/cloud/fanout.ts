@@ -1,54 +1,56 @@
 import { type Cookie, sameCookie } from '../common/protocol.ts';
 import type { Round } from './shared.ts';
 
-/** 扇出要的外部：分片、最新一版与一轮怎么算、怎么发、确认了怎么存 */
+/** Host environment for fanout: shard list, head cookie, round builder, delivery, failure reporter, and confirmed version persistence. */
 type Host = {
   shards: readonly string[];
   head: () => Cookie;
-  /** 从 from 到最新一版 head 的一轮（from 为 null：一轮也没发过，从 head 发一轮空的，分片据此知道这一代） */
+  /** Builds a round from `from` to `head` (`from` is null when no rounds have been sent yet; emits an empty round from `head` so shards learn the incarnation). */
   round: (from: Cookie | null, head: Cookie) => Round;
-  /** 发一轮给一个分片：返回了算送到，抛错算没送到 */
+  /** Sends a round to a shard: resolving indicates delivery, throwing indicates failure. */
   send: (shard: string, round: Round) => Promise<void>;
-  /** 一个分片没送到（send 抛的错） */
+  /** Reports a failed delivery to a shard. */
   failed: (shard: string, error: unknown) => void;
   /**
-   * 全部分片都确认到了 head：落库的这一版下次打开时交回构造函数。同步的部分（落库）与判断全部确认在同一段代码里，
-   * 中间插进来的写不会被盖掉；返回的 Promise 也等到它了结
+   * Called when all shards have confirmed through `head`: persisted version is provided back to constructor on next startup.
+   * Runs synchronously with all-shards-confirmed check to avoid race conditions with intervening writes; awaits returned promise.
    */
   confirmed: (head: Cookie) => void | Promise<void>;
 };
 
 /**
- * 共用空间把最新一版发给全部广播分片（照 model/Fanout.tla 的 FanTo(s)，每个分片各自一条）：一个分片从它确认到的那一版发到最新，
- * 送到了才前进，没送到的留给下次再发；同一时刻只有一轮在路上，在发时再叫它就排一轮在后面（已排着的就等那一轮），排着的一轮开始时才取最新一版，
- * 排进来之前提交的都在里面；卡住的分片只拖它自己。全部分片都确认到此刻的最新一版时报 confirmed（调用方落库），之后从它算起。
- * 不该知道的：分片是什么、怎么发、多久算卡住，确认的那一版怎么存、之后什么时候再叫。
+ * Fans out shared-space head updates to all broadcast shards (following FanTo(s) in model/Fanout.tla, running independently per shard):
+ * sends changes from each shard's last acknowledged version to head; advances only on successful delivery, leaving failures for retry;
+ * limits in-flight traffic to at most one round per shard at a time, queuing at most one subsequent round (which samples head at send time,
+ * including all commits prior to dispatch); stalled shards delay only themselves.
+ * When all shards acknowledge the current head, notifies confirmed (for storage persistence) and advances baseline.
+ * What this module should not know: shard implementation details, transport protocols, timeout thresholds, persistence storage mechanisms, or scheduling timers.
  */
 export class Fanout {
   readonly #host: Host;
-  /** 全部分片都确认到的那一版（落库的；null 是一轮也没发过）：落库的比实际的旧只会多发一轮重叠的，分片照收 */
+  /** Version acknowledged by all shards (persisted in storage; null if no round sent): a stale persisted version merely causes overlapping delivery that shards handle idempotently. */
   #confirmed: Cookie | null;
-  /** 各分片确认到的那一版（只在内存里）：不在里面的确认到 #confirmed */
+  /** Version acknowledged per shard (in-memory only); unlisted shards default to #confirmed. */
   readonly #acked = new Map<string, Cookie | null>();
-  /** 各分片在发的一轮，与排在它后面、还没开始的一轮 */
+  /** In-flight delivery promise per shard, and next queued delivery promise awaiting dispatch. */
   readonly #sending = new Map<string, Promise<boolean>>();
   readonly #queued = new Map<string, Promise<boolean>>();
-  /** 最新一版从各起点算出的一轮：同一个起点的分片发同一份 */
+  /** Cached rounds from distinct starting points to head: shards sharing the same starting version reuse the same round. */
   #rounds: { head: Cookie; from: Map<string, Round> } | undefined;
 
-  /** confirmed 是上次落库的全部确认到的那一版（没有是 null） */
+  /** Constructs a fanout coordinator; `confirmed` is the previously persisted all-shards-confirmed cookie (or null). */
   constructor(host: Host, confirmed: Cookie | null) {
     this.#host = host;
     this.#confirmed = confirmed;
   }
 
-  /** 全部分片都确认到了此刻的最新一版 */
+  /** Returns whether all shards have confirmed through the current head cookie. */
   allAcked() {
     const head = this.#host.head();
     return this.#host.shards.every((shard) => sameCookie(this.#ackedBy(shard), head));
   }
 
-  /** 发给全部分片（各自排队），等到都发完 */
+  /** Dispatches updates to all shards (each queuing independently) and awaits completion of currently scheduled rounds. */
   async deliver() {
     await Promise.all(this.#host.shards.map((shard) => this.#deliverTo(shard)));
   }
@@ -57,7 +59,7 @@ export class Fanout {
     return this.#acked.has(shard) ? (this.#acked.get(shard) ?? null) : this.#confirmed;
   }
 
-  /** 给一个分片发一轮：在发时排一轮在后面（已排着的就等那一轮）；返回送到了没有 */
+  /** Delivers a round to a shard: queues at most one pending round behind an in-flight delivery; returns whether delivery succeeded. */
   #deliverTo(shard: string): Promise<boolean> {
     const queued = this.#queued.get(shard);
     if (queued) return queued;
@@ -77,8 +79,8 @@ export class Fanout {
   }
 
   /**
-   * 从这个分片确认到的那一版发到最新；送到了它确认到最新一版。全部分片都确认到此刻的最新一版时报 confirmed；
-   * 在等的时候来了新的写就不是，那次写自己会再发一轮
+   * Sends changes from the shard's acknowledged version to head; marks head acknowledged on success.
+   * Reports confirmed when all shards have reached the current head; new writes during delivery advance head and trigger subsequent rounds.
    */
   async #sendTo(shard: string) {
     const head = this.#host.head();
@@ -100,7 +102,7 @@ export class Fanout {
     return true;
   }
 
-  /** 从 from 到 head 的一轮：同一个起点的分片发同一份 */
+  /** Returns a round from `from` to `head`: memoized across shards sharing the same starting version. */
   #roundFrom(from: Cookie | null, head: Cookie) {
     if (!this.#rounds || !sameCookie(this.#rounds.head, head)) this.#rounds = { head, from: new Map() };
     const key = from ? `${from.version}.${from.nonce}` : '';

@@ -9,31 +9,36 @@ import { encodePosition, landedAt, type Position, rangesOf, recognize } from './
 import { type Budget, Step, type Visible } from './read-step.ts';
 
 /**
- * 读取器：从一个位置往后读一块，私有与共用两种空间同一套。一轮里先扫描、后追尾巴：扫描集是这一轮的起点之后、水位及之前进入同步（含加列、
- * 共用空间改了可见范围）、现在仍在同步的表（整份的第一轮是水位时在同步的全部表），按表名、主键扫，每张先清掉再给当前看得见的行；
- * 增量的第一轮另把设备要求重下的表并进来，只清、只扫要求的那一段主键（按范围重下，校验和对不上之后）；尾巴从追到的一版追到最新，
- * 跳过扫描集里的表在它进入的那一版及之前的项（扫描已给了当前值）；追到最新时又有表进入，就开下一轮，水位换成最新一版。
- * 每次读过的行（含跳过的提交与项）与给出的字符到了预算就停，0 行也前进。位置随 cursor 往返，云端不记；位置里的各版不在当前历史上
- * （时间点恢复回滚过、截日志截过了、共用空间清空重建过）就认不出，由调用方定从头整份还是让设备重置。
- * 共用空间的设备只看得见订阅里的桶（Visible）：扫描一个桶一个桶地扫（一行在几个桶里就给几次，都是当前值），读当前值只给看得见的、看不见了给删除，
- * 尾巴只给改前或改后在订阅里的项；增量的第一轮另扫订阅里新加的桶（不清这张表）。
- * 照 model/Private.tla 的 HandlePull 与 FinalRows、Shared.tla 的 Chunks。
- * 不该知道的：块怎么回给设备（cursor 之外的字段、各客户端处理到第几条、扣下的写）、通知。
+ * Stateless pull reader: advances by one bounded chunk from an arbitrary position, shared across private and shared spaces.
+ * Each round scans first, then walks commit tail:
+ * the scan set includes tables entering sync (or modifying columns/bucket rules) between the round's start and watermark
+ * that remain in sync (full pull round 1 scans all synced tables at watermark), scanned in primary-key order with tables dropped before emitting visible rows;
+ * round 1 of incremental pulls incorporates requested range pull bounds, dropping and scanning only requested key intervals (following checksum mismatches);
+ * tail walking steps from tail version to head, skipping entries covered by the round's scan set;
+ * if tables enter sync while chasing head, opens another round with watermark advancing to head.
+ * Halts when budget is reached (row reads, including skipped entries, or serialized characters), advancing even if 0 rows qualify.
+ * Position travels with the cursor without cloud storage; cursors referencing off-history cookies
+ * (due to point-in-time recovery, log truncation, or shared space rebuild) fail recognition, allowing callers to full-pull or reset.
+ * Shared spaces restrict visibility to subscribed buckets (Visible): scanning proceeds lane by lane (emitting current values per bucket),
+ * fetches current values only for visible rows (emitting del if hidden), and restricts tail walking to entries touching subscribed buckets;
+ * round 1 of incremental pulls scans newly added buckets without table drops.
+ * Follows HandlePull and FinalRows in model/Private.tla, and Chunks in Shared.tla.
+ * What this module should not know: chunk response formatting (fields beyond cursor, client lmids, held writes), or push notifications.
  */
 
-/** 读出的一块：ops 是这一块的改动，共 chars 个字符；next 是接着读的位置（没有就是读到了最新，at 是这时的最新一版） */
+/** Chunk read result: `ops` contains emitted ops totaling `chars` characters; `next` is the cursor to resume (or `at` when head is reached). */
 export type Read = { ops: Op[]; chars: number } & ({ next: string } | { at: Cookie });
 
 /**
- * 从哪读起：position 是位置，fresh 是这次新起的（整份的新起要先清空），carried 是上一块随 cursor 带来的；
- * head 是起计划时已读过的最新一版（同一次同步的调用里不会有新提交，读的时候不再读一遍）
+ * Reader start configuration: `position` is starting position, `fresh` indicates first chunk of a plan (emitting clear on full pulls),
+ * `carried` is forwarded state from previous cursor, and `head` is head cookie at plan initialization (reused within synchronous calls).
  */
 export type Begun = { position: Position; fresh: boolean; carried?: unknown; head?: Cookie };
 
 export class Reader {
   readonly #query: Query;
   readonly #commits: Commits;
-  /** 同步表怎么读：扫描、读当前值，校验和也用它 */
+  /** Synced table read interface: scans, fetches current values, and supplies checksum tables. */
   readonly tables: TableReads;
 
   constructor(query: Query, tables: SQLiteTable[], commits: Commits) {
@@ -43,8 +48,9 @@ export class Reader {
   }
 
   /**
-   * 导出者（另一个消费者）读一块，至多 limit 个字符的改动：position 是它存着的位置（上一块的 next），认得出就接着读，没有或认不出（不在当前历史上）
-   * 就从头整份；都带上 seen，接着读的途中时间点恢复回滚过就认不出。next 是读完这块的位置，追到了最新一版（done）时落在这一版（landedAt）
+   * Polls a chunk for an external consumer (Exporter), bounded by `limit` op characters:
+   * resumes from `position` if valid and on history; starts full pull if omitted or invalid;
+   * attaches `seen` to detect PITR rollbacks. Returns next position, settling at {@link landedAt} on completion (`done`).
    */
   poll(position: string | undefined, limit: number): { ops: Op[]; next: string; done: boolean } {
     const head = this.#commits.head();
@@ -57,8 +63,9 @@ export class Reader {
   }
 
   /**
-   * 新起一个计划：from 是增量的起点（整份是 null，先清空），水位 to 是这一轮扫到哪一版进入的表（起点与最新之间任一版：私有空间取最新一版，
-   * 共用空间取最近的块边界，同一段时间里起拉的设备落在同一串网址上），尾巴从起点（整份从水位）追起；ranges 是要求重下的范围
+   * Initializes a reader plan: `from` is incremental start (null for full pulls with table clear);
+   * watermark `to` bounds entering tables scanned in this round (head for private spaces; latest chunk boundary for shared spaces to align edge cache URLs);
+   * tail walks from start version (or watermark for full pulls); `ranges` contains requested range pull bounds.
    */
   start(from: Cookie | null, to: Cookie, ranges: PullRange[] = []): Position {
     return {
@@ -70,14 +77,14 @@ export class Reader {
     };
   }
 
-  /** 带回的 cursor 认不认得出（recognize，照当前历史与同步表的主键）；认不出是 undefined */
+  /** Validates an echoed cursor against current history and synced table primary keys; returns undefined if unrecognized. */
   resume(text: string): Position | undefined {
     return recognize(text, { onHistory: (cookie) => this.#commits.onHistory(cookie), key: (table) => this.tables.key(table) });
   }
 
   /**
-   * 从 position 读一块：fresh 是这次新起的计划，整份的先清空；visible 是设备看得见哪些行（共用空间给）。还要接着读时，carry 由这一块
-   * （改动的字符数、扫描给出的行数、是否以整份开头、尾巴追到的一版、上一块随 cursor 带来的）算出要随 next 带着的，下一块原样交回
+   * Reads one chunk from `position`: `fresh` emits clear on full pull start; `visible` restricts shared space rows.
+   * `carry` computes opaque progress state from chunk stats (chars, scanned rows, full flag, tail version, prior carried) forwarded in `next`.
    */
   read(
     { position, fresh, carried, head = this.#commits.head() }: Begun,
@@ -100,7 +107,7 @@ export class Reader {
     const { position: at, chars, scanned } = step;
     if (done) return { ops, chars, at: head };
     const carrying = carry?.({ chars, scanned, full: at.full, at: at.tail.at, carried });
-    // 带着 seen 的（私有空间）换成这时的最新一版
+    // Updates `seen` to current head cookie for positions carrying it (private spaces).
     const next = encodePosition({ ...at, ...(at.seen && { seen: head }), ...(carrying === undefined ? {} : { carried: carrying }) });
     return { ops, chars, next };
   }

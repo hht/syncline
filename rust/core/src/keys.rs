@@ -1,12 +1,12 @@
-//! 主键怎么编成文本、一段主键怎么拼成 SQL 条件：设备另存与暂存的行按编成文本的主键认。
-//! 不该知道的：行怎么写、存它的表怎么建。
+//! Primary key serialization into text and how a primary key range forms SQL conditions: client-side mirror and staging rows are identified by text-encoded primary keys.
+//! What it should not know: how rows are written or how the tables storing them are created.
 
 use crate::change::Row;
 use crate::protocol::KeyRange;
 use crate::sql::{json_path, literal};
 use rusqlite::types::Value;
 
-/// 编成文本的主键：各列按列名排，同一个主键只有一种写法
+/// Primary key encoded as text: columns sorted by name so identical keys have exactly one representation.
 #[must_use]
 pub fn key_text(key: &Row) -> String {
     let mut sorted = key.0.clone();
@@ -14,7 +14,7 @@ pub fn key_text(key: &Row) -> String {
     Row(sorted).json()
 }
 
-/// 存着的主键（`key_text`，列 stored）里按 key 的先后取出各列的 SQL
+/// SQL expressions extracting each column in key order from a stored primary key (`key_text`, in column `stored`).
 #[must_use]
 pub fn stored_columns(key: &[String], stored: &str) -> Vec<String> {
     key.iter()
@@ -22,7 +22,7 @@ pub fn stored_columns(key: &[String], stored: &str) -> Vec<String> {
         .collect()
 }
 
-/// 主键在一段之内的条件（SQL 与参数）：columns 是按 key 的先后取出主键各列的 SQL，按行值比（SQLite 的 row value）；起止都没有是 1
+/// Condition matching primary keys within a range (SQL and parameters): `columns` are SQL expressions extracting primary key columns in key order, compared using row values; evaluates to 1 when both bounds are empty.
 /// @see <https://sqlite.org/rowvalue.html>
 #[must_use]
 pub fn in_range(columns: &[String], range: &KeyRange) -> (String, Vec<Value>) {
@@ -46,7 +46,7 @@ pub fn in_range(columns: &[String], range: &KeyRange) -> (String, Vec<Value>) {
     )
 }
 
-/// 一行里主键的各列（按 key 的先后），没有的列是 NULL
+/// Primary key column values from a row (in key order), defaulting missing columns to NULL.
 #[must_use]
 pub fn key_values(key: &[String], row: &Row) -> Vec<Value> {
     key.iter().map(|column| row.get(column).cloned().unwrap_or(Value::Null)).collect()
@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 主键按列名排后编成文本_一段拼成行值比较() {
+    fn primary_key_serializes_sorted_columns_and_range_builds_row_value_comparison() {
         let key = Row(vec![
             ("b".to_owned(), Value::Integer(2)),
             ("a".to_owned(), Value::Text("x".to_owned())),

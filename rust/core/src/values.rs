@@ -1,6 +1,6 @@
-//! App 的语句在 JSON 里怎么带参数、怎么给结果：值照 JS 的样子，整数与小数都是 number、文本是 string、空是 null，布尔绑成 0 与 1，
-//! BLOB 是字节的数组，参数里 JSON 写不了的无穷大写成 `{"real": "Infinity"}`。
-//! 不该知道的：语句从哪来、能不能执行。
+//! How app statements accept parameters and return results in JSON: values match JS representation—integers and floats are number, strings are string, null is null, booleans bind as 0 and 1,
+//! BLOB is byte array, and infinity not representable in JSON is encoded as `{"real": "Infinity"}`.
+//! What it should not know: where statements come from, whether they can execute.
 
 use crate::change::MAX_SAFE_INTEGER;
 use crate::error::Error;
@@ -8,30 +8,30 @@ use rusqlite::types::{Value, ValueRef};
 use rusqlite::{CachedStatement, Connection};
 use serde_json::{Number, Value as Json};
 
-/// 一条语句的结果：列名、各行的值、改到了几行
+/// Result of a statement: column names, rows of values, and rows changed.
 pub struct Statement {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Json>>,
     pub written: u64,
 }
 
-/// 执行一条语句：参数可以少给，没给的照 SQLite 是 NULL（只编译不执行的 EXPLAIN 不给参数）
+/// Executes a statement: fewer parameters may be provided, with unprovided parameters bound as NULL in SQLite (e.g. EXPLAIN compile-only passes no parameters).
 /// @see <https://sqlite.org/c3ref/bind_blob.html>
 ///
 /// # Errors
-/// 参数不是数、文本、布尔、空、字节的数组或无穷大；语句出错；读出了超出 JS 精确范围的整数。
+/// Returns an error if parameters are not numbers, strings, booleans, nulls, byte arrays, or infinity; if statement execution fails; or if an integer exceeds JS safe range.
 pub fn execute(db: &Connection, sql: &str, params: &[Json]) -> Result<Statement, Error> {
     run(db, db.prepare_cached(sql)?, params)
 }
 
-/// 执行一条编译好的语句（db 是它的连接），同 `execute`
+/// Executes a cached prepared statement (`db` is its connection), same as `execute`.
 ///
 /// # Errors
-/// 见 `execute`。
+/// See `execute`.
 pub fn run(db: &Connection, mut statement: CachedStatement<'_>, params: &[Json]) -> Result<Statement, Error> {
     let params = params.iter().map(value_of).collect::<Result<Vec<_>, _>>()?;
     let before = db.total_changes();
-    // 逐个绑定：rusqlite 的 query 要求个数相等
+    // Bind individually: rusqlite's query requires exact count match.
     for (index, value) in params.iter().enumerate() {
         statement.raw_bind_parameter(index + 1, value)?;
     }
@@ -45,8 +45,8 @@ pub fn run(db: &Connection, mut statement: CachedStatement<'_>, params: &[Json])
         );
     }
     drop(cursor);
-    // 列名在执行之后取：缓存的语句遇到改表结构（加列）时 SQLite 在执行时重新编译，执行之前取的是旧的
-    // @see <https://sqlite.org/c3ref/prepare.html>（sqlite3_prepare_v2 重新编译）
+    // Column names retrieved after execution: when cached statements encounter schema changes (added columns), SQLite recompiles on execution; retrieving before execution would yield stale names.
+    // @see <https://sqlite.org/c3ref/prepare.html> (sqlite3_prepare_v2 recompiles)
     let columns = statement.column_names().map(str::to_owned).collect();
     Ok(Statement {
         columns,
@@ -56,7 +56,7 @@ pub fn run(db: &Connection, mut statement: CachedStatement<'_>, params: &[Json])
 }
 
 /// # Errors
-/// 不是数、文本、布尔、空、字节的数组或无穷大。
+/// Returns an error if not a number, string, boolean, null, byte array, or infinity.
 pub fn value_of(json: &Json) -> Result<Value, Error> {
     Ok(match json {
         Json::Null => Value::Null,
@@ -64,7 +64,7 @@ pub fn value_of(json: &Json) -> Result<Value, Error> {
         Json::Number(number) => match (number.as_i64(), number.as_f64()) {
             (Some(integer), _) => Value::Integer(integer),
             (None, Some(real)) => Value::Real(real),
-            (None, None) => return Err(Error::Failed(format!("参数里的数读不出：{number}"))),
+            (None, None) => return Err(Error::Failed(format!("failed to parse number in parameters: {number}"))),
         },
         Json::String(text) => Value::Text(text.clone()),
         Json::Array(bytes) => Value::Blob(
@@ -72,25 +72,29 @@ pub fn value_of(json: &Json) -> Result<Value, Error> {
                 .iter()
                 .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
                 .collect::<Option<_>>()
-                .ok_or_else(|| Error::Failed(format!("BLOB 参数要是字节的数组：{json}")))?,
+                .ok_or_else(|| Error::Failed(format!("BLOB parameter must be an array of bytes: {json}")))?,
         ),
         Json::Object(object) => match object.get("real").and_then(Json::as_str).map(str::parse::<f64>) {
             Some(Ok(real)) if object.len() == 1 => Value::Real(real),
-            _ => return Err(Error::Failed(format!("参数只能是数、文本、布尔、空、字节的数组或无穷大：{json}"))),
+            _ => {
+                return Err(Error::Failed(format!(
+                    "parameters must be number, text, boolean, null, byte array, or infinity: {json}"
+                )));
+            }
         },
     })
 }
 
 /// # Errors
-/// 超出 JS 精确范围的整数、JSON 写不了的数、不是 UTF-8 的文本。
+/// Returns an error on integers outside JS safe range, numbers not representable in JSON, or invalid UTF-8 text.
 pub fn json_of(value: ValueRef<'_>) -> Result<Json, Error> {
     Ok(match value {
         ValueRef::Null => Json::Null,
         ValueRef::Integer(integer) if integer.abs() <= MAX_SAFE_INTEGER => Json::from(integer),
-        ValueRef::Integer(integer) => return Err(Error::Failed(format!("整数超出 JS 能精确表示的范围：{integer}"))),
-        // SQLite 不存 NaN（存成 NULL）；无穷大 JSON 写不了
+        ValueRef::Integer(integer) => return Err(Error::Failed(format!("integer outside JS safe integer range: {integer}"))),
+        // SQLite does not store NaN (stored as NULL); infinity cannot be written in JSON.
         ValueRef::Real(real) => {
-            Json::Number(Number::from_f64(real).ok_or_else(|| Error::Failed(format!("读出了 JSON 写不了的数：{real}")))?)
+            Json::Number(Number::from_f64(real).ok_or_else(|| Error::Failed(format!("number not representable in JSON: {real}")))?)
         }
         ValueRef::Text(text) => Json::String(
             std::str::from_utf8(text)

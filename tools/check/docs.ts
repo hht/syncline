@@ -1,19 +1,19 @@
 import { dirname, join } from 'node:path';
 import type { Problem, SourceText } from './problem.ts';
 
-/** 某个二级标题下的各行，带 1 起始的行号 */
+/** Lines under an H2 heading with 1-based line numbers. */
 function section(text: string, heading: string) {
   const lines = text.split('\n');
   const start = lines.indexOf(`## ${heading}`);
-  // 标题被改名时要报错，否则对照空内容会直接通过
-  if (start === -1) throw new Error(`缺少小节 ## ${heading}`);
+  // Throw an error if the heading was renamed; otherwise matching against empty content would falsely pass.
+  if (start === -1) throw new Error(`missing section ## ${heading}`);
   const end = lines.findIndex((line, index) => index > start && line.startsWith('## '));
   return lines.slice(start, end === -1 ? undefined : end).map((text, index) => ({ text, line: start + index + 1 }));
 }
 
 const problem = (file: string, line: number, message: string): Problem => ({ file, line, rule: 'docs', message });
 
-/** 相对链接按文档所在目录解析；反引号里以仓库顶层目录开头的是仓库路径 */
+/** Relative links resolve against the document directory; backticked paths starting with top-level directories are repo paths. */
 function referencedPaths(path: string, text: string) {
   return text.split('\n').flatMap((line, index) => [
     ...[...line.matchAll(/\]\(([^)#\s]+)[^)]*\)/g)]
@@ -28,13 +28,14 @@ export function checkPaths(docs: SourceText[], exists: (path: string) => boolean
   return docs.flatMap(({ path, text }) =>
     referencedPaths(path, text)
       .filter(({ target }) => !exists(target))
-      .map(({ target, line }) => problem(path, line, `${target} 不存在`)),
+      .map(({ target, line }) => problem(path, line, `${target} does not exist`)),
   );
 }
 
 /**
- * 文档写的源码路径：反引号里以 .ts、.mjs、.tla、.cfg 结尾的。带目录的按仓库根或 src/ 认，只写文件名的在仓库里要正好一个
- * （同名的有两个时删掉一个，引用照样认得出，所以要写带目录的）；别的（接入方的 app.json、生成的缓存、包的入口名）不当路径。files 是仓库里的文件
+ * Source paths in docs: backticked strings ending in .ts, .mjs, .tla, .cfg. Paths with directories resolve against repo root or src/;
+ * bare filenames must match exactly one file in the repo (if two files share a name, deleting one leaves the reference recognizable,
+ * so require a directory prefix); others (integrator app.json, generated cache, package entry points) are not treated as paths. `files` are files in the repo.
  */
 export function checkPackagePaths(docs: SourceText[], files: string[]): Problem[] {
   const inRepo = new Set(files);
@@ -44,10 +45,10 @@ export function checkPackagePaths(docs: SourceText[], files: string[]): Problem[
     named.set(name, (named.get(name) ?? 0) + 1);
   }
   const wrong = (target: string) => {
-    if (target.includes('/')) return inRepo.has(target) || inRepo.has(`src/${target}`) ? undefined : `${target} 不存在`;
+    if (target.includes('/')) return inRepo.has(target) || inRepo.has(`src/${target}`) ? undefined : `${target} does not exist`;
     const count = named.get(target) ?? 0;
-    if (count === 0) return `${target} 不存在`;
-    return count > 1 ? `${target} 有 ${count} 个，写带目录的路径` : undefined;
+    if (count === 0) return `${target} does not exist`;
+    return count > 1 ? `${target} has ${count} matches; use a path with its directory` : undefined;
   };
   return docs.flatMap(({ path, text }) =>
     text.split('\n').flatMap((line, index) =>
@@ -60,31 +61,33 @@ export function checkPackagePaths(docs: SourceText[], files: string[]): Problem[
 }
 
 export function checkCommands(agents: string, scripts: string[]): Problem[] {
-  const lines = section(agents, '命令');
+  const lines = section(agents, 'Commands');
   const used = lines.flatMap(({ text, line }) => [...text.matchAll(/`pnpm ([\w:-]+)/g)].map((match) => ({ name: match[1] ?? '', line })));
   const names = new Set(used.map((command) => command.name));
   return [
     ...used
       .filter(({ name }) => !scripts.includes(name))
-      .map(({ name, line }) => problem('AGENTS.md', line, `pnpm ${name} 没有对应的脚本`)),
+      .map(({ name, line }) => problem('AGENTS.md', line, `pnpm ${name} has no matching script`)),
     ...scripts
       .filter((script) => !names.has(script))
-      .map((script) => problem('AGENTS.md', lines[0]?.line ?? 1, `脚本 ${script} 未写进命令一节`)),
+      .map((script) => problem('AGENTS.md', lines[0]?.line ?? 1, `script ${script} is not listed in the Commands section`)),
   ];
 }
 
-/** 文档提到门禁时写「——门禁 `名字`」，名字须对应 pnpm check 与钩子里的门禁；门禁实现的规则本身写在门禁的注释与报错里，不要求文档声明 */
+/** Documents referencing gates write "— gate `<name>`", where names must match gates in pnpm check and git hooks; rules implemented by gates belong in gate comments and error messages, not claimed in docs. */
 export function checkGateClaims(docs: SourceText[], gates: string[]): Problem[] {
   const claims = docs.flatMap(({ path, text }) =>
     text.split('\n').map((line, index) => ({
       file: path,
       line: index + 1,
-      names: [...(line.match(/门禁((?: `[\w-]+`)+)/)?.[1]?.matchAll(/`([\w-]+)`/g) ?? [])].map((match) => match[1] ?? ''),
-      freeText: /门禁[：:]/.test(line),
+      names: [...(line.match(/\bgate((?: `[\w-]+`)+)/i)?.[1]?.matchAll(/`([\w-]+)`/g) ?? [])].map((match) => match[1] ?? ''),
+      freeText: /(?:— ?|\*\*)gate[：:]/i.test(line),
     })),
   );
   return claims.flatMap(({ file, line, names, freeText }) => [
-    ...names.filter((name) => !gates.includes(name)).map((name) => problem(file, line, `门禁 ${name} 不存在；还没做的写「待落地：…」`)),
-    ...(freeText ? [problem(file, line, '门禁要写成 门禁 `门禁名`，还没做的写「待落地：…」')] : []),
+    ...names
+      .filter((name) => !gates.includes(name))
+      .map((name) => problem(file, line, `gate ${name} does not exist; write "TODO: ..." for unimplemented gates`)),
+    ...(freeText ? [problem(file, line, 'write gate references as gate `<name>`, or "TODO: ..." for unimplemented gates')] : []),
   ]);
 }

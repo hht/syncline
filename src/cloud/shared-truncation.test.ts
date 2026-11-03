@@ -4,10 +4,12 @@ import { admin, contents, day, landedRequest, program, pullAll, rules, schema } 
 import { cloudStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
 
-// 共用空间截日志（模型 Shared.tla 的 Truncate）：日志按字节封顶，截掉最早的；空间的这一代另记一行，截掉第 0 版也还在；
-// 游标、拉到一半的位置早于下限的回 reset，设备清空后从头整份；块边界随截掉的提交一起删
+// Shared space log truncation (Truncate in model/Shared.tla): commit log is capped by byte size, purging the oldest entries;
+// space incarnation is stored independently so truncating version 0 preserves incarnation;
+// cookies and in-flight positions older than log floor receive reset responses to clear and full-pull;
+// chunk boundaries are pruned along with truncated commits.
 
-/** 一个日志上限调小的共用空间，写了 count 次（几行轮着改，数据不涨、日志涨） */
+/** Shared space with lowered commit log byte cap, written `count` times (cyclically updating rows so log grows without table data growth). */
 function written(count: number) {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [program, day], { shared: { buckets: rules, chunkRows: 3 }, commitFloor: 2_000 });
@@ -20,7 +22,7 @@ const truncateAll = (space: Space) => {
   while (space.truncate());
 };
 
-test('截日志截掉了第 0 版：空间的这一代不变，发给分片的一轮、拉取的块照样带它', () => {
+test('truncating version 0 preserves space incarnation across broadcast rounds and pull chunks', () => {
   const { cloud, space } = written(10);
   const incarnation = space.round(1_000).incarnation;
   space.mutate((tx) => tx.upsert(program, { id: 'q', status: 'published' }));
@@ -32,7 +34,7 @@ test('截日志截掉了第 0 版：空间的这一代不变，发给分片的�
   expect(pullAll(space, admin, { cookie: null }).at(-1)).toMatchObject({ incarnation });
 });
 
-test('游标早于日志下限：回 reset，设备清空后从头整份，与现在的一致；拉到一半的位置早于下限也回 reset', () => {
+test('cookie older than log floor receives reset response, prompting device to clear and full-pull to match current head; in-flight position older than floor also resets', () => {
   const { space } = written(5);
   const early = pullAll(space, admin, { cookie: null });
   const half = space.pullShared({ cookie: null }, admin, 50) as Chunk;
@@ -48,7 +50,7 @@ test('游标早于日志下限：回 reset，设备清空后从头整份，与�
   expect((again.at(-1) as Poke).cookie).toEqual(space.head());
 });
 
-test('块边界随截掉的提交一起删：只留日志下限之后的', () => {
+test('chunk boundaries prune alongside truncated commits, retaining only boundaries strictly above log floor', () => {
   const { cloud, space } = written(400);
   truncateAll(space);
   const [low] = cloud.sql.exec('SELECT version FROM _syncline_low').toArray();

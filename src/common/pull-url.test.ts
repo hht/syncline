@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest';
 import { parsePullBody, parsePullRequest, pullBody, pullURL } from './pull-url.ts';
 
-// 拉取的请求：共用空间的放进网址，私有空间的放进 POST 的正文，都在云端的边界认回来
+// Pull requests: shared space requests are encoded in the URL, private space requests in POST bodies, both validated at cloud boundaries.
 
-test('私有空间的请求随正文来回，原样认回；按范围重下同一张表两项、不是对象、表名是空串、起止的值存不下的都拒掉', () => {
+test('round-trips private space pull bodies and rejects duplicate tables, non-objects, empty table names, or unrepresentable bounds in ranges', () => {
   const ranges = [{ table: 'set', after: { workoutId: 'w1', index: 0 } }, { table: 'workout', until: { id: 'w4' } }, { table: 'gone' }];
   const request = {
     cookie: { version: 3, nonce: 7 },
@@ -25,10 +25,10 @@ test('私有空间的请求随正文来回，原样认回；按范围重下同�
     [{ table: 'a', after: { id: [1] } }],
     [{ table: '' }],
   ])
-    expect(() => parsePullBody(JSON.stringify({ cookie: null, ranges: bad })), JSON.stringify(bad)).toThrow('格式不对');
+    expect(() => parsePullBody(JSON.stringify({ cookie: null, ranges: bad })), JSON.stringify(bad)).toThrow('Malformed');
 });
 
-test('私有空间的正文多了设备不会发的项、各项的类型不对：拒掉', () => {
+test('rejects unexpected properties or mismatched property types in private space pull bodies', () => {
   for (const body of [
     {},
     { cookie: null, landed: 'x' },
@@ -40,14 +40,14 @@ test('私有空间的正文多了设备不会发的项、各项的类型不对�
     { cookie: null, toString: 1 },
     JSON.parse('{"cookie":null,"__proto__":{"cursor":"c"}}'),
   ])
-    expect(() => parsePullBody(JSON.stringify(body)), JSON.stringify(body)).toThrow('格式不对');
+    expect(() => parsePullBody(JSON.stringify(body)), JSON.stringify(body)).toThrow('Malformed');
   expect(() => parsePullBody('not json')).toThrow();
 });
 
-test('网址只认共用空间与连接的几个参数：私有空间的项放进网址是设备不会发的，拒掉', () => {
+test('accepts only recognized shared space and connection query parameters, rejecting private space parameters in URLs', () => {
   const request = { cookie: { version: 3, nonce: 7 }, cursor: 'c', landed: 'l', atLeast: 2, incarnation: 5 };
   expect(parsePullRequest(new URL(pullURL('https://sync.test/catalog', request)))).toEqual(request);
   expect([...new URL(pullURL('https://sync.test/space')).searchParams.keys()]).toEqual(['v']);
   for (const name of ['client', 'range', 'refetch'])
-    expect(() => parsePullRequest(new URL(`${pullURL('https://sync.test/space')}&${name}=1`))).toThrow('格式不对');
+    expect(() => parsePullRequest(new URL(`${pullURL('https://sync.test/space')}&${name}=1`))).toThrow('Malformed');
 });

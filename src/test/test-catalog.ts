@@ -7,8 +7,8 @@ import type { PullRequest } from '../common/pull-url.ts';
 import type { Shared } from './test-device.ts';
 import { cloudStorage } from './test-storage.ts';
 
-// 共用空间拉取的测试共用：计划与计划日两张表，公开（已发布的计划、给公开看的计划日）与全部两条桶规则，
-// 一块块拉到末块、按顺序应用各块；设备一侧照自己的请求拉到没有暂存的块
+// Shared space pull test fixtures: program and day tables, public (published programs and public days) and all bucket rules.
+// Pulls chunks sequentially to final chunk; device pulls following its own requests until no staged chunks remain.
 
 export const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
 export const day = sqliteTable('day', {
@@ -23,17 +23,17 @@ export const rules = {
   all: { program: {}, day: {} },
 } satisfies BucketRules;
 
-/** 一份订阅：几个桶编成规范写法；指纹就用规范写法本身（测试里不另算哈希，只要不同的订阅不同） */
+/** Creates a subscription descriptor: canonicalizes buckets; uses JSON representation as digest fingerprint in tests. */
 export function subscribed(...buckets: Bucket[]) {
   const subscription = buckets.map(bucketId).sort();
   return { subscription, sub: JSON.stringify(subscription) };
 }
 
-/** 看公开的与看全部的两种设备 */
+/** Viewers subscribing to public bucket, and admins subscribing to all. */
 export const viewer = subscribed(['public']);
 export const admin = subscribed(['all']);
 
-/** 共用空间：每满 3 行改到的行一个块边界；一次后台写插一个计划与它的计划日 */
+/** Shared space: chunk boundary every 3 changed rows; helper inserts a program and its day. */
 export function catalog() {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [program, day], { shared: { buckets: rules, chunkRows: 3 } });
@@ -45,9 +45,7 @@ export function catalog() {
   return { cloud, space, publish };
 }
 
-/**
- * 一块块拉到末块，返回各块；request 是第一个请求，之后带上它的游标与落地的订阅、上一块的 next（照共用空间的设备），一块至多给 limit 个字符的改动
- */
+/** Pulls chunks sequentially until final chunk, returning all chunks; paginates via cursor using next token. */
 export function pullAll(space: Space, who: ReturnType<typeof subscribed>, request: PullRequest, limit?: number) {
   const chunks: (Poke | Chunk | Reset)[] = [];
   for (let next: PullRequest = request; chunks.length < 50; ) {
@@ -56,13 +54,13 @@ export function pullAll(space: Space, who: ReturnType<typeof subscribed>, reques
     if (!('next' in chunk) || 'cookie' in chunk) return chunks;
     next = { ...request, cursor: chunk.next };
   }
-  throw new Error('拉不完');
+  throw new Error('pull did not complete');
 }
 
-/** 共用空间拉一块：一块至多给 1 个字符的改动，即每块一行（每块至少前进一步） */
+/** Pulls a single chunk from shared space: capped at 1 character limit, forcing 1 row per chunk. */
 export const pullOne = (space: Space, request: PullRequest) => space.pullShared(request, viewer, 1);
 
-/** 设备照自己的请求一块块拉，直到没有暂存的块；serve 决定每个请求拿到什么（默认按公开的订阅每块一行现算），返回发出的请求 */
+/** Device pulls chunks sequentially until no staged chunks remain; returns issued requests. */
 export async function pullRest(
   catalog: Shared,
   space: Space,
@@ -77,13 +75,13 @@ export async function pullRest(
   return requests;
 }
 
-/** 落在末块那一版的设备接着拉的请求：末块的游标与它按的订阅 */
+/** Generates subsequent pull request after landing final chunk: matches final cookie and landed subscription. */
 export function landedRequest(chunks: (Poke | Chunk | Reset)[]): PullRequest {
   const last = chunks.at(-1) as Poke;
   return { cookie: last.cookie, ...(last.landed === undefined ? {} : { landed: last.landed }) };
 }
 
-/** 按顺序应用各块得到的表：键是 表名/主键 */
+/** Reconstitutes table contents by applying chunk ops sequentially; returns sorted table/key identifiers. */
 export function contents(chunks: (Poke | Chunk | Reset)[]) {
   const rows = new Map<string, unknown>();
   const remove = (prefix: string) => {

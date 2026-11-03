@@ -7,14 +7,17 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import kotlin.concurrent.thread
 
 /**
- * JS 与 Rust 的设备一侧之间（rust/native）：每开一个库起一个句柄，调用照原样（JSON）交给它；一条读取线程反复等它交回的，转成 message 事件给 JS。
- * 交回空（库关了）时读取线程放掉句柄。库文件在 App 的数据库目录（Context.getDatabasePath）。
- * 开发时重新加载 JS，模块销毁：开着的库都关掉（新的 JS 会重新打开）。
- * 不该知道的：调用里是什么。
+ * Bridges JavaScript and the native Rust sync engine (`rust/native`).
+ *
+ * Allocates a handle per opened database and forwards calls as raw JSON. A dedicated reader thread awaits emitted
+ * responses and forwards them to JavaScript via `message` events. When null is returned (database closed), the reader thread
+ * frees the handle. Database files are stored under the app database directory (`Context.getDatabasePath`).
+ * Closes all active databases when the module is destroyed on JS reload during development.
+ * What this class must not know: Payload contents inside calls and responses.
  * @see https://docs.expo.dev/modules/module-api/
  */
 class SynclineModule : Module() {
-  /** 开着的库，按 JS 那边的句柄号；改动与用句柄都在锁里，读取线程放掉句柄前先从这里删掉 */
+  /** Active database handles keyed by JavaScript handle ID; mutations and access are synchronized on handles. */
   private val handles = HashMap<Int, Long>()
   private var next = 0
 

@@ -1,5 +1,6 @@
-//! 接入方的本机写：开着时执行语句，结束时回滚或提交，提交前有改到的行先交 JS 按 Standard Schema 查，查过再提交，出错回滚并回 App 这个错。
-//! 不该知道的：改动怎么记、怎么上传。
+//! Integrator local writes: executes statements while open, rolls back or commits on finish,
+//! sending modified rows to JS for Standard Schema validation before commit; rolls back and fails the app call on validation or execution errors.
+//! What it should not know: how changes are recorded or uploaded.
 
 use super::Client;
 use super::input::Invalid;
@@ -9,14 +10,14 @@ use crate::sync::instructions::Instruction;
 use crate::values;
 use serde_json::{Value as Json, json};
 
-/// 开着的本机写：begin 的 id；提交前在等 JS 查 Standard Schema 时是 end 的 id
+/// Open local write: `id` is the `begin` call ID; `validating` holds the `end` call ID while awaiting JS Standard Schema validation.
 pub(super) struct Write {
     pub(super) id: u64,
     pub(super) validating: Option<u64>,
 }
 
 impl Client {
-    /// 在开着的本机写（write 是 begin 的 id）里执行一条语句，给出结果的行
+    /// Executes a statement within an open local write (`write` is the `begin` call ID), returning result rows.
     pub(super) fn execute(&mut self, write: u64, sql: &str, params: &[Json]) -> Result<Json, Failure> {
         match &self.write {
             Some(open) if open.id == write && open.validating.is_none() => self
@@ -28,18 +29,18 @@ impl Client {
                 })
                 .map(|statement| json!(statement.rows))
                 .map_err(Failure::from),
-            _ => Err(Failure::new("这次本机写已经结束")),
+            _ => Err(Failure::new("this local write has already finished")),
         }
     }
 
-    /// 结束开着的本机写：回滚，或提交（有要按 Standard Schema 查的行就先交 JS 查）
+    /// Ends an open local write: rolls back, or commits (sending modified rows to JS if validation is required).
     pub(super) fn end(&mut self, id: u64, write: u64, commit: bool) {
         if !self
             .write
             .as_ref()
             .is_some_and(|open| open.id == write && open.validating.is_none())
         {
-            return self.reply(id, Err(Failure::new("这次本机写已经结束")));
+            return self.reply(id, Err(Failure::new("this local write has already finished")));
         }
         if !commit {
             let aborted = self.device.abort_write().map_err(Failure::from);
@@ -58,7 +59,7 @@ impl Client {
         }
     }
 
-    /// JS 查过了改到的行：不合就回滚，回 App 不合声明的错；查的时候出了错也回滚，回 App 这个错
+    /// Handles JS validation response: rolls back and returns validation or execution errors to app, or commits if valid.
     pub(super) fn validated(&mut self, write: u64, invalid: Option<Invalid>, error: Option<String>) {
         let Some(id) = self.write.as_ref().filter(|open| open.id == write).and_then(|open| open.validating) else {
             return;
@@ -80,7 +81,7 @@ impl Client {
         }
     }
 
-    /// 本机写出错：回滚，回 App 这个错
+    /// Aborts a local write on error: rolls back and replies to app with failure.
     pub(super) fn abort(&mut self, id: u64, error: Failure) {
         if let Err(abort) = self.device.abort_write() {
             self.out.report(abort);

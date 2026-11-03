@@ -6,12 +6,12 @@ import { captureReported } from '../test/test-errors.ts';
 import { createWorkout, putWorkout, tables, workouts } from '../test/test-schema.ts';
 import { deviceStorage, failOnce, injectedError } from '../test/test-storage.ts';
 
-// 分块拉取的块在 SQLite 里一次落地：结果要与按到达的顺序一条条写相同
+// Chunked pull lands in SQLite in a single transaction: result must match writing one by one in arrival order.
 
 const later = (id: string, row: Record<string, unknown> = {}): Op => ({ op: 'put', table: 'later', key: { id }, row: { id, ...row } });
 const del = (id: string): Op => ({ op: 'del', table: 'workout', key: { id } });
 
-/** 一台设备收下整份拉取：chunks 是各块的改动，最后一块是末块 */
+/** One device receives full sync: chunks are changes across chunks, final chunk is last. */
 async function pulledInChunks(chunks: Op[][]) {
   const storage = deviceStorage(createWorkout, 'CREATE TABLE plan (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables);
@@ -32,43 +32,43 @@ async function pulledInChunks(chunks: Op[][]) {
   return { storage, device, changed };
 }
 
-test('同一行跨块改了几次：只留最后一条——put 整行覆盖，del 删掉，删了再 put 又回来；块与块之间不生效', async () => {
+test('same row modified multiple times across chunks: only last survives (put overwrites full row, del deletes, put after del restores); no effect between chunks', async () => {
   const { storage, changed } = await pulledInChunks([
-    [{ op: 'clear' }, putWorkout('w1', '一'), putWorkout('w2', '二'), putWorkout('w3', '三')],
-    [putWorkout('w1', '一改'), del('w2'), putWorkout('w3', null)],
-    [del('w3'), putWorkout('w3', '三回来'), putWorkout('w4', '四')],
+    [{ op: 'clear' }, putWorkout('w1', 'one'), putWorkout('w2', 'two'), putWorkout('w3', 'three')],
+    [putWorkout('w1', 'one updated'), del('w2'), putWorkout('w3', null)],
+    [del('w3'), putWorkout('w3', 'three restored'), putWorkout('w4', 'four')],
   ]);
   expect(workouts(storage)).toEqual([
-    { id: 'w1', note: '一改' },
-    { id: 'w3', note: '三回来' },
-    { id: 'w4', note: '四' },
+    { id: 'w1', note: 'one updated' },
+    { id: 'w3', note: 'three restored' },
+    { id: 'w4', note: 'four' },
   ]);
   expect(changed).toEqual([['workout']]);
 });
 
-test('暂存按主键去重：同一行改几次只存一份；本机还没有的表的复合主键，各块里列的先后不同也认成同一行', async () => {
+test('staging dedupes by primary key: multiple modifications to same row stored once; composite primary key for undeclared table recognizes same row regardless of column order', async () => {
   const pair = (key: Record<string, unknown>, note: string): Op => ({ op: 'put', table: 'pair', key, row: { ...key, note } });
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
-  // 不以清空开头（增量的尾巴）：同步表的行也进暂存，不进影子表
+  // Does not start with clear (tail of incremental sync): synced table rows also staged rather than in shadow table
   await device.private.receive({
     base: null,
     next: 'n1',
-    patch: [putWorkout('w1', '一'), putWorkout('w1', '二'), pair({ a: 1, b: 2 }, '先'), pair({ b: 2, a: 1 }, '后')],
+    patch: [putWorkout('w1', 'one'), putWorkout('w1', 'two'), pair({ a: 1, b: 2 }, 'first'), pair({ b: 2, a: 1 }, 'last')],
   });
   expect(storage.sql.exec("SELECT tbl, kind, row FROM _syncline_staged WHERE key <> '' ORDER BY tbl").toArray()).toEqual([
-    { tbl: 'pair', kind: 'put', row: '{"b":2,"a":1,"note":"后"}' },
-    { tbl: 'workout', kind: 'put', row: '{"id":"w1","note":"二"}' },
+    { tbl: 'pair', kind: 'put', row: '{"b":2,"a":1,"note":"last"}' },
+    { tbl: 'workout', kind: 'put', row: '{"id":"w1","note":"two"}' },
   ]);
   await device.private.receive({ base: null, cursor: 'n1', cookie: { version: 9, nonce: 1 }, lmids: {}, patch: [] });
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: '二' }]);
-  expect(storage.sql.exec('SELECT row FROM _syncline_unknown').toArray()).toEqual([{ row: '{"b":2,"a":1,"note":"后"}' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'two' }]);
+  expect(storage.sql.exec('SELECT row FROM _syncline_unknown').toArray()).toEqual([{ row: '{"b":2,"a":1,"note":"last"}' }]);
 });
 
-test('本机表定义里没有的列存进 _extra，没有多出的列时是 NULL；本机还没有的表的行按主键存：写两次只留最后一次的，删除按主键删', async () => {
+test('columns absent from local table definition stored in _extra, NULL when no extra columns; undeclared table rows stored by primary key: overwrites keep last, del removes by pk', async () => {
   const { storage } = await pulledInChunks([
-    [{ op: 'clear' }, putWorkout('w1', '一', { rpe: 8 }), later('l1'), later('l2', { v: 1 })],
-    [putWorkout('w2', '二'), { op: 'del', table: 'later', key: { id: 'l1' } }, later('l2', { v: 2 })],
+    [{ op: 'clear' }, putWorkout('w1', 'one', { rpe: 8 }), later('l1'), later('l2', { v: 1 })],
+    [putWorkout('w2', 'two'), { op: 'del', table: 'later', key: { id: 'l1' } }, later('l2', { v: 2 })],
   ]);
   expect(storage.sql.exec('SELECT id, _extra FROM workout ORDER BY id').toArray()).toEqual([
     { id: 'w1', _extra: '{"rpe":8}' },
@@ -79,20 +79,20 @@ test('本机表定义里没有的列存进 _extra，没有多出的列时是 NUL
   ]);
 });
 
-test('整份拉到一半从头重拉（又一块以清空开头）：之前暂存的都作废，本机表只有重拉之后的', async () => {
+test('full sync restarts midway from scratch (another chunk starts with clear): previously staged chunks invalidated, local tables contain only rows after restart', async () => {
   const { storage } = await pulledInChunks([
-    [{ op: 'clear' }, putWorkout('w1', '旧')],
-    [{ op: 'clear' }, putWorkout('w2', '新')],
-    [putWorkout('w3', '新')],
+    [{ op: 'clear' }, putWorkout('w1', 'old')],
+    [{ op: 'clear' }, putWorkout('w2', 'new')],
+    [putWorkout('w3', 'new')],
   ]);
   expect(workouts(storage)).toEqual([
-    { id: 'w2', note: '新' },
-    { id: 'w3', note: '新' },
+    { id: 'w2', note: 'new' },
+    { id: 'w3', note: 'new' },
   ]);
   expect(storage.sql.exec('SELECT count(*) AS n FROM _syncline_staged').toArray()).toEqual([{ n: 0 }]);
 });
 
-test('一次就拉完、但改动很多（整份只有一块）：同样在 SQLite 里落地，先清空、再写', async () => {
+test('completed in single chunk with many changes (single chunk full sync): also applied in SQLite, cleared first then inserted', async () => {
   const many = Array.from({ length: 600 }, (_, n) => putWorkout(`w${String(n).padStart(3, '0')}`, `${n}`));
   const { storage } = await pulledInChunks([[{ op: 'clear' }, ...many, del('w000')]]);
   const rows = workouts(storage);
@@ -100,7 +100,7 @@ test('一次就拉完、但改动很多（整份只有一块）：同样在 SQLi
   expect(rows[0]).toEqual({ id: 'w001', note: '1' });
 });
 
-test('收缩库文件出错（磁盘满了这类）：照常报出一次、同步不受影响；空页留到下次落地再截', async () => {
+test('error shrinking database file (disk full, etc.): reported once as usual, sync unaffected; freelist pages deferred to next apply', async () => {
   const storage = failOnce(deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', createWorkout), 'PRAGMA incremental_vacuum');
   const device = new Device(storage, tables);
   const reported = captureReported();
@@ -116,20 +116,20 @@ test('收缩库文件出错（磁盘满了这类）：照常报出一次、同�
   );
   await vi.waitFor(() => expect(reported).toEqual([expect.stringMatching(injectedError)]));
   expect(free()).toBeGreaterThan(0);
-  await pulledAll(2, [putWorkout('w1', '一')]);
+  await pulledAll(2, [putWorkout('w1', 'one')]);
   await vi.waitFor(() => expect(free()).toBe(0));
 });
 
-test('整张表重给（一张表的 drop 之后是这张表的全部行）落地：在 SQLite 里一次写，语句数不随行数涨；drop 之前到的这张表的改动作废，别的表照常', async () => {
-  const rows = Array.from({ length: 2000 }, (_, index) => putWorkout(`w${String(index).padStart(4, '0')}`, '重给'));
+test('full table replacement applied: single write transaction in SQLite, statement count does not scale with row count; table changes prior to drop discarded, other tables unaffected', async () => {
+  const rows = Array.from({ length: 2000 }, (_, index) => putWorkout(`w${String(index).padStart(4, '0')}`, 'replacement'));
   const storage = deviceStorage(createWorkout, 'CREATE TABLE plan (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables);
   const cookie = { version: 1, nonce: 1 };
-  await device.private.receive({ base: null, cookie, lmids: {}, patch: [{ op: 'clear' }, putWorkout('old', '旧的')] });
+  await device.private.receive({ base: null, cookie, lmids: {}, patch: [{ op: 'clear' }, putWorkout('old', 'old')] });
   await device.private.receive({
     base: cookie,
     next: 'n1',
-    patch: [putWorkout('stale', '作废'), later('l1'), { op: 'drop', table: 'workout' }],
+    patch: [putWorkout('stale', 'invalidated'), later('l1'), { op: 'drop', table: 'workout' }],
   });
   await device.private.receive({ base: cookie, cursor: 'n1', next: 'n2', patch: rows.slice(0, 1000) });
   const exec = vi.spyOn(storage.sql, 'exec');
@@ -147,26 +147,26 @@ const random = (seed: number) => () => {
 };
 const pick = <T>(next: () => number, items: T[]) => items[Math.floor(next() * items.length)] as T;
 
-/** 主键的一段：从头或某一行之后、到尾或某一行为止 */
+/** Range of primary keys: from start or after a row, to end or until a row. */
 const rangeOf = (next: () => number) => {
   const after = pick(next, [undefined, 'a', 'b']);
   const until = pick(next, [undefined, 'b', 'c']);
   return { key: ['id'], ...(after && { after: { id: after } }), ...(until && { until: { id: until } }) };
 };
 
-// 单独跑约 3 秒，pnpm check 里各门禁并行、CPU 跑满时超过 5 秒，默认的 5 秒不够
-test('两条落地的路结果相同：同一串随机的改动（写、删、改不认识的列、放不进本机列的值、本机还没有的表、清空、删掉列与表、清一段主键），分几块暂存（末块也带改动）后在 SQLite 里一次写与一条条写，本机表一样', {
+// Runs ~3s standalone; in pnpm check with parallel gates and full CPU load it exceeds 5s, default 5s is insufficient
+test('both apply paths produce identical results: random changes applied staged in SQLite vs written one by one match exactly', {
   timeout: 30_000,
 }, async () => {
-  // 本机的 workout 是 STRICT、有 reps：'bad' 放不进，存进 _syncline_unknown
+  // Local workout is STRICT and has reps: 'bad' cannot be stored, goes into _syncline_unknown
   const strict = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
   const create = 'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT';
   const opOf = (next: () => number): Op => {
     const id = pick(next, ['a', 'b', 'c']);
     return pick(next, [
-      () => putWorkout(id, pick(next, ['一', '二', null])),
-      () => putWorkout(id, '三', { reps: pick(next, [1, 2, 'bad']) }),
-      () => putWorkout(id, '四', { x: Math.floor(next() * 3) }),
+      () => putWorkout(id, pick(next, ['one', 'two', null])),
+      () => putWorkout(id, 'three', { reps: pick(next, [1, 2, 'bad']) }),
+      () => putWorkout(id, 'four', { x: Math.floor(next() * 3) }),
       () => del(id),
       () => later(id, { n: Math.floor(next() * 3) }),
       () => ({ op: 'del', table: 'later', key: { id } }) as Op,
@@ -205,6 +205,6 @@ test('两条落地的路结果相同：同一串随机的改动（写、删、�
       } else await mirror.receive({ base: cookie, cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [...chunks.flat(), ...tail] });
       landed.push(snapshot(storage));
     }
-    expect(landed[1], `种子 ${seed}`).toEqual(landed[0]);
+    expect(landed[1], `seed ${seed}`).toEqual(landed[0]);
   }
 });

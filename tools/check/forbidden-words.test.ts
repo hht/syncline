@@ -3,7 +3,7 @@ import { checkForbiddenWords } from './forbidden-words.ts';
 
 const rules = (path: string, text: string) => checkForbiddenWords([{ path, text }]).map((p) => `${p.line} ${p.message}`);
 
-test('本仓声明的名字含禁用词被拦下', () => {
+test('rejects declared names containing forbidden words', () => {
   expect(
     rules(
       'a.ts',
@@ -13,14 +13,14 @@ function handleTap() {}
 export const doSave = () => {};`,
     ),
   ).toEqual([
-    '1 WorkoutManager 含禁用词 Manager，改用说得出做什么的词',
-    '2 userData 含禁用词 Data，改用说得出做什么的词',
-    '3 handleTap 含禁用词 handle，改用说得出做什么的词',
-    '4 doSave 含禁用词 do，改用说得出做什么的词',
+    '1 WorkoutManager contains forbidden word Manager; use a word that states what it does',
+    '2 userData contains forbidden word Data; use a word that states what it does',
+    '3 handleTap contains forbidden word handle; use a word that states what it does',
+    '4 doSave contains forbidden word do; use a word that states what it does',
   ]);
 });
 
-test('框架写法、第三方引用、形近词放行', () => {
+test('allows framework patterns, third-party imports, and similar words', () => {
   expect(
     rules(
       'a.tsx',
@@ -33,29 +33,31 @@ const data = 2;`,
   ).toEqual([]);
 });
 
-test('外部规定的名字（第三方的全局对象）放行，本仓自己起的同类名字照拦', () => {
-  expect(rules('a.ts', `const handler = ErrorUtils.reportError;\nconst paymentInfo = 1;`)).toEqual([
-    '2 paymentInfo 含禁用词 Info，改用说得出做什么的词',
+test('allows externally mandated names (third-party globals) while rejecting own names', () => {
+  expect(rules('a.ts', 'const handler = ErrorUtils.reportError;\nconst paymentInfo = 1;')).toEqual([
+    '2 paymentInfo contains forbidden word Info; use a word that states what it does',
   ]);
 });
 
-test('小写开头的禁用词也被拦下', () => {
-  expect(rules('a.ts', 'const utils = {};')).toEqual(['1 utils 含禁用词 Utils，改用说得出做什么的词']);
+test('rejects lowercase forbidden words', () => {
+  expect(rules('a.ts', 'const utils = {};')).toEqual(['1 utils contains forbidden word Utils; use a word that states what it does']);
 });
 
-test('文件名含禁用词被拦下', () => {
-  expect(rules('src/date-utils.ts', '')).toEqual(['1 date-utils.ts 含禁用词 Utils，改用说得出做什么的词']);
-  expect(rules('src/workout-helper.web.ts', '')).toEqual(['1 workout-helper.web.ts 含禁用词 Helper，改用说得出做什么的词']);
+test('rejects filenames containing forbidden words', () => {
+  expect(rules('src/date-utils.ts', '')).toEqual(['1 date-utils.ts contains forbidden word Utils; use a word that states what it does']);
+  expect(rules('src/workout-helper.web.ts', '')).toEqual([
+    '1 workout-helper.web.ts contains forbidden word Helper; use a word that states what it does',
+  ]);
 });
 
-test('产品代码的名字、注释与字符串里不提接入方的项目；按整词找，oneof 这类形近词放行；tools/ 不查', () => {
-  const text = `// 照 neo 的写法\nconst NeoSet = fc.oneof(a, b);\nconst label = 'Boostcamp';`;
-  const message = '不提接入方的项目：Syncline 独立于接入方，写通用的规则与例子';
+test('product names, comments, and strings do not mention integrator projects; whole words only, tools/ skipped', () => {
+  const text = `// following neo style\nconst NeoSet = fc.oneof(a, b);\nconst label = 'Boostcamp';`;
+  const message = 'do not mention integrator projects: Syncline is standalone; write general rules and examples';
   expect(rules('src/a.ts', text)).toEqual([`1 ${message}`, `2 ${message}`, `3 ${message}`]);
   expect(rules('tools/check/a.ts', text)).toEqual([]);
 });
 
-test('写来历或含糊动作的词被拦下（旧、临时、迁移、apply、split）；同步（sync）照常用；hold、template 这类形近词放行', () => {
+test('rejects words indicating provenance or ambiguous actions (old, temp, migrate, apply, split); allows sync, hold, template', () => {
   const text = `const oldConfig = 1;
 const tempDir = 2;
 function migrateUser() {}
@@ -66,59 +68,61 @@ const legacyItems = 5;
 const holdTime = 6;
 const template = 7;`;
   expect(rules('a.ts', text)).toEqual([
-    '1 oldConfig 含禁用词 Old，改用说得出做什么的词',
-    '2 tempDir 含禁用词 Temp，改用说得出做什么的词',
-    '3 migrateUser 含禁用词 Migrate，改用说得出做什么的词',
-    '4 applyPatch 含禁用词 Apply，改用说得出做什么的词',
-    '5 splitUser 含禁用词 Split，改用说得出做什么的词',
-    '7 legacyItems 含禁用词 Legacy，改用说得出做什么的词',
+    '1 oldConfig contains forbidden word Old; use a word that states what it does',
+    '2 tempDir contains forbidden word Temp; use a word that states what it does',
+    '3 migrateUser contains forbidden word Migrate; use a word that states what it does',
+    '4 applyPatch contains forbidden word Apply; use a word that states what it does',
+    '5 splitUser contains forbidden word Split; use a word that states what it does',
+    '7 legacyItems contains forbidden word Legacy; use a word that states what it does',
   ]);
 });
 
-test('page 说不清是界面还是数据的一段，被拦下（界面叫 screen、同步的一段叫 chunk、分批叫 batch）；pageant 这类形近词放行', () => {
+test('rejects page as ambiguous (screen, chunk, batch); allows pageant and similar words', () => {
   const text = `const lastPage = 1;
 function readPages() {}
 const pagedItems = 2;
 const paging = 3;
 const pageant = 4;`;
   expect(rules('a.ts', text)).toEqual([
-    '1 lastPage 含禁用词 Page，改用说得出做什么的词',
-    '2 readPages 含禁用词 Pages，改用说得出做什么的词',
-    '3 pagedItems 含禁用词 Paged，改用说得出做什么的词',
-    '4 paging 含禁用词 Paging，改用说得出做什么的词',
+    '1 lastPage contains forbidden word Page; use a word that states what it does',
+    '2 readPages contains forbidden word Pages; use a word that states what it does',
+    '3 pagedItems contains forbidden word Paged; use a word that states what it does',
+    '4 paging contains forbidden word Paging; use a word that states what it does',
   ]);
 });
 
-test('log 说不清记的是什么，被拦下；catalog、login 是别的词', () => {
+test('rejects log as ambiguous; allows catalog, login', () => {
   const text = `const log = 1;
 const changeLogs = 2;
 const logger = 3;
 const catalog = 4;
 const login = 5;`;
   expect(rules('a.ts', text)).toEqual([
-    '1 log 含禁用词 Log，改用说得出做什么的词',
-    '2 changeLogs 含禁用词 Logs，改用说得出做什么的词',
-    '3 logger 含禁用词 Logger，改用说得出做什么的词',
+    '1 log contains forbidden word Log; use a word that states what it does',
+    '2 changeLogs contains forbidden word Logs; use a word that states what it does',
+    '3 logger contains forbidden word Logger; use a word that states what it does',
   ]);
 });
 
-test('名字里不带版本号；p95 这类不是版本号', () => {
+test('rejects version numbers in names; p95 is not a version', () => {
   expect(rules('a.ts', 'const finishedV2At = 1;\nconst coach_v2 = 2;\nconst p95 = 3;')).toEqual([
-    '1 finishedV2At 含版本号 V2，按意义起名',
-    '2 coach_v2 含版本号 v2，按意义起名',
+    '1 finishedV2At contains version V2; name by meaning',
+    '2 coach_v2 contains version v2; name by meaning',
   ]);
 });
 
-test('目录名按标识符查', () => {
-  expect(rules('src/features/legacy/index.ts', '')).toEqual(['1 目录 src/features/legacy 含禁用词 Legacy，改用说得出做什么的词']);
+test('checks directory names as identifiers', () => {
+  expect(rules('src/features/legacy/index.ts', '')).toEqual([
+    '1 directory src/features/legacy contains forbidden word Legacy; use a word that states what it does',
+  ]);
 });
 
-test('配置文件里同样不提接入方的项目；不按标识符查', () => {
-  const message = '不提接入方的项目：Syncline 独立于接入方，写通用的规则与例子';
+test('config files do not mention integrator projects; identifiers are not checked', () => {
+  const message = 'do not mention integrator projects: Syncline is standalone; write general rules and examples';
   expect(rules('src/cloudflare/wrangler.jsonc', '{\n  "name": "neo-sync",\n  "legacy": true\n}')).toEqual([`2 ${message}`]);
 });
 
-test('Rust 的名字转成驼峰再查，报出时照写原名；enum 变体、字段、参数也查', () => {
+test('checks Rust names converted to camelCase while reporting original names; checks enum variants, fields, parameters', () => {
   expect(
     rules(
       'rust/core/src/upload_helper.rs',
@@ -128,13 +132,13 @@ enum Message { TempHeld }
 fn handle_poke(user_data: u8) { let do_it = 1; }`,
     ),
   ).toEqual([
-    '1 upload_helper.rs 含禁用词 Helper，改用说得出做什么的词',
-    '1 SHRINK_PAGES 含禁用词 Pages，改用说得出做什么的词',
-    '2 ColumnInfo 含禁用词 Info，改用说得出做什么的词',
-    '2 row_data 含禁用词 Data，改用说得出做什么的词',
-    '3 TempHeld 含禁用词 Temp，改用说得出做什么的词',
-    '4 handle_poke 含禁用词 handle，改用说得出做什么的词',
-    '4 user_data 含禁用词 Data，改用说得出做什么的词',
-    '4 do_it 含禁用词 do，改用说得出做什么的词',
+    '1 upload_helper.rs contains forbidden word Helper; use a word that states what it does',
+    '1 SHRINK_PAGES contains forbidden word Pages; use a word that states what it does',
+    '2 ColumnInfo contains forbidden word Info; use a word that states what it does',
+    '2 row_data contains forbidden word Data; use a word that states what it does',
+    '3 TempHeld contains forbidden word Temp; use a word that states what it does',
+    '4 handle_poke contains forbidden word handle; use a word that states what it does',
+    '4 user_data contains forbidden word Data; use a word that states what it does',
+    '4 do_it contains forbidden word do; use a word that states what it does',
   ]);
 });

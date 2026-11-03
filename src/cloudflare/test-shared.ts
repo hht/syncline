@@ -3,8 +3,8 @@ import { env } from 'cloudflare:workers';
 import { expect, vi } from 'vitest';
 
 /**
- * 等共用空间 name 的扇出送完（全部分片都确认到最新一版、落了库）：对象一启动、每次后台写都向各分片发一轮，分片接不上又回来问最新一版；
- * 测试文件结束前等它们都送完，测试环境拆掉时没有还在路上的调用
+ * Waits for fanout delivery to complete on shared space name (all broadcast shards confirmed head version and persisted):
+ * on startup and after every server write, rounds are dispatched to shards; tests await full delivery before teardown.
  */
 export const fannedOut = (name: string) =>
   vi.waitFor(

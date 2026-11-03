@@ -21,43 +21,43 @@ import { deviceStorage } from './test-storage.ts';
 import type { Connection } from './test-sync.ts';
 import type { Message } from './test-trace.ts';
 
-// 共用空间的确定性模拟：一个种子决定后台写、收发次序、计时器与故障。跑的是真的 Space（共用空间）、
-// Broadcast 与设备一侧（Rust）的共用空间、连接，只把 token、WebSocket、HTTP 与计时器换成替身，HTTP 拉取另经一个替身缓存：
-// 同一网址可能拿到之前算的旧副本（带下限、还没到下限算出的不进缓存，照 cacheControl）。
-// 故障：断线、悄悄断、请求失败、应答与消息被改坏，共用空间发给分片的通知没送到（之后照退避重发，扇出用的是产品代码），
-// 分片重启（连接全断）、休眠后被逐出内存（知道的没了，连接还在），共用空间部署时桶规则改了（打开时记下条件变了的表从下一版起重扫），
-// 共用空间清空重建（分片记下的通知可能比它还新，设备的游标在换掉的历史上；轨迹核对时不加：模型里没有），
-// 设备崩溃重启、退到后台、换人登录换了订阅（清掉上一个人看过的行）。
-// 断言照 model/Shared.tla：设备看到的 = 它落地的订阅在游标那一版看得见的行（按那一版当时的桶规则），
-// 故障停止后都追到最新一版、与云端按订阅看得见的行一致；后台数每个桶的行数的一步与写、部署、清空重建交错，数完与各桶看得见的行数相同。
-// 末块是比暂存的块旧的副本要几台设备恰好在同一个块边界上交错拉，这里很少出现，
-// 由设备一侧收下过时末块的单测与模型守着
+// Shared space deterministic simulation: a random seed dictates server writes, network message ordering, timers, and faults.
+// Runs the actual Space (shared space), Broadcast, and device-side Rust shared space mirror and Connection;
+// token, WebSocket, HTTP, and timers are replaced with test doubles, and HTTP pulls traverse a mock edge cache.
+// Edge cache returns stale cached copies when URLs match (responses computed before floor are never cached, matching cacheControl).
+// Faults: disconnects, silent disconnects, request failures, corrupted payloads, dropped fanout notices (retried with backoff via production fanout),
+// broadcast shard restarts (disconnects all), hibernated eviction (loses in-memory state while sockets stay open), bucket rule evolution on deploy,
+// shared space rebuilds (shards may retain newer notices, device cookies off history; omitted during trace validation),
+// and device crashes, backgrounding, and user logout/login (clearing previous user rows).
+// Asserts model/Shared.tla invariants: local rows match the landed subscription at the cookie version under that version's bucket rules.
+// Once faults stop, all devices catch up to cloud head; background bucket count upkeep matches visible row counts per bucket.
+// Stale intermediate chunks are covered by dedicated unit tests and the model.
 // @see https://apple.github.io/foundationdb/testing.html
 
 const url = 'https://sync.test/catalog';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-/** 一份订阅（名字）在模型里的桶（TraceShared.tla）：['team', 'a'] 记成 team.a；没有订阅是空的 */
+/** Formats subscription name into model bucket names (TraceShared.tla): ['team', 'a'] becomes 'team.a'; empty when undefined. */
 const bucketNames = (name: string | undefined) => (name === undefined ? [] : bucketsOf(name).map((bucket) => bucket.join('.')));
-/** 订阅的指纹是哪一份订阅 */
+/** Resolves subscription name from digest hash. */
 const nameOf = (sub: string | undefined) => subscriptionNames.find((name) => subscriptionOf(name).sub === sub);
 
 class SharedSimulation {
   readonly #random: () => number;
   readonly #pick: ReturnType<typeof picker>;
   readonly #network: Network;
-  /** 云端：共用空间、广播分片与替身缓存 */
+  /** Cloud: shared space, broadcast shards, and mock edge cache. */
   readonly #cloud: SharedCloud;
-  /** 每份订阅每一版（游标，清空重建之后同一个版本号是另一版）看得见的行（按那一版当时的规则） */
+  /** Expected visible rows for each subscription and version cookie under that version's bucket rules. */
   readonly #history = new Map<string, Row[]>();
   readonly #storages = [0, 1, 2].map(() => deviceStorage(createProgram));
-  /** 每台设备上登录的人（App 传的 owner）：换了人先清掉上一个人看过的行 */
+  /** Active owner logged into each device: switching owners clears previously visible rows. */
   readonly owners: string[] = [];
   readonly #devices: Device[] = [];
   readonly mirrors: ReturnType<Device['shared']>[] = [];
   readonly #connections: Connection[] = [];
-  /** 令牌换了、接入方还没调 reconnect() 的设备 */
+  /** Devices whose token changed but integrator has not yet called reconnect(). */
   readonly #late = new Set<number>();
-  /** 轨迹核对时每台设备一条轨迹；不核对是 undefined */
+  /** One tracer per device during trace validation; undefined otherwise. */
   readonly tracer: SharedTracer | undefined;
 
   constructor(seed: number, tracer?: SharedTracer) {
@@ -75,10 +75,9 @@ class SharedSimulation {
   }
 
   /**
-   * 网络上的事在模型（Shared.tla）里是哪个动作：分片发出的第一条是连上时的补齐（Connect），之后的是 Push；连接上的消息送到是 Deliver，
-   * 拉取的结果送到是 PullDone（缓存里的是哪一版算的、按的哪份订阅）；发拉取是 PullStart；拉取失败、作废是 PullLost；
-   * 模型里连上了的连接断了、设备换一条连接是 Disconnect（还没发第一条就断了的模型里没连上）。连接上丢了的消息随断开一起清掉，不另记。
-   * 都记成一定要做：可以不做的话 TLC 要把不做的那一支走到很远才排除
+   * Maps network events to model actions in model/Shared.tla: initial shard message is Connect, subsequent are Push;
+   * delivered messages are Deliver; pull responses are PullDone (tracking version and subscription); pull requests are PullStart;
+   * failed pulls are PullLost; disconnecting open connections is Disconnect.
    */
   #traced(
     tracer: SharedTracer,
@@ -101,8 +100,8 @@ class SharedSimulation {
   }
 
   /**
-   * 设备启动（崩溃重启、换人登录）：新的 Device、共用空间与 Connection，登录的是 owner，令牌给这个人的订阅（同名）；进程没了，它的连接与请求都断。
-   * 第一次启动是模型的初始状态，之后同一个人是模型的 Crash；换人登录（清掉上一个人看过的行）模型里没有，轨迹核对时不换
+   * Device startup (crash recovery, user login): new Device, shared space mirror, and Connection for owner; closes previous sockets.
+   * Initial launch corresponds to Init; crash recovery of same user corresponds to Crash; switching users is omitted during trace validation.
    */
   #start(index: number, owner: string) {
     if (this.owners[index] === undefined) this.tracer?.begin(index, bucketNames(owner));
@@ -110,7 +109,7 @@ class SharedSimulation {
     this.#connections[index]?.stop();
     this.#devices[index]?.close();
     this.#network.disconnect(index);
-    // 同一个人重启：重新取的令牌与重启前的一样（可能已经换过订阅）
+    // Same user restarting: acquires same token as before crash (may have resubscribed prior).
     if (this.owners[index] !== owner) this.#cloud.subscriptions[index] = owner;
     const device = new Device(this.storage(index), []);
     const mirror = device.shared('catalog', [program], owner);
@@ -120,15 +119,15 @@ class SharedSimulation {
     this.#connections[index] = started(mirror, `${url}/${index}`, this.#network, index, this.#random);
   }
 
-  /** 退到后台又回来：连接断开、在路上的拉取作废，轨迹里由网络记下 */
+  /** Enters background then returns: closes connection and cancels in-flight pulls. */
   #background(index: number) {
     this.#connections[index]?.stop();
     this.#connections[index]?.start();
   }
 
   /**
-   * 设备的令牌换了（订阅变了，模型的 SubChange）：之后的拉取与新连接按新令牌算，在路上的拉取按旧的或新的；接入方照约定调 reconnect() 换一条连接
-   * （令牌变了的回调里），一半时候晚一步调：这之间拉取落地了新订阅，设备自己换连接
+   * Device token change (SubChange in model/Shared.tla): future pulls and new connections evaluate under new token;
+   * half of occurrences call reconnect() immediately, while the rest delay reconnect() until after a pull lands the new subscription.
    */
   #resubscribe(index: number) {
     const before = this.#cloud.subscriptions[index];
@@ -139,7 +138,7 @@ class SharedSimulation {
     else this.#late.add(index);
   }
 
-  /** 接入方晚一步调的 reconnect()：一台记下了的设备现在调 */
+  /** Integrator delayed reconnect(): triggers reconnect on a pending device. */
   #reconnectLate() {
     const index = this.#pick([...this.#late]) as number;
     this.#late.delete(index);
@@ -167,7 +166,7 @@ class SharedSimulation {
       [3, () => this.#network.failOne()],
       [2, () => this.#network.garbleOne()],
       [3, () => this.#start(device, this.owners[device] as string)],
-      // 退到后台又回来：同一个 Connection 先 stop 再 start
+      // Backgrounding and returning: stops then restarts existing Connection.
       [3, () => this.#background(device)],
       [this.tracer ? 0 : 2, () => this.#start(device, this.#pick(subscriptionNames) as string)],
       [6, () => this.#resubscribe(device)],
@@ -191,8 +190,8 @@ class SharedSimulation {
   }
 
   /**
-   * 收敛（model/Shared.tla 的 S2）：各台设备不再落后、落地在空间的这一代、落地的是令牌现在给的订阅，看到的与云端这份订阅现在看得见的一致
-   * （与它的订阅无关的版本分片可以不推，游标可以停在之前）
+   * Convergence (S2 in model/Shared.tla): all devices caught up to head, matching current cloud incarnation,
+   * landed current token subscription, and local rows match cloud visible rows for that subscription.
    */
   #converged() {
     return this.mirrors.every((mirror, index) => {
@@ -207,23 +206,23 @@ class SharedSimulation {
     });
   }
 
-  /** 第 index 台设备落地时按的订阅（名字）；还没同步过是 undefined */
+  /** Subscription name landed on device index; undefined if not yet synced. */
   #landed(index: number) {
     const [row] = this.storage(index).sql.exec("SELECT sub FROM _syncline_cookie WHERE space = 'catalog'").toArray();
     return subscriptionNames.find((name) => subscriptionOf(name).sub === row?.sub);
   }
 
-  /** 这份订阅现在看得见的行 */
+  /** Visible rows for given subscription name in current cloud state. */
   #visible(name: string) {
     return rowsOf(this.#cloud.storage, this.#cloud.definition(), bucketsOf(name));
   }
 
-  /** 第 index 台设备上的行 */
+  /** Rows on device at index. */
   rows(index: number) {
     return drizzle(this.storage(index)).select().from(program).orderBy(program.id).all();
   }
 
-  /** 云端最新一版各份订阅看得见的行（按当时的规则）记下 */
+  /** Records visible rows for each subscription at cloud head under current bucket rules. */
   #record() {
     for (const name of subscriptionNames) {
       const key = `${name}:${formatCookie(this.#cloud.head())}`;
@@ -235,14 +234,14 @@ class SharedSimulation {
     await flush();
     this.#observe();
     this.#record();
-    // 设备看到的 = 它落地的订阅在游标那一版的样子；还没同步过是空的（model/Shared.tla 的 Consistent）
+    // Asserts Consistent from model/Shared.tla: local rows match landed subscription at cookie version.
     for (const [index, mirror] of this.mirrors.entries()) {
       const cookie = mirror.cookie();
       const landed = this.#landed(index);
       const expected = cookie ? this.#history.get(`${landed}:${formatCookie(cookie)}`) : [];
-      if (!expected) throw new Error(`设备 ${index} 的游标不是云端发出过的版本：${JSON.stringify(cookie)}（${landed}）`);
-      expect(this.rows(index), `设备 ${index}（${landed}）在 ${cookie?.version ?? '没同步过'}`).toEqual(expected);
-      if (this.#network.live(index) > 1) throw new Error(`设备 ${index} 同时开着 ${this.#network.live(index)} 条连接`);
+      if (!expected) throw new Error(`device ${index} cookie is not an emitted version: ${JSON.stringify(cookie)} (${landed})`);
+      expect(this.rows(index), `device ${index} (${landed}) at ${cookie?.version ?? 'not synced'}`).toEqual(expected);
+      if (this.#network.live(index) > 1) throw new Error(`device ${index} has ${this.#network.live(index)} concurrent active connections`);
     }
   }
 
@@ -251,8 +250,8 @@ class SharedSimulation {
   }
 
   /**
-   * 轨迹核对：上次记到之后云端新记的各版（后台写改到的行与它现在的分桶列，不带键的是部署改了规则）与各台设备看得见的状态。
-   * 一步至多一次后台写、一次部署，所以「现在的」就是那一版写下的
+   * Trace validation observation: records newly emitted versions since last check (mutated row and bucket column,
+   * or rule changes without keys) alongside visible state across devices.
    */
   #observe() {
     if (!this.tracer) return;
@@ -262,7 +261,7 @@ class SharedSimulation {
       .map(({ keys }): Version => {
         const entries = JSON.parse(String(keys)) as [string, { id: string }][];
         const [entry, ...rest] = entries;
-        if (rest.length > 0) throw new Error(`一版改了 ${entries.length} 行，轨迹只记一行的写`);
+        if (rest.length > 0) throw new Error(`version touched ${entries.length} rows; tracer only models single-row writes`);
         return entry ? { k: entry[1].id, c: this.#cloud.bucketColumn(entry[1].id) } : { c: 0 };
       });
     const seen = this.mirrors.map(
@@ -278,9 +277,9 @@ class SharedSimulation {
 }
 
 test.for(Array.from({ length: 100 }, (_, index) => Number(process.env.SIMULATION_SEED ?? 0) + index))(
-  '共用空间种子 %i：断线、缓存里的旧副本、通知没送到与重发、分片重启、桶规则改了、令牌换了、设备重启与换人下，设备看到的是它落地的订阅在游标那一版的样子，故障停止后追平；后台数完的每个桶的行数与看得见的相同',
+  'shared space seed %i: converges across disconnects, stale cache, dropped fanout, shard restarts, rule changes, and token updates',
   async (seed) => {
-    // 设了 SIMULATION_TRACE（一个目录）就记下每台设备的轨迹，交给 model/TraceShared.tla 核对（pnpm model:trace）
+    // When SIMULATION_TRACE directory is set, records device traces for verification by model/TraceShared.tla (pnpm model:trace).
     const traces = process.env.SIMULATION_TRACE;
     await simulated(
       () => new SharedSimulation(seed, traces ? new SharedTracer(3) : undefined),

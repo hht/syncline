@@ -1,8 +1,9 @@
-//! 开库、关库：开库排到这个库文件的队首（前面的关完）才在核心线程上打开、建表、打开设备，出错回给这次调用；没排到时不阻塞，
-//! 开库与之后的调用攒着，轮到时再做，其间关库照样马上做（前面的一直不让号也关得掉）。
-//! 关库停下同步、关掉库文件、让出号之后才回复（JS 等到回复才删文件），
-//! 撤掉剩下的计时、socket 与请求。之后的调用都回「本机库已关闭」。
-//! 不该知道的：库里的事。
+//! Database open and close lifecycle: opens the database file, defines tables, and opens the device on the sync thread
+//! only when this ticket reaches the head of the file queue (after previous instances close). Failures are returned to the open call.
+//! While waiting in line, open calls and subsequent calls buffer in order rather than blocking, while close calls remain immediate.
+//! Closing stops sync, closes the database file, and releases the ticket before replying (JS waits for reply before deleting files),
+//! clearing remaining timers, sockets, and requests. Calls after closing return "local database is closed".
+//! What this module should not know: database contents or internal state machine rules.
 
 use super::{Host, now};
 use crate::random;
@@ -10,7 +11,7 @@ use std::sync::atomic::Ordering;
 use syncline::client::{Client, Failure, Input, Instruction, Opening};
 use syncline::database::Database;
 
-/// 排着等开库：这次开库与之后收到的调用（JSON，照先后）
+/// Queued waiting to open: this open call and subsequent calls (JSON, in arrival order).
 pub(super) struct Waiting {
     id: u64,
     opening: Opening,
@@ -18,10 +19,10 @@ pub(super) struct Waiting {
 }
 
 impl Host {
-    /// 排到队首就开，没排到就攒着等轮到（`turn`）
+    /// Opens immediately if at head of queue, otherwise buffers until turn (`turn`).
     pub(super) fn open(&mut self, id: u64, opening: Opening) {
         let Some(ticket) = self.ticket.as_ref().filter(|_| self.client.is_none() && !self.closed) else {
-            return self.deliver(vec![failed(id, Failure::new("这个本机库已经打开过"))]);
+            return self.deliver(vec![failed(id, Failure::new("local database has already been opened"))]);
         };
         if ticket.first() {
             self.open_file(id, opening);
@@ -34,20 +35,23 @@ impl Host {
         }
     }
 
-    /// 轮到这个库文件了：排着的开库这时开，攒着的调用照先后做。没在等时不理（开库之前就轮到了，开库时直接开）
+    /// File ticket turn reached: executes buffered open, then processes buffered calls in FIFO order.
     pub(super) fn turn(&mut self) {
         let Some(Waiting { id, opening, later }) = self.waiting.take() else {
             return;
         };
-        // 只有成了队首才叫醒，之后一直是队首直到自己让号；不是就会与前面的同时开着一个文件
-        assert!(self.ticket.as_ref().is_some_and(crate::files::Ticket::first), "没排到队首就被叫醒");
+        // Only woken when reaching head of queue; remains head until releasing ticket to prevent concurrent opens.
+        assert!(
+            self.ticket.as_ref().is_some_and(crate::files::Ticket::first),
+            "woken before reaching head of queue"
+        );
         self.open_file(id, opening);
         for call in later {
             self.call(&call);
         }
     }
 
-    /// 打开库文件、建表、打开设备：出错时回给这次调用（让出号），之后的调用回「本机库已关闭」
+    /// Opens database file, defines tables, and opens device: errors reply to open call and release ticket; later calls return "local database is closed".
     fn open_file(&mut self, id: u64, opening: Opening) {
         let opened = rusqlite::Connection::open(&self.path)
             .and_then(Database::new)
@@ -73,7 +77,7 @@ impl Host {
         }
     }
 
-    /// 关库：停下同步（核心回的断开、撤请求照做）、关掉库文件，再回复（之后 JS 才删文件）；撤掉剩下的计时、socket 与请求
+    /// Closes database: stops sync, closes database file, then replies; cancels remaining timers, sockets, and requests.
     pub(super) fn close(&mut self, id: Option<u64>) {
         if let Some(mut client) = self.client.take() {
             let instructions = client.control(Input::Close, now());
@@ -89,9 +93,9 @@ impl Host {
         for (_, aborted) in self.requests.drain() {
             aborted.store(true, Ordering::Relaxed);
         }
-        // 排着等开库时关掉：开库回已关闭，攒着的照先后做（都回已关闭），再回关库
+        // Closed while waiting to open: open call fails with closed, buffered calls fail in order, followed by close reply.
         if let Some(Waiting { id, later, .. }) = self.waiting.take() {
-            self.deliver(vec![failed(id, Failure::new("本机库已关闭"))]);
+            self.deliver(vec![failed(id, Failure::new("local database is closed"))]);
             for call in later {
                 self.call(&call);
             }

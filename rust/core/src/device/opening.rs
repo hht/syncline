@@ -1,6 +1,7 @@
-//! 打开设备：建好 Syncline 自己的表，把本机表升到这次的声明（删掉的表与列物理删、再声明的表整份重拉），
-//! 认人（换了人先清掉上一个人的），拉到一半的不合用就作废。
-//! 不该知道的：升级时怎么撤回与重放待上传、表怎么建。
+//! Device initialization: creates internal Syncline tables, upgrades local tables to match the current declaration
+//! (permanently drops retired tables/columns and refetches re-declared tables), verifies owner identity
+//! (wiping previous owner data on user switch), and discards stale in-progress pulls.
+//! What it should not know: how pending writes are reverted and replayed during schema upgrade, or how tables are created.
 
 use super::{Device, Options};
 use crate::database::Database;
@@ -17,10 +18,11 @@ use crate::verifier::Verifier;
 use std::collections::{HashMap, HashSet};
 
 impl Device {
-    /// 打开：建好 Syncline 自己的表，升级本机表、认人（换了人先清掉上一个人的），拉到一半的不合用就作废
+    /// Opens the device: prepares internal tables, upgrades local tables, verifies owner identity (clearing data on owner change), and discards incompatible staged chunks.
     ///
     /// # Errors
-    /// 声明了删掉的表与列、本机专用的表与同步表重名；上一个人还有没上传的写（`PendingWrites`）；读写库出错。出错时交还库
+    ///
+    /// Returns an error if retired names are declared, a local-only table collides with a synced table, the previous owner has unuploaded writes ([`Error::PendingWrites`]), or database operations fail. Returns database on error.
     pub fn open(db: Database, options: Options, random_uuid: Box<dyn FnMut() -> String>) -> Result<Self, (Database, Error)> {
         let Options {
             config,
@@ -68,12 +70,12 @@ impl Device {
         }
     }
 
-    /// 打开的后半：升级本机表、认人，拉到一半的不合用就作废
+    /// Completes initialization: upgrades tables, claims owner, and discards stale staged chunks.
     fn settle_open(&mut self, owner: Option<&str>, discard_pending: bool) -> Result<(), Error> {
         self.upgrade()?;
         self.claim(owner, discard_pending)?;
         self.commit(|device| {
-            // 影子表只在分块拉取途中有、与它的同步表一个样子：这次发布改了有影子表的同步表，或拉到一半时退回过更早的发布，拉到一半的作废、从头拉
+            // Shadow tables exist only during chunked pulls and match their synced tables: if deployment changed synced tables or rolled back, discard partial pull and restart from scratch
             let db = device.db.connection();
             if !device.staging()? || !device.synced.shadows_fit(db)? {
                 device.unstage()?;
@@ -82,8 +84,8 @@ impl Device {
         })
     }
 
-    /// 打开时把本机表升到这次的声明：删掉的表与列物理删、再声明的表整份重拉、新出现的列从 _extra 还原。
-    /// 先撤回待上传、升级后再重放；撤回失败就报出、不撤回照样升级、整份重拉
+    /// Upgrades local tables to current declaration: drops retired tables and columns, triggers full refetch for re-declared tables, and restores newly declared columns from `_extra`.
+    /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
     fn upgrade(&mut self) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
@@ -111,8 +113,8 @@ impl Device {
         Ok(())
     }
 
-    /// 这个空间的数据属于谁：换了人登录时，上一个的数据先清掉（库文件里也不留），同一个人再打开照常接着用；owner 不给就不管。
-    /// 还有没上传的写、又没说丢弃就不清、报 `PendingWrites`
+    /// Sets the owner of this space: clears previous owner data (including database files) on user switch, allowing same user to continue; ignored if owner is None.
+    /// Returns [`Error::PendingWrites`] if unuploaded writes remain and `discard_pending` is false.
     fn claim(&mut self, owner: Option<&str>, discard_pending: bool) -> Result<(), Error> {
         let Some(owner) = owner else { return Ok(()) };
         let stored = owner::stored(self.db.connection(), "")?;

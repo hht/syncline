@@ -3,21 +3,21 @@ import { expect } from 'vitest';
 import { readRows } from '../common/limits.ts';
 import type { CloudStorage, Cursor } from '../common/storage.ts';
 
-// 规模门禁的计量：在真的 Durable Object 里包一层存储，按 DO 游标的 rowsRead（计费用的读行数）统计一次请求读了多少行。
-// 数据直接用 SQL 铺在没包的存储上，不计读数；表是 TestSpace 的（对象里已经建好，在它的存储上开 Space 不改同步范围）
+// Scale gate metering: wraps storage inside a real Durable Object to count rows read by requests using DO cursor rowsRead.
+// Seed data is inserted directly via raw SQL without incrementing meters; tables are initialized on {@link TestSpace}.
 
-/** 一次请求的上界：一块的读预算（readRows），加上每次请求固定的几条语句（最新一版、各客户端处理到第几条、扣下的写）的余量 */
+/** Upper bound per request: chunk read budget (readRows) plus headroom for fixed queries (head version, client lmids, held writes). */
 export const readBound = readRows + 2_000;
 
-/** 铺的规模：上界的 10 倍，随它涨的读数一定越界 */
+/** Seed data scale: 10x the upper bound, ensuring unbounded row reads exceed the limit. */
 export const scale = 10 * readBound;
 
-/** 读了多少行：total 是全部语句之和；reset 清零，从这里开始量 */
+/** Row read metrics: total sums rows read across queries; reset clears the counter. */
 export type Reads = { total: number; reset(): void };
 
 /**
- * 包住 DO 的存储，统计取走的游标的 rowsRead（取完结果之后才是准的，逐行取时每取一行补上增量）
- * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#exec（rowsRead）
+ * Wraps Durable Object storage to track cursor rowsRead after iteration completes.
+ * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#exec for rowsRead
  */
 function metered(storage: DurableObjectStorage) {
   const reads: Reads = {
@@ -35,12 +35,12 @@ function metered(storage: DurableObjectStorage) {
       reads.total += delta;
       return result;
     };
-    // 不取结果的语句（Drizzle 的 run()）也计上执行时读的
+    // Statements without returned rows (e.g. Drizzle run()) still count execution reads.
     count(undefined);
     return {
       toArray: () => count(cursor.toArray()),
       raw: () => {
-        // workerd 的 raw() 也有 toArray（Drizzle 的 durable-sqlite 驱动这样取），类型声明里没写
+        // workerd raw() cursors provide toArray (used by Drizzle durable-sqlite) even without typings.
         const rows = cursor.raw() as unknown as ReturnType<Cursor['raw']>;
         return { toArray: () => count(rows.toArray()), next: () => count(rows.next()) };
       },
@@ -61,7 +61,7 @@ function metered(storage: DurableObjectStorage) {
   return { storage: wrapped, reads };
 }
 
-/** 在对象 stub 里跑 body：raw 是没包的存储（铺数据用），storage 是包过的（开 Space 用），reads 统计 storage 上的读 */
+/** Runs body within a Durable Object stub: raw provides unmetered storage for seeding, storage is metered, reads tracks row counts. */
 export function measured<T>(
   stub: DurableObjectStub,
   body: (context: { raw: DurableObjectStorage; storage: CloudStorage; reads: Reads }) => T,
@@ -69,7 +69,7 @@ export function measured<T>(
   return runInDurableObject(stub, (_, state) => body({ raw: state.storage, ...metered(state.storage) }));
 }
 
-/** 一条语句铺 count 行：columns 是 SELECT 的列表达式，i 是第几行（从 1 起） */
+/** Inserts count rows in a single query: columns specifies the SELECT expression list and i is 1-based row index. */
 export function fillRows(raw: DurableObjectStorage, table: string, count: number, columns: string) {
   raw.sql.exec(
     `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO "${table}" SELECT ${columns} FROM n`,
@@ -78,8 +78,8 @@ export function fillRows(raw: DurableObjectStorage, table: string, count: number
 }
 
 /**
- * 一条语句铺 count 次提交，接在最新一版之后：主键项是 SQL 表达式 keys（i 是第几次），累计字节照它接着往上加；给了 client 就当作它的写，
- * 照设备的写记上当天写了几行（第 i 次 3i 行），客户端表记它处理到第 count 条
+ * Inserts count commits following the head version: keys is an SQL expression, cumulative bytes accumulate accordingly,
+ * and an optional client records daily billed writes (3i rows per commit i) and updates _syncline_client lmid to count.
  */
 export function fillCommits(raw: DurableObjectStorage, count: number, keys: string, client?: string) {
   const head = raw.sql
@@ -99,6 +99,6 @@ export function fillCommits(raw: DurableObjectStorage, count: number, keys: stri
     raw.sql.exec('INSERT INTO _syncline_client VALUES (?, ?) ON CONFLICT (client) DO UPDATE SET lmid = excluded.lmid', client, count);
 }
 
-/** 一次请求读的行数不超过上界 */
+/** Asserts that rows read during a request do not exceed the read bound. */
 export const expectBounded = (rows: number, what: string) =>
-  expect(rows, `${what}：读了 ${rows} 行，上界 ${readBound}`).toBeLessThanOrEqual(readBound);
+  expect(rows, `${what}: read ${rows} rows, bound is ${readBound}`).toBeLessThanOrEqual(readBound);

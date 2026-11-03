@@ -1,6 +1,6 @@
-//! 交给外面的错长什么样：消息，加上接入方要分辨的几种各自带的字段，
-//! 页面或 JS 照它还原成对应的错（`instanceof` 认得出）。
-//! 不该知道的：错从哪来、报给谁。
+//! Outward-facing failure format: human-readable message and typed fields for distinct error kinds,
+//! enabling app UI and JS code to reconstruct matching error instances (recognized via `instanceof`).
+//! What it should not know: where errors originate or who receives them.
 
 use crate::declaration::Incompatibility;
 use crate::error::{Error, Issue};
@@ -13,21 +13,21 @@ pub struct Failure {
     pub kind: Option<Kind>,
 }
 
-/// 要分辨的几种错
+/// Distinct failure kinds
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
-    /// 本机写改到的行不合声明
+    /// Row modifications in local write failed declaration constraints
     Validation { table: String, issues: Vec<Issue> },
-    /// 云端说的空间与本机库记下的不同
+    /// Cloud space name differs from space recorded in local database
     Account { stored: String, cloud: String },
-    /// 换了人，上一个人还有没上传的写
+    /// Swapping user while previous user still has pending writes
     Pending { owner: String, count: i64 },
-    /// 本机写或重放被拒收（编成 `"reject": {}`：摊进错的字段里要是对象）
+    /// Local write or replay rejected by schema/constraint rules (serialized as `"reject": {}`)
     Reject {},
-    /// 云端的同步协议版本与设备的不同：云端的版本
+    /// Protocol version mismatch with cloud: cloud version number
     Version(i64),
-    /// 设备的表结构与云端的不兼容
+    /// Device table schema is incompatible with cloud
     Schema(Incompatibility),
 }
 
@@ -40,13 +40,13 @@ impl Failure {
         }
     }
 
-    /// 云端的协议版本与设备的不同（cloud 是云端的）
+    /// Protocol version mismatch with cloud (cloud is remote version)
     #[must_use]
     pub fn version(cloud: i64) -> Self {
         let message = if cloud > crate::sync::PROTOCOL_VERSION {
-            format!("云端的同步协议更新（第 {cloud} 版），要更新 App")
+            format!("cloud sync protocol is newer (version {cloud}); app update required")
         } else {
-            format!("云端的同步协议更旧（第 {cloud} 版），等云端部署完")
+            format!("cloud sync protocol is older (version {cloud}); wait for cloud deployment to finish")
         };
         Failure {
             message,
@@ -56,11 +56,11 @@ impl Failure {
 
     #[must_use]
     pub fn schema(found: Incompatibility) -> Self {
-        let names = found.names.join("、");
+        let names = found.names.join(", ");
         let message = if found.kind == "retired" {
-            format!("用到了云端已删的表或列（{names}），要更新 App")
+            format!("schema uses retired tables or columns ({names}); app update required")
         } else {
-            format!("云端还没有这些表或列、或与云端的对不上（{names}），等云端部署完")
+            format!("cloud schema does not yet have these tables or columns ({names}); wait for cloud deployment to finish")
         };
         Failure {
             message,
@@ -68,7 +68,7 @@ impl Failure {
         }
     }
 
-    /// 再连也认不出、同步要停下等 App 更新：云端的协议更新，或用到了云端已删的表或列
+    /// Cannot sync until app updates: cloud protocol is newer, or schema uses retired tables/columns
     #[must_use]
     pub fn needs_update(&self) -> bool {
         match &self.kind {
@@ -89,7 +89,7 @@ impl From<Error> for Failure {
         let message = error.to_string();
         let kind = match error {
             Error::Sql(rusqlite::Error::SqliteFailure(code, detail)) => {
-                // 带上扩展结果码：报给接入方的错里分得出暂时的错（磁盘满、忙）与违反约束
+                // Preserves extended result code so caller can distinguish transient errors from constraint errors
                 // @see <https://sqlite.org/rescode.html>
                 let detail = detail.unwrap_or_else(|| code.to_string());
                 return Failure::new(format!("Error code {}: {detail}", code.extended_code));
@@ -117,7 +117,10 @@ mod tests {
     #[test]
     fn kinds_flatten_into_the_serialized_error() {
         let json = |error: Error| serde_json::to_value(Failure::from(error)).unwrap_or_default();
-        assert_eq!(json(Error::Reject("引用的行已不在".to_owned()))["reject"], serde_json::json!({}));
+        assert_eq!(
+            json(Error::Reject("referenced row is missing".to_owned()))["reject"],
+            serde_json::json!({})
+        );
         assert_eq!(serde_json::to_value(Failure::version(6)).unwrap_or_default()["version"], 6);
         let pending = json(Error::PendingWrites {
             owner: "a".to_owned(),

@@ -3,11 +3,11 @@ import { expect, test } from 'vitest';
 import { Space } from '../../cloud/space.ts';
 import { cloudStorage } from '../test-storage.ts';
 
-// 共用空间的工作量随桶数怎么涨：一次后台写要记成几个提交版本（提交记录的每一项只带这一行在的桶，切段时按规则数预留，与桶数无关）
+// Shared space workload scaling with bucket count: commits split into versions based on rule count reservations, independent of bucket count.
 
 const task = sqliteTable('task', { id: text().primaryKey(), team: text().notNull() });
 
-/** 一次写 rows 行，分在 teams 个桶里（按 team 分桶），给出记成了几个提交版本 */
+/** Writes rows rows distributed across teams buckets (bucketed by team), returning total recorded commit versions. */
 function versionsOfBulk(teams: number, rows: number) {
   const storage = cloudStorage('CREATE TABLE task (id TEXT PRIMARY KEY, team TEXT NOT NULL)');
   const space = new Space(storage, [task], { shared: { buckets: { team: { task: { by: ['team'] } } }, chunkRows: 1_000_000 } });
@@ -17,8 +17,8 @@ function versionsOfBulk(teams: number, rows: number) {
   return storage.sql.exec('SELECT version FROM _syncline_commit WHERE version > 0').toArray().length;
 }
 
-test('一次写 3000 行：一个提交版本能装的项数与桶数无关，桶多了记成的版本数不增加', () => {
+test('writing 3,000 rows: items per commit version is independent of bucket count, recorded version count does not increase', () => {
   const few = versionsOfBulk(10, 3_000);
   const many = versionsOfBulk(3_000, 3_000);
-  expect(many, `10 个桶记成 ${few} 个版本，3000 个桶记成 ${many} 个版本`).toBeLessThanOrEqual(few);
+  expect(many, `10 buckets produced ${few} versions, 3000 buckets produced ${many} versions`).toBeLessThanOrEqual(few);
 });

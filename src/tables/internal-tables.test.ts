@@ -5,20 +5,20 @@ import { Device } from '../test/test-device.ts';
 import { createWorkout, pulled, tables, upload, workout, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
-// Syncline 自己的表的结构版本：更新的 Syncline 改过的库（App 或 Worker 回滚到更早的发布），按它存下的语句退回再用，数据不丢
+// Internal schema migrations: databases modified by newer releases roll back via stored down statements when app or worker deployments are reverted.
 
-/** 更新一版的 Syncline 打开过这个库：执行 up 改了自己的表，记下退回的语句 down */
+// Simulates a database modified by a newer release with up migrations and stored down statements.
 function openedByNewer(storage: Storage, up: string[], down: string[]) {
   for (const sql of up) storage.sql.exec(sql);
   storage.sql.exec('INSERT INTO _syncline_schema SELECT max(version) + 1, ? FROM _syncline_schema', JSON.stringify(down));
 }
 
-test('设备的库被更新的 Syncline 改过：打开时照存下的语句退回，游标与待上传都在，接着同步', async () => {
+test('rolls back device database schema via stored down statements when opened after an app rollback, preserving cookies and pending writes', async () => {
   const space = new Space(cloudStorage(createWorkout), tables);
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
   await device.private.receive(pulled(space, device));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: '深蹲' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
   device.close();
   openedByNewer(
     storage,
@@ -34,29 +34,29 @@ test('设备的库被更新的 Syncline 改过：打开时照存下的语句退�
   expect(reopened.private.cookie()?.version).toBe(1);
 });
 
-/** 设备推上去一条写 w1：给出云端的库与设备 */
+// Pushes a single mutation w1 to set up cloud storage and device state.
 async function pushed() {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, tables);
   const device = new Device(deviceStorage(createWorkout), tables);
   await device.private.receive(pulled(space, device));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: '深蹲' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
   await upload(space, device, [device]);
   return { cloud, device };
 }
 
-test('云端的库被更新的 Syncline 改过：照存下的语句退回，提交记录还在，接着收写', async () => {
+test('rolls back cloud database schema via stored down statements when opened after a worker rollback, preserving commit history', async () => {
   const { cloud, device } = await pushed();
   openedByNewer(cloud, ['ALTER TABLE _syncline_commit RENAME TO _syncline_log'], ['ALTER TABLE _syncline_log RENAME TO _syncline_commit']);
 
   const reopened = new Space(cloud, tables);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '卧推' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench press' }));
   await upload(reopened, device, [device]);
   expect(device.private.cookie()?.version).toBe(2);
   expect(workouts(cloud)).toHaveLength(2);
 });
 
-test('退回的语句执行不了就报错，库保持原样', () => {
+test('aborts migration rollback and preserves database state if a down statement fails', () => {
   const storage = deviceStorage(createWorkout);
   new Device(storage, tables).close();
   const version = () => storage.sql.exec('SELECT max(version) AS version FROM _syncline_schema').toArray()[0]?.version;

@@ -1,6 +1,7 @@
-//! 私有空间怎么收云端的东西：要不要拉、拉取带什么；收下拉取的块与连接上的通知、提示（先认空间，接得上游标才收，分块的先暂存），
-//! 游标往前走，记下要追到的版本。
-//! 不该知道的：消息怎么传，撤回与重放怎么做。
+//! Ingestion of cloud sync data for private spaces: pull scheduling and query parameters;
+//! receives pulled chunks, live notifications (`Poke`), and hints (`Hint`), validating space identity,
+//! verifying base matches cookie, staging intermediate chunks, advancing cookies, and tracking target versions.
+//! What it should not know: network transport mechanisms, or rebase and revert implementations.
 
 use super::Device;
 use crate::effects::Held;
@@ -13,7 +14,7 @@ use crate::verifier::Asked;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
-/// HTTP 拉取要带的
+/// HTTP pull request query parameters.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
@@ -29,26 +30,29 @@ pub struct PullRequest {
 }
 
 impl Device {
-    /// 本机游标：连接时带上；还没同步过是 None
+    /// Returns the local cookie sent on connect; returns `None` before initial sync.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn cookie(&self) -> rusqlite::Result<Option<Cookie>> {
         internal::cookie(self.db.connection(), "")
     }
 
-    /// 分块拉取到一半（有暂存的块）：还要接着 HTTP 拉
+    /// Returns whether chunked pull is in progress (staged chunks present) requiring further HTTP pulls.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn staging(&self) -> rusqlite::Result<bool> {
         Ok(self.stage.last(self.db.connection())?.is_some())
     }
 
-    /// 要不要 HTTP 拉：没有游标、分块拉取还没拉到末块、要整份重拉、云端说到了更新的一版，或为校验和要拉
+    /// Returns whether an HTTP pull is needed: missing cookie, in-progress chunked pull, pending refetch, higher target version learned from cloud, or requested by checksum verification.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn behind(&self, now: f64) -> Result<bool, Error> {
         let db = self.db.connection();
         let cookie = self.cookie()?;
@@ -61,11 +65,11 @@ impl Device {
         }
     }
 
-    /// HTTP 拉取要带的：本机游标，分块拉取中途时再带暂存的最后一块的 next，要整份重拉时带 refetch，校验和要的；
-    /// 带上要云端确认的客户端与各自最早的待上传
+    /// Generates query parameters for an HTTP pull: local cookie, cursor from the last staged chunk if in progress, refetch flag if refetching, checksum request parameters, and client IDs with earliest pending write IDs.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn pull_request(&mut self, now: f64) -> Result<PullRequest, Error> {
         let db = self.db.connection();
         let cursor = self.stage.last(db)?;
@@ -85,24 +89,27 @@ impl Device {
     }
 
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn pending_count(&self) -> rusqlite::Result<i64> {
         UploadQueue::count(self.db.connection())
     }
 
-    /// 待上传的写，按本机顺序；给了 limit 就只取前面的，改动的 JSON 共约 limit 字节
+    /// Returns pending writes in local execution order; if `limit` is provided, returns entries whose changes JSON total roughly `limit` bytes.
     ///
     /// # Errors
-    /// 读库出错。
+    ///
+    /// Returns an error if querying the database fails.
     pub fn pending(&self, limit: Option<f64>) -> Result<Vec<Mutation>, Error> {
         UploadQueue::list(self.db.connection(), limit)
     }
 
-    /// 收下拉取结果，返回收没收：base 要等于本机游标，cursor 要等于暂存的最后一块的 next，否则丢掉；不是末块的先暂存。
-    /// 私有空间的云端不回 reset；收到的当作接不上
+    /// Ingests a pull response, returning whether it was applied: `base` must equal local cookie, and `cursor` must match the last staged chunk's `next` token; intermediate chunks are staged.
+    /// Cloud does not return `reset` for private spaces (treated as unchainable if received).
     ///
     /// # Errors
-    /// 换了账号（`AccountMismatch`）；读写库出错。
+    ///
+    /// Returns [`Error::AccountMismatch`] if space identity changed, or an error if database operations fail.
     pub fn receive(&mut self, pulled: &Pulled, now: f64) -> Result<bool, Error> {
         let received = match pulled {
             Pulled::Reset(_) => false,
@@ -118,11 +125,12 @@ impl Device {
         Ok(received)
     }
 
-    /// 收下连接上的消息，返回接没接上（接不上是坏了不变量，连接断开重连）。pulling 是拉取在路上。
-    /// 提示：记下要追到的版本。通知接不上本机游标或分块拉取到一半：连着时改走了 HTTP，或拉取已把设备带过了这一版，丢掉、不断开（模型的 Stale）
+    /// Ingests a message heard on a connection, returning whether it chained onto local history (failure breaks invariant and triggers reconnect). `pulling` indicates an active in-flight pull.
+    /// Hints: records target version to chase. Notifications that do not chain onto cookie or arrive during staged pulls: recorded as target version to pull over HTTP (matching TLA+ `Stale`).
     ///
     /// # Errors
-    /// 换了账号（`AccountMismatch`）；读写库出错。
+    ///
+    /// Returns [`Error::AccountMismatch`] if space identity changed, or an error if database operations fail.
     pub fn heard(&mut self, message: Heard, pulling: bool, now: f64) -> Result<bool, Error> {
         let poke = match message {
             Heard::Hint(hint) => {
@@ -133,7 +141,7 @@ impl Device {
             Heard::Poke(poke) => poke,
         };
         let cookie = self.cookie()?;
-        // 分块拉取到一半时游标不动，接在游标上的通知也不应用：与拉取在路上一样，记下要追到它
+        // Notifications arriving during staged pulls do not advance cookie: record as target version to pull over HTTP
         let staging = self.staging()?;
         if !staging && poke.base == cookie {
             let received = self.receive_poke(&poke, now)?;
@@ -152,12 +160,12 @@ impl Device {
         Ok(true)
     }
 
-    /// 开新连接：上一条连接上的提示与通知说的「要追到哪一版」不再算
+    /// Resets target version when initiating a new connection.
     pub fn connecting(&mut self) {
         self.wanted = None;
     }
 
-    /// 云端说这是哪个空间：第一次同步时记下，之后对不上就报 `AccountMismatch`，这条消息不收；没带的不查
+    /// Validates cloud space identity: records identity on first sync, rejecting mismatched spaces with [`Error::AccountMismatch`].
     fn admit(&self, space: Option<&str>) -> Result<(), Error> {
         let Some(space) = space else { return Ok(()) };
         let db = self.db.connection();
@@ -178,7 +186,7 @@ impl Device {
     }
 
     fn receive_chunk(&mut self, chunk: &Chunk) -> Result<bool, Error> {
-        // 先认空间（换了账号就不收：不动上一个人的数据与待上传）
+        // Verify space identity (reject on account change to protect previous data and pending writes)
         self.admit(chunk.space.as_deref())?;
         if chunk.base != self.cookie()? || chunk.cursor != self.stage.last(self.db.connection())? {
             return Ok(false);
@@ -202,12 +210,12 @@ impl Device {
             return Ok(false);
         }
         let staged = last.is_some();
-        // 没有改动、也没确认待上传（连上时的空补齐、续约重连）：撤回再重放还是原样，本机表不动，只记下游标
+        // Empty patch without pending write confirmations (empty catch-up or renewal reconnect): advance cookie without rebasing
         if poke.patch.is_empty() && poke.cursor.is_none() && !UploadQueue::confirms(db, &poke.lmids)? {
             self.commit(|device| device.advance(poke, now))?;
             return Ok(true);
         }
-        // 整份（以清空开头）不用撤回：清空之后都是云端的，待上传照常重放
+        // Full pulls (starting with Clear) skip revert: all rows are overwritten by cloud, replaying pending writes directly
         let full = matches!(poke.patch.first(), Some(Op::Clear)) || (staged && self.stage.clears(db)?);
         let mut freed = false;
         let confirmed = self.onto(
@@ -219,7 +227,7 @@ impl Device {
             },
             &poke.lmids,
             !full,
-            // 撤回失败每次收下都会再出：整份重拉（游标与待上传不动），落地时不撤回、照常重放
+            // Revert failures repeat on every apply: trigger refetch (preserving cookie and pending writes) to land without revert and replay pending writes
             Self::refetch,
         )?;
         let Some(confirmed) = confirmed else { return Ok(true) };
@@ -231,14 +239,14 @@ impl Device {
                 });
             }
         }
-        // 在 SQLite 里落地的：暂存的块刚清掉，收缩库文件
+        // Landed staged changes in SQLite: trigger database shrink to reclaim freed staging pages
         if freed {
             self.effects.shrink = true;
         }
         Ok(true)
     }
 
-    /// 游标走到这一版：记下它，告诉校验和
+    /// Advances cookie to the version in `poke` and updates checksum verifier.
     fn advance(&mut self, poke: &Poke, now: f64) -> Result<(), Error> {
         let db = self.db.connection();
         db.execute("DELETE FROM _syncline_cookie WHERE space = ''", [])?;
@@ -252,14 +260,14 @@ impl Device {
         Ok(())
     }
 
-    /// 记下要追到 cookie：版本不低于记着的就换成它
+    /// Records target cookie to pull toward if its version is at or ahead of current wanted cookie.
     fn want(&mut self, cookie: Cookie) {
         if self.wanted.is_none_or(|wanted| cookie.version >= wanted.version) {
             self.wanted = Some(cookie);
         }
     }
 
-    /// 落地到了 cookie：要追的追上了就不再落后
+    /// Clears wanted target cookie once landed version reaches or exceeds it.
     fn reached(&mut self, cookie: Cookie) {
         if self.wanted.is_some_and(|wanted| cookie.version >= wanted.version) {
             self.wanted = None;

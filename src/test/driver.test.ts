@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest';
 import { statementCache } from './test-driver.ts';
 
-// 编译好的语句按 SQL 重用：同一条只编译一次，超出上限时销毁最久没用的
+// Prepared statements are reused by SQL: compiled once per SQL text, finalizing LRU statements when exceeding capacity.
 
-test('同一条 SQL 只编译一次；留着的超过 100 条时销毁最久没用的那条，用过的排到最后', () => {
+test('compiles each SQL text once, evicting the least recently used statement when exceeding 100', () => {
   const prepared: string[] = [];
   const finalized: string[] = [];
   const statement = statementCache(

@@ -1,29 +1,29 @@
-# 模型与检查
+# Models and model checking
 
-Syncline 的协议写成 TLA+ 模型，由 TLC 穷举检查；实现与模型一致，由轨迹核对守着。这一页讲有哪些模型、怎么跑；细节见文末的几页。
+Syncline specifies its sync protocols as TLA+ models and checks them exhaustively with TLC. Implementation conformance to the models is guarded by trace validation. This page outlines the models and how to run them; see the detail pages linked below.
 
-## 三份模型
+## Three models
 
-| 模型 | 查什么 |
+| Model | Scope |
 |---|---|
-| `model/Private.tla` | 私有空间：设备离线写、推送、拉取，叠加崩溃、断线、部署、时间点恢复、备份恢复、存储出错、本机坏行、用户整份重下，写不丢、不执行两次，最终与云端一致 |
-| `model/Shared.tla` | 共用空间：桶与订阅、缓存的旧副本、换代、截日志之下，设备落地的总是订阅在某一版看得见的行，最终追上 |
-| `model/Fanout.tla` | 共用空间的扇出：任务与分片对每条连接不漏推、不白拉，最终推到最新一版 |
+| `model/Private.tla` | Private spaces: offline device writes, pushes, and pulls, combined with crashes, disconnects, deployments, point-in-time recovery, backup restores, storage errors, local row corruption, and explicit user resyncs. Writes are never lost or executed twice, and devices eventually converge to the cloud state. |
+| `model/Shared.tla` | Shared spaces: buckets and subscriptions, stale cached copies, space rebuilds, and log truncation. Rows landed on devices always match the visible rows for their subscription at some version, and devices eventually catch up to head. |
+| `model/Fanout.tla` | Shared space fanout: chores and broadcast shards deliver to each connection without missing notices or triggering wasted pulls, eventually pushing up to the head version. |
 
-要守住的性质写在各模型末尾：P1–P3、P5–P7、P9–P11 与 P8a、P8k、P8r（私有空间），S1–S2（共用空间），`Covers`、`NoWastedPull`、`CatchesUp`（扇出）；另有幽灵不变量 `HistConsistent`（提交记录与云端表一致）。每份配置查什么、多大、门禁里怎么跑，写在 `model/` 下各 `.cfg` 的首部。
+Properties to uphold appear at the end of each model: P1–P3, P5–P7, P9–P11, and P8a, P8k, P8r (private spaces); S1–S2 (shared spaces); `Covers`, `NoWastedPull`, and `CatchesUp` (fanout); along with the ghost invariant `HistConsistent` (commit log consistency with cloud tables). What each configuration checks, its state space size, and how it runs in gates are documented at the top of each `.cfg` file under `model/`.
 
-## 怎么跑
+## How to run
 
-在仓库根目录：`pnpm model:setup` 装 TLC，`pnpm model` 跑门禁配置，`pnpm model:big` 跑大配置（不进门禁），`pnpm model:trace` 做轨迹核对（`SIMULATION_SEED` 换一段种子）。输入（配置、用到的模块、TLC 与跑法）没变、上次通过了的沿用上次的结论，删掉 `.check/model-cache.json` 就全部重跑。
+At the repository root: `pnpm model:setup` installs TLC, `pnpm model` runs gate configurations, `pnpm model:big` runs large configurations (excluded from standard gates), and `pnpm model:trace` performs trace validation (set `SIMULATION_SEED` to test different seeds). If inputs (configuration, imported modules, TLC version, and execution flags) are unchanged and the previous run passed, cached results are reused; deleting `.check/model-cache.json` reruns all configurations.
 
-改了 `model/` 跑 `pnpm model`，全绿才能提交。轨迹核对在一轮协议改动的模型与实现都改完时跑一次，实现还在分批跟上模型的中间各批不跑；只改实现或轨迹记录、没改模型的，也在收尾跑一次。
+Run `pnpm model` whenever `model/` changes; all configurations must pass before committing. Run trace validation once a round of protocol changes is complete across both models and implementation; skip it during intermediate commits where implementation is catching up with model changes in stages. Run trace validation during wrap-up when modifying only the implementation or trace logging without touching models.
 
-## 轨迹核对
+## Trace validation
 
-确定性模拟跑真的实现，每走一步记下实现做了哪些在模型里有对应动作的事（是哪条消息、接在哪一版上）与走完之后看得见的状态；`model/TracePrivate.tla`、`model/TraceShared.tla`（共用空间每台设备一条，云端的后台写与部署记进每一条）让 TLC 找一条模型的执行，每一步只用记下的动作、走完与看见的一致。找不到就是实现做了模型不允许的事，或记录的对应写错了（照 Microsoft CCF 的 trace validation）。
+A deterministic simulation runs the real TypeScript and Rust implementation. At each step, it records implementation actions that correspond to model actions (which message was processed and on which base version) along with visible post-step state. `model/TracePrivate.tla` and `model/TraceShared.tla` (one trace per device for shared spaces, with cloud backend writes and deployments recorded across all traces) instruct TLC to search for a model execution whose steps use only the recorded actions and whose final states match the observed states. Failing to find a valid execution indicates that the implementation performed an action forbidden by the model, or that action mapping was recorded incorrectly (following Microsoft CCF's trace validation method).
 
-## 细节
+## Details
 
-- [覆盖面](model-scope.md)：哪些组合穷举跑不完，轨迹核对管不到什么（模型怎样抽象协议写在各 `.tla` 的开头）。
-- [模型的前提](model-assumptions.md)：模型当作前提、由实现与测试保证的，以及没放进模型的功能。
-- [反向验证](model-mutations.md)：故意改坏模型的哪一处，由哪份配置报出哪条性质；改坏了也不报的几处为什么无害。
+- [Scope](model-scope.md): combinations beyond exhaustive search limits, and what trace validation does not cover (protocol abstractions are documented at the top of each `.tla` file).
+- [Model assumptions](model-assumptions.md): assumptions taken as axioms in the model and guaranteed by implementation and tests, plus features omitted from the model.
+- [Mutation testing](model-mutations.md): intentional model mutations, which configuration catches each mutation with which violated property, and why unflagged mutations are harmless.

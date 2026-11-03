@@ -1,6 +1,7 @@
-//! 影子表照同步表在库里的样子建：列的先后、类型、默认值、主键与 STRICT 都一样，索引按列照建、名字带一代的编号；
-//! 一张表在库里的样子（据此判断影子表还合不合用）。
-//! 不该知道的：影子表里写什么、什么时候换上。
+//! Recreates shadow tables matching synced tables in the database: column order, types, default values,
+//! primary key, and STRICT all match, indexes are recreated with generation suffixes;
+//! represents table shape in database (used to verify shadow table compatibility).
+//! What it should not know: what writes into shadow tables or when they swap in.
 
 use super::{shadow_of, shadowed};
 use crate::sql::{quote, quote_all};
@@ -8,7 +9,7 @@ use crate::tables::indexes_on;
 use rusqlite::Connection;
 use std::collections::{BTreeSet, HashSet};
 
-/// 库里一张表的一列：PRAGMA `table_info` 的一行
+/// A column in database: one row from `PRAGMA table_info`
 struct StoredColumn {
     name: String,
     kind: String,
@@ -35,7 +36,7 @@ fn strict(db: &Connection, table: &str) -> rusqlite::Result<bool> {
     db.query_row(&format!("PRAGMA table_list({})", quote(table)), [], |row| row.get("strict"))
 }
 
-/// 一张表上各索引的列，一组列一个（退回过更早的发布时，它可能按原名又建了一个同样列的）：名字与列
+/// Indexed column groups on a table, one per unique column set (after rollback to earlier release, duplicate indexes on same columns may exist): index name and columns
 fn indexed(db: &Connection, table: &str) -> rusqlite::Result<Vec<(String, Vec<String>)>> {
     let mut seen = HashSet::new();
     let mut indexes = Vec::new();
@@ -47,7 +48,7 @@ fn indexed(db: &Connection, table: &str) -> rusqlite::Result<Vec<(String, Vec<St
     Ok(indexes)
 }
 
-/// 一张表在库里的样子：各列（先后、类型、非空、默认值、主键）、STRICT 与索引的各组列；影子表与同步表的一样才换得上
+/// Table shape in database: columns (order, type, `not_null`, default, `primary_key`), STRICT flag, and indexed column sets; shadow table only swaps in when shapes match
 type Shape = (Vec<(String, String, bool, Option<String>, i64)>, bool, BTreeSet<Vec<String>>);
 
 pub(super) fn shape_of(db: &Connection, table: &str) -> rusqlite::Result<Shape> {
@@ -59,7 +60,7 @@ pub(super) fn shape_of(db: &Connection, table: &str) -> rusqlite::Result<Shape> 
     Ok((columns, strict(db, table)?, indexes))
 }
 
-/// 建 table 的影子表，已有就清空
+/// Creates shadow table for table, clearing it if already existing
 pub(super) fn open_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> {
     let shadow = shadow_of(table);
     if !shadowed(db, [&table.to_owned()])?.is_empty() {
@@ -84,7 +85,7 @@ pub(super) fn open_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> 
     copy_indexes(db, table, &shadow)
 }
 
-/// 建表语句里的一列：名字、类型、非空、默认值
+/// Column definition in CREATE TABLE: name, type, not-null constraint, default value
 fn definition(column: &StoredColumn) -> String {
     format!(
         "{}{}{}{}",
@@ -102,7 +103,7 @@ fn definition(column: &StoredColumn) -> String {
     )
 }
 
-/// 照 table 的索引给影子表建同样的索引：名字是「原名#一代的编号」，取库里还没用过的编号
+/// Recreates indexes on shadow table matching table indexes: named "original#generation" using next unused generation number in database
 fn copy_indexes(db: &Connection, table: &str, shadow: &str) -> rusqlite::Result<()> {
     let mut names: HashSet<String> = db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index'")?
@@ -124,7 +125,7 @@ fn copy_indexes(db: &Connection, table: &str, shadow: &str) -> rusqlite::Result<
     Ok(())
 }
 
-/// 索引名去掉末尾的「#一代的编号」
+/// Strips trailing "#generation" suffix from index name
 fn generation_base(name: &str) -> &str {
     match name.rfind('#') {
         Some(at) if at + 1 < name.len() && name[at + 1..].bytes().all(|byte| byte.is_ascii_digit()) => &name[..at],

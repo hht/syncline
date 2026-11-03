@@ -4,38 +4,38 @@ import { alarmAfter, object, online, put, squat } from '../../../cloudflare/test
 import type { TestSpace } from '../../../cloudflare/test-worker.ts';
 import { defaultExportDelay, maxExportDelay } from './exports.ts';
 
-// 导出（跨 DO 汇总统计等）接到 alarm 上：写了之后排一次，导出者分开导、出错按退避自己重排，云端的历史换掉（时间点恢复）之后从头整份
+// Exports (cross-DO aggregation, analytics, etc.) wired to alarms: scheduled once after writes; exporters export independently, rescheduling with backoff on error; restarts full snapshot after cloud history is replaced (point-in-time recovery).
 
-/** 设备 c1 第 1 条写之后第一次导出收到的：整份，先清空 */
+/** Received on first export after device c1 first write: full snapshot, starting with clear. */
 const firstExport = {
   reset: false,
-  patch: [{ op: 'clear' }, { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: '深蹲' } }],
+  patch: [{ op: 'clear' }, { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'squat' } }],
 };
 
-/** 跑 alarm：导出者收到第一条写的整份，之后没有新写就不再排 */
+/** Runs alarm: exporter receives full snapshot of first write; no further runs scheduled without new writes. */
 async function exportedOnce(name: string) {
   expect(await alarmAfter(object(name), maxExportDelay)).toBe(true);
   expect(await object(name).exported()).toEqual([firstExport]);
   expect(await alarmAfter(object(name), maxExportDelay)).toBe(false);
 }
 
-test('导出：写了之后排一次 alarm，alarm 里导出者收到整份（先清空）与之后改过的行；没有新写时 alarm 不再排', async () => {
+test('export: schedules an alarm after writes; exporter in alarm receives full snapshot (starting with clear) followed by mutated rows; stops scheduling alarms when no new writes exist', async () => {
   const { name, phone: device } = await online(1);
   device.push(squat);
   await device.next();
   await exportedOnce(name);
 });
 
-test('导出过之后云端的历史换掉了（时间点恢复）：下一次写排的 alarm 里，导出者收到标 reset 的整份（先清空），统计不留被回滚的数据', async () => {
+test('cloud history replaced after export (point-in-time recovery): exporter in alarm scheduled by next write receives full snapshot marked reset (starting with clear), purging rolled-back data from destination', async () => {
   const { name, phone: device } = await online(1);
   device.push(squat);
   await device.next();
   await alarmAfter(object(name), defaultExportDelay);
-  // 本机的存储不支持时间点恢复：把导出过的那一版的随机数改掉，当作恢复后又写到了同一版
+  // Local storage lacks point-in-time recovery: mutates nonce of exported version, simulating write to same version after recovery.
   await runInDurableObject(object(name), (_: TestSpace, state) => {
     state.storage.sql.exec('UPDATE _syncline_commit SET nonce = nonce + 1');
   });
-  await object(name).importNotes([{ id: 'n2', text: '硬拉' }]);
+  await object(name).importNotes([{ id: 'n2', text: 'deadlift' }]);
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);
   expect(await object(name).exported()).toEqual([
     firstExport,
@@ -43,14 +43,14 @@ test('导出过之后云端的历史换掉了（时间点恢复）：下一次�
       reset: true,
       patch: [
         { op: 'clear' },
-        { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: '深蹲' } },
-        { op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: '硬拉' } },
+        { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'squat' } },
+        { op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'deadlift' } },
       ],
     },
   ]);
 });
 
-/** 一台设备写了第一条，stats 导出者一直出错 */
+/** A device writes initial entry, stats exporter fails repeatedly. */
 async function withFailingStats() {
   const { name, phone: device } = await online(1);
   await object(name).failExports(true);
@@ -59,10 +59,10 @@ async function withFailingStats() {
   return { name, device };
 }
 
-/** 导出者最后收到的一块 */
+/** Final chunk received by exporter. */
 const lastOf = async (chunks: Promise<unknown[]>) => ((await chunks) as unknown[]).at(-1);
 
-test('导出者出错：不挡别的导出者；接住后按退避自己排下一次 alarm，平台的 6 次重试用完也照样重试，好了之后导完、不再排', async () => {
+test('exporter errors: does not block other exporters; caught error reschedules next alarm with backoff, continuing beyond platform 6-retry limit, completing export and descheduling once recovered', async () => {
   const { name } = await withFailingStats();
   for (let attempt = 0; attempt < 8; attempt += 1) expect(await alarmAfter(object(name), maxExportDelay)).toBe(true);
   expect(await object(name).exported()).toEqual([]);
@@ -71,15 +71,15 @@ test('导出者出错：不挡别的导出者；接住后按退避自己排下�
   await exportedOnce(name);
 });
 
-test('一个导出者一直出错：只推后它自己，别的导出者有了新写照常在 exportDelay 之后导，不被它的退避拖到一小时一次', async () => {
+test('repeatedly failing exporter: delays only itself; new writes trigger other exporters after normal exportDelay, avoiding one-hour backoff delays', async () => {
   const { name, device } = await withFailingStats();
   for (let attempt = 0; attempt < 6; attempt += 1) await alarmAfter(object(name), maxExportDelay);
-  device.push({ id: 2, changes: [put('note', { id: 'n2', text: '卧推' })] });
+  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'bench press' })] });
   await device.next();
   const at = await object(name).alarmAt();
   expect(at).not.toBeNull();
   expect(Number(at) - Date.now()).toBeLessThanOrEqual(defaultExportDelay);
-  // 出错的那个还在退避中：新写不把它提前
+  // Failing exporter remains in backoff: new write does not advance its schedule.
   const stats = await runInDurableObject(object(name), (_: TestSpace, state) =>
     state.storage.sql.exec("SELECT at FROM _syncline_schedule WHERE name = 'syncline:export:stats'").one(),
   );
@@ -88,26 +88,26 @@ test('一个导出者一直出错：只推后它自己，别的导出者有了�
   expect(await lastOf(object(name).searched())).toMatchObject({ patch: [{ op: 'put', row: { id: 'n2' } }] });
 });
 
-test('接入方自己删掉了 alarm：下一次写照常排上导出，不会因为记着「排着」就再也不导', async () => {
+test('host application deleted alarm: next write schedules export as normal, not suppressed by stale scheduled state', async () => {
   const { name, phone: device } = await online(1);
   device.push(squat);
   await device.next();
   await object(name).clearAlarm();
-  device.push({ id: 2, changes: [put('note', { id: 'n2', text: '卧推' })] });
+  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'bench press' })] });
   await device.next();
   expect(await object(name).alarmAt()).not.toBeNull();
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);
   expect(await lastOf(object(name).exported())).toMatchObject({
-    patch: expect.arrayContaining([{ op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: '卧推' } }]),
+    patch: expect.arrayContaining([{ op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'bench press' } }]),
   });
 });
 
-test('一个导出者一直不回话（去处卡住）：到了这次的时间预算就算这次失败、按退避重排，alarm 照常结束，别的导出者照常导', async () => {
+test('exporter hangs (destination stalled): fails attempt upon reaching time budget and reschedules with backoff; alarm ends normally and other exporters proceed', async () => {
   const { name, phone: device } = await online(1);
   await object(name).hangExports(true);
   device.push(squat);
   await device.next();
-  // 测试 Worker 的时间预算是 1 秒
+  // Test Worker time budget is 1 second.
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);
   expect(await object(name).searched()).toHaveLength(1);
   expect(await object(name).alarmAt()).not.toBeNull();

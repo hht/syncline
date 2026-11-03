@@ -1,34 +1,34 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { notifyAll } from './listeners.ts';
 
-// 订阅者抛的错照常报出、不致命：浏览器与 Workers 用 reportError，RN 用 ErrorUtils.reportError
+// Listener errors are reported without fatal aborts: browsers and Workers use reportError, React Native uses ErrorUtils.reportError.
 
 afterEach(() => vi.unstubAllGlobals());
 
 const failing = () => {
-  throw new Error('界面出错');
+  throw new Error('UI error');
 };
 
-test('RN（没有 reportError）：经 ErrorUtils.reportError 进 App 的全局错误处理，不在微任务里重新抛（RN 当致命错误，App 闪退）；别的订阅者照常收到', () => {
+test('reports via ErrorUtils.reportError in React Native when reportError is absent, without re-throwing in microtasks', () => {
   const reported: unknown[] = [];
   const queued = vi.fn();
   vi.stubGlobal('ErrorUtils', { reportError: (error: unknown) => reported.push(error) });
   vi.stubGlobal('queueMicrotask', queued);
   const received: number[] = [];
   notifyAll([failing, (value: number) => received.push(value)], 7);
-  expect(reported).toEqual([new Error('界面出错')]);
+  expect(reported).toEqual([new Error('UI error')]);
   expect(queued).not.toHaveBeenCalled();
   expect(received).toEqual([7]);
 });
 
-test('浏览器与 Workers：经 reportError 报出', () => {
+test('reports via reportError in browser and worker environments', () => {
   const reported: unknown[] = [];
   vi.stubGlobal('reportError', (error: unknown) => reported.push(error));
   notifyAll([failing]);
-  expect(reported).toEqual([new Error('界面出错')]);
+  expect(reported).toEqual([new Error('UI error')]);
 });
 
-test('回调里退订又订阅自己、新订阅别的：这次只调一次，新订阅的这次不调（照 DOM 先照下订阅者）；已退订的不再调', () => {
+test('snapshots listeners to prevent re-invoking resubscribed or newly added listeners and skips removed ones', () => {
   const listeners = new Set<() => void>();
   const calls: string[] = [];
   const later = () => calls.push('later');

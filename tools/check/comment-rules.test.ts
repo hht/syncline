@@ -2,107 +2,123 @@ import { expect, test } from 'vitest';
 import { checkCommentRules } from './comment-rules.ts';
 
 const found = (text: string, path = 'src/a.ts') =>
-  checkCommentRules([{ path, text }]).map(({ line, message }) => `${line} ${message.split('：')[0]}`);
+  checkCommentRules([{ path, text }]).map(({ line, message }) => `${line} ${message.split(': ')[0]}`);
 
-test('注释里的编号、日期、谁决定、行号、版本逐行报出', () => {
+test('reports ADR numbers, dates, who decided, line numbers, and version history line by line', () => {
   expect(
     found(
       `/**
- * 按行比较（ADR 002 §2）
- * 2026-10-01 用户决定
- * 旧版读到缺时按 0（hooks/use-coach.ts:309）
+ * compare by line (ADR 002 §2)
+ * 2026-10-01 user decided
+ * old format defaults missing to 0 (hooks/use-coach.ts:309)
  */
-// 见 node_modules/x/index.js
-// 文档 https://example.com
-// 结论（推断）`,
+// see node_modules/x/index.js
+// docs https://example.com
+// conclusion (inferred)`,
       'probes/a.ts',
     ),
   ).toEqual([
-    '2 不写 ADR 编号',
-    '3 不写日期',
-    '3 不写谁决定的',
-    '4 不写源码行号',
-    '4 不写版本',
-    '6 不指向 node_modules 里的源码',
-    '7 外部资料写成 @see <链接>',
-    '8 写成事实',
+    '2 do not write ADR numbers',
+    '3 do not write dates',
+    '3 do not write who decided',
+    '4 do not write source line numbers',
+    '4 do not write version history',
+    '6 do not point to source files in node_modules',
+    '7 format external references as @see <url>',
+    '8 state as fact',
   ]);
 });
 
-test('@see 链接、描述行为的「推断」、字符串里的内容放行', () => {
+test('@see links, descriptive behavior, and string literals are allowed', () => {
   expect(
     found(
       `/**
- * 写入语句由 SDK 按建表推断
+ * write statements inferred by the SDK from table schemas
  * @see https://www.sqlite.org/datatype3.html
  */
-// 路径形如 node_modules/.pnpm/<目录>/node_modules/<包名>/android
-const note = 'ADR 002 2026-10-01 旧版';`,
+// paths like node_modules/.pnpm/<dir>/node_modules/<pkg>/android
+const note = 'ADR 002 2026-10-01 legacy';`,
       'probes/a.ts',
     ),
   ).toEqual([]);
 });
 
-test('测试名里的编号与版本也拦，其余规则不查测试名', () => {
+test('test titles reject ADR numbers and version history, other rules do not check test titles', () => {
   expect(
     found(`test.each([1])('ADR 002 %s', () => {});
-describe('照旧版注册', () => {});
-test('2024-05-01 的写', () => {});`),
-  ).toEqual(['1 不写 ADR 编号', '2 不写版本']);
+describe('mirrors the legacy format', () => {});
+test('writes on 2024-05-01', () => {});`),
+  ).toEqual(['1 do not write ADR numbers', '2 do not write version history']);
 });
 
-test('门禁与开发脚本可以写版本、编号与行号，日期与谁决定照样拦', () => {
-  expect(found('// 旧版 lib/a.ts:1（ADR 002）\n// 2026-10-01 用户决定', 'tools/check/a.ts')).toEqual(['2 不写日期', '2 不写谁决定的']);
+test('gates and dev scripts can write versions, numbers, and line numbers; dates and who decided are still rejected', () => {
+  expect(found('// legacy format lib/a.ts:1 (ADR 002)\n// 2026-10-01 user decided', 'tools/check/a.ts')).toEqual([
+    '2 do not write dates',
+    '2 do not write who decided',
+  ]);
 });
 
-test('产品代码的注释不指路到文件：协议模型、@see、方法调用、字符串与探针放行', () => {
+test('product comments do not point to files: protocol models, @see, method calls, strings, and probes are allowed', () => {
   const text = `/**
- * 拉完再连（connection.ts 的 start，见 link.ts）
- * 照 model/Private.tla 的 Push，MCPrivateJumpTwice.big.cfg 查两次
- * Node.js 与 wrangler 都认；读回 res.json() 再比
- * 照 RN 的 Libraries/WebSocket/WebSocket.js 设超时，说明在 README.md
+ * pull before connect (start in connection.ts, see link.ts)
+ * following Push in model/Private.tla, MCPrivateJumpTwice.big.cfg checks twice
+ * recognized by both Node.js and wrangler; compare after reading res.json()
+ * timeout set following RN Libraries/WebSocket/WebSocket.js, explained in README.md
  * @see https://github.com/x/y/blob/v1/src/a.ts
  */
-// 部署配置在 wrangler.jsonc
+// deployment config in wrangler.jsonc
 const file = 'server.ts';`;
-  expect(found(text, 'src/a.ts')).toEqual(['2 不指路到文件', '5 不指路到文件', '8 不指路到文件']);
+  expect(found(text, 'src/a.ts')).toEqual(['2 do not point to files', '5 do not point to files', '8 do not point to files']);
   expect(found(text, 'probes/a.ts')).toEqual([]);
 });
 
-test('Rust 的注释守同样的规则：rust/ 不指路到文件，@see <链接> 是 Rust 文档的链接写法', () => {
-  const text = `//! 与 JS 的 \`src/device/device.ts\` 同一套，照 model/Private.tla
+test('Rust comments follow the same rules: rust/ does not point to files, @see <url> is the Rust doc link format', () => {
+  const text = `//! mirrors src/device/device.ts, following model/Private.tla
 /// @see <https://sqlite.org/lang.html>
-/// 文档 https://example.com
+/// docs https://example.com
 const A: &str = "src/a.ts 2026-10-01";`;
-  expect(found(text, 'rust/core/src/a.rs')).toEqual(['1 不指路到文件', '3 外部资料写成 @see <链接>']);
+  expect(found(text, 'rust/core/src/a.rs')).toEqual(['1 do not point to files', '3 format external references as @see <url>']);
 });
 
-test('English comments are held to the same rules', () => {
+test('suppression directives require reasons', () => {
   expect(
     found(
-      `// the user decided this
-// works on iOS (measured on staging)
-// not implemented yet
-// mirrors the legacy format
-test('reads the old format', () => {});
-// @ts-expect-error
+      `// @ts-expect-error
 // @ts-nocheck
 /* @ts-expect-error: */`,
       'probes/a.ts',
     ),
   ).toEqual([
-    '1 不写谁决定的',
-    '2 写成事实',
-    '3 不写待办',
-    '4 不写版本',
-    '6 write the reason after the suppression directive',
-    '7 write the reason after the suppression directive',
-    '8 write the reason after the suppression directive',
-    '5 不写版本',
+    '1 write the reason after the suppression directive',
+    '2 write the reason after the suppression directive',
+    '3 write the reason after the suppression directive',
   ]);
 });
 
-test('English rules leave ordinary technical prose alone', () => {
+test('principle numbers are rejected', () => {
+  expect(
+    found(
+      `// following principle 3
+// core principle 1
+// principle 2`,
+      'probes/a.ts',
+    ),
+  ).toEqual(['1 state the principle itself', '2 state the principle itself', '3 state the principle itself']);
+});
+
+test('TODOs, FIXMEs, and pending implementations are rejected', () => {
+  expect(
+    found(
+      `// TODO: implement this
+// FIXME: broken on android
+// yet to be verified
+// not implemented yet`,
+      'probes/a.ts',
+    ),
+  ).toEqual(['1 do not write TODOs', '2 do not write TODOs', '3 do not write TODOs', '4 do not write TODOs']);
+});
+
+test('ordinary technical prose is left alone', () => {
   expect(
     found(`// @see https://github.com/cloudflare/workerd/blob/v1/src/legacy-hibernation-manager.c%2B%2B
 // the cursor moves to the new version; rows under the old key are deleted

@@ -1,6 +1,7 @@
-//! 打开时把本机表升到这次的声明：删掉的表与列不再同步、不能再声明、物理删；
-//! 不再声明又声明回来的表要整份重拉（回滚期间的删除没人记）。私有空间与共用空间都用。
-//! 不该知道的：要整份重拉时怎么拉、待上传怎么撤回重放。
+//! Schema evolution on device open: permanently drops retired tables and columns,
+//! and triggers a full refetch for tables re-declared after leaving sync (cloud does not record drops during rollback periods).
+//! Shared by private and shared spaces.
+//! What it should not know: how refetches are executed, or how pending writes are reverted and replayed.
 
 use crate::error::Error;
 use crate::sql::{column_names, quote};
@@ -9,7 +10,7 @@ use crate::unknown_rows::{UnknownRows, clear_table};
 use rusqlite::params;
 use std::collections::HashSet;
 
-/// 同步表与本机专用的表不重名、不声明删掉的
+/// Ensures synced tables do not collide with local-only tables and do not declare retired names.
 pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &[String]) -> Result<(), Error> {
     let revived: Vec<String> = synced
         .iter()
@@ -20,20 +21,23 @@ pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &[String]) 
         .collect();
     if !revived.is_empty() {
         return Err(Error::Failed(format!(
-            "同步的表与列里有已删的（{}）：删掉的名字不再回到同步，换个名字",
-            revived.join("、")
+            "synced tables and columns contain retired names ({}): retired names cannot return to sync; choose a different name",
+            revived.join(", ")
         )));
     }
     if let Some(table) = local_only
         .iter()
         .find(|table| synced.iter().any(|synced| synced.name == table.name))
     {
-        return Err(Error::Failed(format!("本机专用的表与同步表重名：{}", table.name)));
+        return Err(Error::Failed(format!(
+            "local-only table has the same name as a synced table: {}",
+            table.name
+        )));
     }
     Ok(())
 }
 
-/// 删掉的表与列：`_syncline_unknown` 里这张表的行丢掉；同步过的表（有 _extra）物理删表或列
+/// Drops retired tables and columns: clears unknown rows from `_syncline_unknown`; physically drops synced tables and columns (tables with `_extra`).
 pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<(), Error> {
     for name in retired {
         let (table, column) = name
@@ -48,14 +52,14 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
         }
         match column {
             None => {
-                // 拉到一半的影子表一起删：删掉的表不再声明，影子表没人认领
+                // Drop partially pulled shadow tables: retired tables are no longer declared, so shadow tables will never be claimed
                 db.execute(&format!("DROP TABLE {}", quote(table)), [])?;
                 crate::shadow_tables::drop_shadow(db, table)?;
                 db.execute("DELETE FROM _syncline_columns WHERE name = ?", [table])?;
                 db.execute("DELETE FROM _syncline_declared WHERE name = ?", [table])?;
             }
             Some(column) if columns.iter().any(|name| name == column) => {
-                // SQLite 删不了建了索引的列：先删含它的索引（外键的第一列有 Syncline 建的索引）
+                // SQLite cannot drop indexed columns: drop indexes covering the column first (e.g. foreign key indexes created by Syncline)
                 let indexes: Vec<String> = db
                     .prepare(&format!("PRAGMA index_list({})", quote(table)))?
                     .query_map([], |row| row.get("name"))?
@@ -79,7 +83,7 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
     Ok(())
 }
 
-/// 这个空间（私有空间是空串）这次声明的表 names：返回要不要整份重拉（不再声明、没删的表回滚期间的删除没人记，再声明时重拉一次）
+/// Updates declared table list for `space` (private space is empty string), returning whether a full refetch is required (tables previously declared that left sync without being retired may have missed deletes).
 pub fn redeclare(db: &rusqlite::Connection, space: &str, names: &[String]) -> Result<bool, Error> {
     let before: Vec<String> = db
         .prepare("SELECT name FROM _syncline_declared WHERE space = ?")?

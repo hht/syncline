@@ -19,50 +19,60 @@ function comments(file: ts.SourceFile) {
 }
 
 type Rule = [RegExp, string];
-// 注释只写功能与为什么。下面这些信息另有去处，写在注释里会过时或误导：决定在 ADR，经过在提交说明。
-// 全仓都查：在哪里都是经过
-// The English patterns carry the same intent as the Chinese ones beside them.
+
+// Comments only state behavior and why. Information below has other homes; keeping it in comments goes stale or misleads: decisions belong in ADR, history belongs in commit messages.
+// Checked across the entire repository: history is out of place anywhere.
 const everywhere: Rule[] = [
-  [/\b20\d{2}-\d{2}-\d{2}\b/, '不写日期：经过写进提交说明'],
-  [/用户(决定|同意|确认|要求)|拍板/, '不写谁决定的：决定写进 ADR'],
-  [/\buser (?:decided|agreed)\b|\b(?:decided|agreed) by the user\b/i, '不写谁决定的：决定写进 ADR'],
-  // 指向 node_modules 里具体的源码文件；只说路径的格式（native-duplicates 解析的）不算
-  [/node_modules\/\S+\.(c?js|mjs|tsx?|mm?|java|kt|swift)\b/, '不指向 node_modules 里的源码：用 @see 打版本标签的固定链接'],
-  [/(?<!@see <?)https?:\/\//, '外部资料写成 @see <链接>'],
+  [/\b20\d{2}-\d{2}-\d{2}\b/, 'do not write dates: history belongs in commit messages'],
+  [/\buser (?:decided|agreed)\b|\b(?:decided|agreed) by the user\b/i, 'do not write who decided: decisions belong in ADR'],
+  [
+    /node_modules\/\S+\.(c?js|mjs|tsx?|mm?|java|kt|swift)\b/,
+    'do not point to source files in node_modules: use @see with a version-tagged permalink',
+  ],
+  [/(?<!@see <?)https?:\/\//, 'format external references as @see <url>'],
   [/@ts-(?:expect-error|nocheck)(?![\s:-]*\w)/, 'write the reason after the suppression directive'],
-  [/最高准则 ?\d/, '写准则的内容：编号会变'],
+  [/\b(?:core )?principle ?\d\b/i, 'state the principle itself: numbers can change'],
 ];
-// 只查产品代码与它的配置、探针：门禁与开发脚本（tools/）要写外部工具的行号与版本
+
+// Only check product code, its configuration, and probes: gates and dev scripts (tools/) need to write external tool line numbers and versions.
 const business = /^(?!tools\/|\.claude\/)/;
 const product: Rule[] = [
   ...everywhere,
-  [/\bADR ?\d{3}\b|docs\/adr\//, '不写 ADR 编号：注释写规则本身'],
-  // 「（推断）」是标注没核实的结论；「由 SDK 推断」之类描述行为的不算
-  [/实测|[（(]推断|推断[）)]|未(证实|核对|核实)/, '写成事实：验证的经过写进提交说明'],
-  [/\((?:inferred|unverified|measured)\b[^)]*\)|\bnot yet verified\b|\b(?:we|I) measured\b/i, '写成事实：验证的经过写进提交说明'],
-  [/待全量|待.{0,4}(实现|验证)|TODO|FIXME/, '不写待办：计划写进 ADR 或 stub 清单'],
-  [/\b(?:yet|still) to be (?:implemented|verified)\b|\bnot (?:yet implemented|implemented yet)\b/i, '不写待办：计划写进 ADR 或 stub 清单'],
-  [/\.(d\.ts|tsx?|jsx?|mjs|cjs|rs|mm?|java|kt|swift):\d+/, '不写源码行号：外部源码用 @see 打版本标签的固定链接'],
-  // 产品读起来是全新的：规则直接写成规则；导入的数据就叫导入的数据
-  [/旧版|新版|新云端|旧(后端|库|网站|数据|键|名|写法|格式)/, '不写版本：规则直接写，导入的数据写「导入的数据」'],
-  [/(?<![\w/-])(?:legacy|new cloud|old (?:backend|site|format))(?![\w-])/i, '不写版本：规则直接写，导入的数据写「导入的数据」'],
+  [/\bADR ?\d{3}\b|docs\/adr\//, 'do not write ADR numbers: state the rule itself'],
+  [
+    /\((?:inferred|unverified|measured)\b[^)]*\)|\bnot yet verified\b|\b(?:we|I) measured\b/i,
+    'state as fact: verification history belongs in commit messages',
+  ],
+  [
+    /\b(?:TODO|FIXME|(?:yet|still) to be (?:implemented|verified)|not (?:yet implemented|implemented yet))\b/i,
+    'do not write TODOs: plans belong in ADR or stub lists',
+  ],
+  [
+    /\.(d\.ts|tsx?|jsx?|mjs|cjs|rs|mm?|java|kt|swift):\d+/,
+    'do not write source line numbers: use @see with a version-tagged permalink for external source',
+  ],
+  [
+    /(?<![\w/-])(?:legacy|new cloud|old (?:backend|site|format))(?![\w-])/i,
+    'do not write version history: state the rule directly, and call imported data "imported data"',
+  ],
 ];
-// 产品代码（src/ 与 Rust 的 rust/）的注释只写最终的规则与算法，不指路到文件（探针等开发脚本的用法要写路径，不查）：文件挪位、改名后指路就错了，又没有工具查。要提别的模块，直接写它的行为，
-// 或写 {@link 符号}（编辑器能跳、改名时跟着改）；协议模型（model/*.tla、*.cfg）是规格的真源，指向模型的动作照留；外部资料用 @see
+
+// Product code comments (src/ and Rust rust/) only state final rules and algorithms, and do not point to files (dev scripts like probes need file paths and are skipped): file paths become wrong after moving or renaming without tooling to verify. To refer to other modules, state their behavior directly or write {@link Symbol} (navigable in editor, renamed during refactoring); protocol models (model/*.tla, *.cfg) are the source of truth for the specification, so actions pointing to models are kept; external materials use @see.
 const source = /^(src|rust)\//;
 const sourceRules: Rule[] = [
   ...product,
-  // 文件名：小写开头（本仓的文件都是）或跟在 / 后面（别处的路径）；后面接 ( 的是方法调用（res.json()），不算
+  // Filenames: lowercase start (all files in this repo) or preceded by / (paths elsewhere); followed by ( is a method call (res.json()), ignored.
   [
     /^(?!.*@see).*(?:\/[\w.-]+|\b[a-z][\w-]*)\.(?:d\.ts|tsx?|jsx?|[cm]js|rs|md|jsonc?|sql|ya?ml)\b(?!\()/,
-    '不指路到文件：直接写行为或规则，要提别的模块写 {@link 符号}',
+    'do not point to files: state the behavior or rule directly, or reference symbols with {@link Symbol}',
   ],
 ];
-// 测试名是写成句子的规则，同样不带编号、不写版本
-const titleRules = product.filter(([, message]) => /^不写 ?(ADR|版本)/.test(message));
+
+// Test titles are rules written as sentences; they also omit numbers and versions.
+const titleRules = product.filter(([, message]) => /^do not write (?:ADR numbers|version history)/.test(message));
 const testCalls = new Set(['test', 'it', 'describe']);
 
-/** test('…')、test.each(…)('…')、describe.skip('…') 的标题 */
+/** Titles of test('...'), test.each(...)('...'), describe.skip('...'). */
 function testTitles(file: ts.SourceFile) {
   const titles: { pos: number; text: string }[] = [];
   const visit = (node: ts.Node) => {
@@ -79,14 +89,14 @@ function testTitles(file: ts.SourceFile) {
   return titles;
 }
 
-/** 配置文件（jsonc、yaml、.gitignore）按行认注释：整行以 //、#、/* 或续行的 * 开头 */
+/** Config files (jsonc, yaml, .gitignore) recognize comments by line: full line starting with //, #, /*, or continuation *. */
 const configComment = /^\s*(\/\/|#|\/\*|\*)/;
 const isScript = (path: string) => /\.([cm]js|tsx?)$/.test(path);
 
 export function checkCommentRules(files: SourceText[]): Problem[] {
   return files.flatMap(({ path, text }) => {
     const fileRules = source.test(path) ? sourceRules : business.test(path) ? product : everywhere;
-    /** content 从第 start 行（从 0 数）起，逐行套规则 */
+    /** Applies rules line by line to content starting from line start (0-based). */
     const found = (start: number, content: string, rules: Rule[]) =>
       content
         .split('\n')

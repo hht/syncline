@@ -1,12 +1,13 @@
-//! 一条 WebSocket 一条线程：连上（TCP、TLS、WebSocket 握手，阻塞着做），之后转成非阻塞，用 poll 同时等 socket 可读（可写）与唤醒管道，
-//! 核心线程要发消息或断开时往管道里写一个字节叫醒它。空闲时线程一直睡、不耗电，要发的立刻发。
-//! tungstenite 同一条连接不能一个线程阻塞着读、另一个线程同时写（TLS 的状态只有一份），所以读写都在这条线程上。
-//! TLS 用 rustls 自己接（显式用 ring），不开 tungstenite 的 TLS 特性：那会连带 rustls 默认的另一种加密实现。
-//! 地址不合法交回 `failed`；连不上（解析地址、TCP、TLS、握手被拒）与连上之后断了都交回 `closed`（对方的关闭码，没有关闭帧是 1006，带着原因），
-//! 与浏览器一样：核心按断开退避重连，不当成出错报出。
-//! 核心断开（`Socket::close`）时关掉连接、结束线程；正在交的事可能还会到，由核心线程丢掉（它已不记着这个 socket）。
-//! 不该知道的：消息里是什么、什么时候该重连（核心的心跳与退避）。
-//! @see <https://docs.rs/tungstenite/0.30.0/tungstenite/protocol/struct.WebSocket.html>（非阻塞时 `WouldBlock` 可以重试）
+//! WebSocket thread loop: connects synchronously (TCP, TLS, WebSocket handshake), then switches to non-blocking poll waiting
+//! on socket readability/writability and a wakeup pipe. The sync thread signals writes or disconnects via a 1-byte pipe write.
+//! Idles without power consumption when inactive, dispatching pending writes immediately upon wakeup.
+//! tungstenite requires reads and writes to share a thread because TLS state is non-reentrant.
+//! TLS connects via rustls explicitly configured with ring, avoiding tungstenite's default crypto crate.
+//! Malformed URLs return `failed`; connection drops and handshake failures return `closed` (peer close code, or 1006 with reason),
+//! matching browser behavior: sync core triggers backoff reconnect without treating drops as unrecoverable errors.
+//! Core disconnection (`Socket::close`) tears down the socket and terminates the thread; in-flight events are dropped by the sync thread.
+//! What this module should not know: frame payload semantics or reconnect backoff scheduling.
+//! @see <https://docs.rs/tungstenite/0.30.0/tungstenite/protocol/struct.WebSocket.html>
 //! @see <https://man7.org/linux/man-pages/man2/poll.2.html>
 
 mod connect;
@@ -23,7 +24,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use syncline::client::Input;
 use tungstenite::{Message, WebSocket};
 
-/// 各条 WebSocket 共用的 TLS 设置：证书在苹果的系统上交给系统校验，其余用内置的根证书
+/// Shared TLS client configuration: platform verifier on Apple platforms, bundled webpki roots elsewhere.
 /// @see <https://docs.rs/rustls-platform-verifier/0.7.1/rustls_platform_verifier/trait.BuilderVerifierExt.html>
 pub struct Network {
     tls: Arc<ClientConfig>,
@@ -33,11 +34,13 @@ impl Network {
     pub fn new() -> Network {
         let builder = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
-            .expect("ring 支持默认的 TLS 版本");
+            .expect("ring supports default TLS versions");
         #[cfg(target_vendor = "apple")]
         let builder = {
             use rustls_platform_verifier::BuilderVerifierExt;
-            builder.with_platform_verifier().expect("苹果的系统校验建起来不会出错")
+            builder
+                .with_platform_verifier()
+                .expect("platform verifier construction does not fail")
         };
         #[cfg(not(target_vendor = "apple"))]
         let builder = builder.with_root_certificates(rustls::RootCertStore {
@@ -55,20 +58,20 @@ struct Outgoing {
     closed: bool,
 }
 
-/// 核心线程这一头：交要发的消息、断开。唤醒管道的两头都留着：线程结束后核心线程照样会叫醒它（排在关闭之前的事发出的 send），
-/// 被叫醒的一头若随线程关掉，往管道写会触发 SIGPIPE，iOS 的宿主进程不忽略它（Rust 在 main 里才忽略，静态库不跑），App 被杀
-/// @see <https://doc.rust-lang.org/unstable-book/compiler-flags/on-broken-pipe.html>（Rust 程序启动时把 SIGPIPE 设成忽略）
+/// Sync thread handle: submits outgoing messages and triggers disconnect. Both ends of wakeup pipe are retained
+/// so writes after thread termination do not trigger SIGPIPE on iOS hosts.
+/// @see <https://doc.rust-lang.org/unstable-book/compiler-flags/on-broken-pipe.html>
 pub struct Socket {
     outgoing: Arc<Mutex<Outgoing>>,
     wake: Option<(UnixStream, Arc<UnixStream>)>,
 }
 
 impl Socket {
-    /// 起一条线程连上 url（protocols 是子协议）；连接的事带着编号 id 交给核心线程
+    /// Spawns a dedicated thread connecting to `url` with `protocols`; events deliver to sync thread with `id`.
     pub fn open(id: u32, url: String, protocols: Vec<String>, events: Sender<Event>, network: &Network) -> Socket {
         let outgoing = Arc::new(Mutex::new(Outgoing::default()));
         let pair = UnixStream::pair().and_then(|(wake, woken)| {
-            // 唤醒的一头写满了也不等（已经有字节在叫醒它了），被叫醒的一头读空了就停
+            // Non-blocking wakeup pipe: drops write if pipe buffer is full, drains reads completely.
             wake.set_nonblocking(true)?;
             woken.set_nonblocking(true)?;
             Ok((wake, woken))
@@ -78,7 +81,7 @@ impl Socket {
             Err(error) => {
                 let _ = events.send(Event::Network(Input::Failed {
                     id,
-                    error: format!("建不了唤醒管道：{error}"),
+                    error: format!("failed to create wakeup pipe: {error}"),
                 }));
                 return Socket { outgoing, wake: None };
             }
@@ -93,7 +96,7 @@ impl Socket {
         std::thread::Builder::new()
             .name("syncline-socket".to_owned())
             .spawn(thread)
-            .expect("起不了 WebSocket 的线程");
+            .expect("failed to spawn WebSocket thread");
         Socket {
             outgoing,
             wake: Some((wake, woken)),
@@ -109,7 +112,7 @@ impl Socket {
         self.wake();
     }
 
-    /// 断开：不等关闭握手，关掉连接、结束线程
+    /// Disconnects immediately without waiting for close handshake, closing connection and terminating thread.
     pub fn close(&self) {
         self.outgoing.lock().unwrap_or_else(PoisonError::into_inner).closed = true;
         self.wake();
@@ -122,7 +125,7 @@ impl Socket {
     }
 }
 
-/// 核心线程不再管它（关库、核心线程出错退出）：线程也结束，不留着一条没人管的连接
+/// When dropped by sync thread, terminates worker thread to avoid orphaned connections.
 impl Drop for Socket {
     fn drop(&mut self) {
         self.close();
@@ -167,7 +170,7 @@ fn run(
     }
 }
 
-/// 收发直到断开：对方关闭或出错时给出关闭码与原因，核心断开的给 None
+/// Pumps messages until disconnect: returns close code and reason on remote close/error, or None on local close.
 fn pump(
     ws: &mut WebSocket<Stream>,
     id: u32,
@@ -184,7 +187,7 @@ fn pump(
             }
             std::mem::take(&mut outgoing.messages)
         };
-        // 写不出去的帧留在 tungstenite 的缓冲里，下次 flush 接着写
+        // Frames that cannot be flushed immediately remain buffered in tungstenite for next flush.
         for data in messages {
             if let Err(error) = ws.write(Message::text(data))
                 && !would_block(&error)
@@ -203,12 +206,12 @@ fn pump(
                     socket: id,
                     data: text.as_str().to_owned(),
                 }),
-                // 回对方的关闭帧尽力发出，不等
+                // Best-effort response to remote close frame without blocking.
                 Ok(Message::Close(frame)) => {
                     let _ = ws.flush();
                     return Some(frame.map_or((1005, String::new()), |frame| (frame.code.into(), frame.reason.as_str().to_owned())));
                 }
-                // 协议只用文本消息；ping、pong 由 tungstenite 自己回
+                // Wire protocol uses text messages only; ping/pong handled internally by tungstenite.
                 Ok(_) => {}
                 Err(error) if would_block(&error) => break,
                 Err(error) => return Some(abnormal(&error)),
@@ -218,8 +221,8 @@ fn pump(
     }
 }
 
-/// 等 socket 可读（writing 时也等可写）或被叫醒；叫醒的字节读掉
-#[expect(unsafe_code, reason = "poll 是 C 接口；传入的数组在调用期间有效、长度与实参一致")]
+/// Waits for socket readability (and writability if writing) or wakeup pipe; drains wakeup byte.
+#[expect(unsafe_code, reason = "poll is a C FFI call; descriptor array remains valid for duration of call")]
 fn wait(socket: RawFd, writing: bool, woken: &UnixStream) {
     let mut fds = [
         libc::pollfd {
@@ -233,7 +236,7 @@ fn wait(socket: RawFd, writing: bool, woken: &UnixStream) {
             revents: 0,
         },
     ];
-    // 出错（被信号打断）照样回到循环里重试
+    // Interrupted poll calls retry in next loop iteration.
     let _ = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
     let mut drained = [0; 64];
     while matches!((&mut &*woken).read(&mut drained), Ok(read) if read > 0) {}
@@ -243,7 +246,7 @@ fn would_block(error: &tungstenite::Error) -> bool {
     matches!(error, tungstenite::Error::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock)
 }
 
-/// 没有关闭帧就断了：与浏览器一样是 1006
+/// Connection dropped without a close frame: 1006 abnormal closure matching browsers.
 fn abnormal(error: &tungstenite::Error) -> (u16, String) {
     let reason = match error {
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => String::new(),

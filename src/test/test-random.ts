@@ -1,6 +1,6 @@
-// 确定性模拟里的随机数：同一个种子给出同一串数
+// Deterministic pseudo-random number generator: identical seed yields identical sequence.
 
-/** mulberry32：32 位状态的小型伪随机数 */
+/** mulberry32: compact 32-bit pseudo-random number generator. */
 export function random(seed: number) {
   let state = seed;
   return () => {

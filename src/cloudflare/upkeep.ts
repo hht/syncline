@@ -4,22 +4,20 @@ import type { Query } from '../common/storage.ts';
 import { type Chore, reserved, type Schedule } from './schedule.ts';
 
 /**
- * 云端的对象在后台收拾的事：给已有的表补还缺的外键索引与桶规则的索引、删过时的桶规则的索引（defineTables 留下的），物理删过了宽限期的
- * 删掉的同步表。两样的工作量都随表的大小涨，放在打开对象时做，大到超出一次请求的 CPU 这个空间就打不开；
- * 打开时只登记，每次 alarm 只做一步（建一个索引或删一张表），出错按退避重排。一步本身仍要在一次调用的 CPU 之内。
- * 日志超了上限（写了之后、打开时查）就截日志，每次 alarm 截一步，截到上限的 3/4 为止。
- * 共用空间另有一件：每个桶的行数还有要数的、要删的（打开时查：规则改了、表进入同步才有），每次 alarm 做一步。
- * 不该知道的：哪些表该删、哪些索引该建。
+ * Background maintenance tasks on cloud Durable Objects:
+ * builds missing foreign-key and bucket indexes, drops stale bucket indexes, physically drops retired tables past their 30-day grace period,
+ * truncates the commit log when over the byte cap, and updates per-bucket row counts in shared spaces.
+ * Tasks are stepped one operation per alarm with exponential backoff on failure.
  */
 
-/** 在定时表里登记的名字 */
+/** Registered task names in the schedule table. */
 const name = `${reserved}upkeep`;
 const truncateName = `${reserved}truncate`;
 const countName = `${reserved}count`;
 
-/** 提交记录：超没超上限、截一步（返回还要不要接着截） */
+/** Commit log truncation operations: checks byte cap and executes one truncation step (returns true if more commits remain). */
 type Truncation = { commitsOverLimit(): boolean; truncate(): boolean };
-/** 每个桶的行数：还有没有要做的、做一步（返回还有没有要做的） */
+/** Bucket row counting operations: checks if work is pending and steps counting (returns true if more work remains). */
 type Counting = { pending(): boolean; step(): boolean };
 
 const retry = { base: 60_000, max: 3_600_000 };
@@ -32,12 +30,12 @@ export class Upkeep {
   readonly #events: Events;
   readonly #truncation: Truncation | undefined;
   readonly #counting: Counting | undefined;
-  /** 这一步做的是哪样：出错时报出 */
+  /** Active upkeep step type for failure reporting. */
   #step: 'index' | 'drop' = 'index';
 
   /**
-   * indexes 是建还缺的、删过时的索引的语句；keep 是只在云端用的表（删掉的同步表过了宽限期，仍在这里的不删）；出错报给 events；
-   * truncation 截提交记录，counting 数每个桶的行数（共用空间）。打开对象时构造，有要做的就登记
+   * Initializes maintenance tasks: indexes contains DDL statements for missing or stale indexes; keep protects cloud-only tables;
+   * truncation trims commits; counting tallies bucket rows. Schedules pending tasks on construction.
    */
   constructor(
     query: Query,
@@ -60,12 +58,12 @@ export class Upkeep {
     if (at !== undefined) timetable.by(name, at);
   }
 
-  /** 有了新的一版：日志超了上限就登记截日志（在退避中的不提前） */
+  /** Checks commit log byte limits after a commit and schedules truncation if needed. */
   written() {
     if (this.#truncation?.commitsOverLimit()) this.#timetable.by(truncateName, Date.now());
   }
 
-  /** 定时表里登记的一件是不是这里的事：是就给出它，不是是 undefined */
+  /** Matches a registered task name in the schedule table and returns the corresponding Chore, or undefined. */
   chore(registered: string): Chore | undefined {
     const truncation = this.#truncation;
     if (registered === truncateName && truncation) return this.#chore('truncate', () => truncation.truncate());
@@ -80,7 +78,7 @@ export class Upkeep {
     };
   }
 
-  /** 一件一步一步做的事：run 做一步、返回还要不要接着做，出错按 step 报出 */
+  /** Creates a stepped chore that reports errors with the given step name. */
   #chore(step: 'truncate' | 'count', run: () => boolean): Chore {
     return {
       run: async () => run(),
@@ -89,7 +87,7 @@ export class Upkeep {
     };
   }
 
-  /** 做一步：先补索引，再删到时候了的表；返回还有没有马上要做的，删表还没到时候的照它的时刻登记 */
+  /** Steps maintenance: applies one index statement, then drops due retired tables, rescheduling future drops. */
   #run() {
     const [index] = this.#indexes;
     if (index !== undefined) {

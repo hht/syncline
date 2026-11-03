@@ -20,7 +20,7 @@
     }
   },
   "overrides": [
-    // 会打进手机包的代码不用 Hermes 没有的内置方法（规则与理由在插件文件里）；测试只在 Node 里跑
+    // Code bundled into mobile apps must avoid built-ins unsupported by Hermes; tests run only in Node.
     { "includes": ["src/**", "!**/*.test.ts"], "plugins": ["./tools/check/hermes-builtins.grit"] }
   ]
 }

@@ -1,7 +1,9 @@
-//! 接入方在本机库上能执行哪些语句：事务由 Syncline 开关、表结构由表定义管，
-//! 所以只放行读（SELECT、WITH、VALUES）与本机写里的改行（INSERT、UPDATE、DELETE、REPLACE），别的一律拒绝。
-//! 按去掉开头的空白、分号（空语句）与注释之后的第一个关键字认，用放行的清单不用拒绝的清单。
-//! 不该知道的：语句从哪来、谁在执行它。
+//! Allowed statements integrators may execute on the local database: transactions are managed
+//! by Syncline and schemas are governed by table definitions, so only reads (SELECT, WITH, VALUES)
+//! and local write row mutations (INSERT, UPDATE, DELETE, REPLACE) are permitted; all other statements are rejected.
+//! Identifies first keyword after stripping leading whitespace, semicolons (empty statements), and comments,
+//! using an allowlist rather than a blocklist.
+//! What it should not know: where statements come from or who executes them.
 //! @see <https://sqlite.org/lang.html>
 
 use crate::error::Error;
@@ -9,20 +11,20 @@ use crate::error::Error;
 const READS: [&str; 3] = ["SELECT", "WITH", "VALUES"];
 const WRITES: [&str; 7] = ["SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "REPLACE"];
 
-/// 读本机库时这条语句该由 Syncline 管就报错
+/// Rejects statements not permitted during database reads
 ///
 /// # Errors
-/// 不是读。
+/// Statement is not a read.
 pub fn refuse_unless_read(sql: &str) -> Result<(), Error> {
-    refuse_unless(&READS, sql, "读本机库时")
+    refuse_unless(&READS, sql, "when reading the local database")
 }
 
-/// 本机写里这条语句该由 Syncline 管就报错
+/// Rejects statements not permitted during local writes
 ///
 /// # Errors
-/// 不是读或改行。
+/// Statement is not a read or row mutation.
 pub fn refuse_unless_write(sql: &str) -> Result<(), Error> {
-    refuse_unless(&WRITES, sql, "本机写里")
+    refuse_unless(&WRITES, sql, "inside a local write")
 }
 
 fn refuse_unless(allowed: &[&str], sql: &str, place: &str) -> Result<(), Error> {
@@ -35,13 +37,13 @@ fn refuse_unless(allowed: &[&str], sql: &str, place: &str) -> Result<(), Error> 
         return Ok(());
     }
     Err(Error::Failed(format!(
-        "{place}不能执行 {}，只能执行 {}：事务由 Syncline 开关，表结构由表定义管",
-        if keyword.is_empty() { "空语句" } else { &keyword },
-        allowed.join("、")
+        "{} is not allowed {place}; only {} are permitted: transactions are managed by Syncline and table schemas are governed by table definitions",
+        if keyword.is_empty() { "empty statement" } else { &keyword },
+        allowed.join(", ")
     )))
 }
 
-/// 去掉开头的空白、空语句（分号）与注释
+/// Strips leading whitespace, empty statements (semicolons), and comments
 fn leading(mut sql: &str) -> &str {
     loop {
         let trimmed = sql.trim_start_matches(|c: char| c.is_whitespace() || c == ';');
@@ -63,11 +65,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 按去掉注释与空语句后的第一个关键字认() {
-        assert!(refuse_unless_read(" ;-- 注释\n/* 块 */ select 1").is_ok());
+    fn identifies_first_keyword_after_stripping_comments_and_empty_statements() {
+        assert!(refuse_unless_read(" ;-- comment\n/* block */ select 1").is_ok());
         assert!(refuse_unless_read("PRAGMA query_only = 0").is_err());
         assert!(refuse_unless_write("insert into t values (1)").is_ok());
         assert!(refuse_unless_write("BEGIN").is_err());
-        assert!(refuse_unless_write("/* 不闭合").is_err());
+        assert!(refuse_unless_write("/* unclosed").is_err());
     }
 }

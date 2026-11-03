@@ -8,12 +8,12 @@ import { serving, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 
-// 推送：一批确认了再推下一批，确认按序号认；连接断了、换了新连接，推送照常接上，不停住、不重复执行
+// Push: next batch sent after previous is confirmed by mutation ID; seamlessly resumes across disconnects and reconnections.
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 const tables = [note];
 
-/** 一台设备经替身网络连着一个空间（pushRows 是云端一批推送的工作量上限）：drain 送完在路上的帧、做完握手与请求 */
+/** Connects a device to a space through mock network (pushRows bounds cloud push work budget); drain flushes frames, handshakes, and requests. */
 async function linked(pushRows?: number) {
   const space = new Space(cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY)'), tables, { pushRows });
   const { network, server } = serving(space);
@@ -34,7 +34,7 @@ async function linked(pushRows?: number) {
   return { network, server, device, connection, drain, cloudNotes };
 }
 
-/** 一条一直开着的本机写：写完了，等 close 才结束 */
+/** An open local write: writes immediately, finishing only when close is called. */
 function openWrite(device: Device, id: string) {
   const { promise, resolve } = Promise.withResolvers<void>();
   const done = write(device, async (tx) => {
@@ -44,12 +44,12 @@ function openWrite(device: Device, id: string) {
   return { close: resolve, done };
 }
 
-test('确认上一批的通知到达时恰有一条本机写开着：它提交后照样推上去，之后的写也照常推', async () => {
+test('pushes write committed while confirmation poke for previous batch is arriving, continuing normally', async () => {
   const { network, device, connection, drain } = await linked();
   await write(device, (tx) => tx.insert(note).values({ id: 'A' }));
   const b = openWrite(device, 'B');
   await flush();
-  // A 送到云端、确认 A 的通知送到设备：这时 B 还开着
+  // A delivered to cloud, confirmation poke arriving at device while B remains open.
   network.deliver();
   network.deliver();
   await flush();
@@ -63,11 +63,11 @@ test('确认上一批的通知到达时恰有一条本机写开着：它提交�
   connection.stop();
 });
 
-test('推送的回执丢了、重连后设备照原样重推：补齐先确认了它，云端跳过重复的写、不回，之后的写照常推上去', async () => {
+test('cloud skips duplicate writes when push receipt dropped and device retries after reconnect, confirmed via catch-up', async () => {
   const { network, device, connection, drain, cloudNotes } = await linked();
   const pushed = vi.spyOn(Space.prototype, 'push');
   await write(device, (tx) => tx.insert(note).values({ id: 'A' }));
-  // A 送到云端执行了，确认的通知还在路上时连接断了
+  // A executed on cloud; connection drops while confirmation poke is in flight.
   network.deliver();
   network.breakOne();
   expect(device.private.pendingCount()).toBe(1);
@@ -77,39 +77,39 @@ test('推送的回执丢了、重连后设备照原样重推：补齐先确认�
   await write(device, (tx) => tx.insert(note).values({ id: 'B' }));
   await drain();
   expect(device.private.pendingCount()).toBe(0);
-  // A 推了两次：重推的那次全是重复的写，云端不回
+  // A pushed twice: retransmission contains only duplicate writes, which cloud skips without replying.
   expect(pushed.mock.calls.filter(([mutations]) => mutations.some(({ id }) => id === 1))).toHaveLength(2);
   pushed.mockRestore();
   expect(cloudNotes()).toMatchObject({ patch: [{ op: 'clear' }, { row: { id: 'A' } }, { row: { id: 'B' } }] });
   connection.stop();
 });
 
-test('旧连接上的通知排在开着的本机写后面，其间连接断了、连上新的：旧连接的通知不再应用，新连接的补齐照常接上，不出错、不断开', async () => {
+test('reconnection supersedes stale poke from dropped connection without error or disconnect', async () => {
   const { network, server, device, connection, drain, cloudNotes } = await linked();
   const b = openWrite(device, 'B');
   await flush();
-  // 服务端的写：通知送到设备，排在开着的本机写后面
+  // Server write: poke arrives at device, queued behind active local write.
   server.mutate((tx) => tx.insert(note, { id: 'S' }));
   network.deliver();
   await flush();
-  // 这时连接断了，重连：新连接的补齐也排在后面
+  // Connection drops during active write: reconnect catch-up also queues behind it.
   network.breakOne();
   const failures: Error[] = [];
   connection.onStatus(({ downloadError }) => downloadError && failures.push(downloadError));
-  // 重连的退避（第一次在 1 秒内）到时：Rust 的设备把「排在开着的本机写后面等了 5 秒」的提醒也排在替身的计时器上，不触发它
+  // Reconnect backoff timer fires; mock timer advances without triggering the 5s local write stall warning.
   network.fire(1000);
   await drain();
   b.close();
   await b.done;
   await drain();
-  expect(failures.filter(({ message }) => message.includes('接不上'))).toEqual([]);
+  expect(failures.filter(({ message }) => message.includes('does not match local cookie'))).toEqual([]);
   expect(connection.status().connected).toBe(true);
   expect(device.private.pendingCount()).toBe(0);
   expect(cloudNotes()).toMatchObject({ patch: [{ op: 'clear' }, { row: { id: 'B' } }, { row: { id: 'S' } }] });
   connection.stop();
 });
 
-test('云端只收设备会发的推送：一次至多 1000 条写，多了整批拒收（以 1007 关掉）；没有改动的写认得出身份，照收（云端扣下它）', async () => {
+test('cloud limits pushed mutations: rejects batches over 1000 mutations with 1007; empty mutations are held', async () => {
   const mutation = (client: string, id: number, changes = [{ op: 'put', table: 'note', row: { id: `${client}-${id}` } }]) => ({
     client,
     id,
@@ -121,7 +121,7 @@ test('云端只收设备会发的推送：一次至多 1000 条写，多了整�
   expect(parseMutations(JSON.stringify([mutation('c1', 1, [])]))).toMatchObject([{ client: 'c1', id: 1, malformed: expect.any(String) }]);
 });
 
-test('值是非有限的小数（NaN、Infinity）：JSON 里成了 null，认得出，不整批拒收', () => {
+test('non-finite floats (NaN, Infinity) serialize to null in JSON: recognized without rejecting whole batch', () => {
   const pushed = JSON.stringify([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'note', row: { id: 'n1', x: Number.NaN, y: Number.POSITIVE_INFINITY } }] },
   ]);
@@ -130,7 +130,7 @@ test('值是非有限的小数（NaN、Infinity）：JSON 里成了 null，认�
   ]);
 });
 
-test('重启过很多次、攒了很多客户端的写：不按客户端数分批，一批推上去、都确认', async () => {
+test('pushes pending mutations accumulated across multiple restarts and clients in a single batch', async () => {
   const storage = deviceStorage('CREATE TABLE note (id TEXT PRIMARY KEY)');
   for (let launch = 0; launch < 20; launch += 1) {
     const device = new Device(storage, tables);
@@ -144,7 +144,7 @@ test('重启过很多次、攒了很多客户端的写：不按客户端数分�
   expect(Object.keys(space.push(parseMutations(JSON.stringify(batch)))?.lmids ?? {})).toHaveLength(20);
 });
 
-test('云端的库满了（SQLITE_FULL，DO 存到 10 GB）：这批整体处理不了、抛错（连接以 1011 关），不推进序号、不扣下；腾出地方后重发照常执行', async () => {
+test('cloud SQLite full (SQLITE_FULL): throws and closes with 1011 without advancing lmid or holding; re-executes after space freed', async () => {
   const memo = sqliteTable('memo', { id: text().primaryKey(), body: text() });
   const create = 'CREATE TABLE memo (id TEXT PRIMARY KEY, body TEXT)';
   const cloud = cloudStorage(create);
@@ -161,10 +161,10 @@ test('云端的库满了（SQLITE_FULL，DO 存到 10 GB）：这批整体处理
   expect(cloud.sql.exec('SELECT id FROM memo').toArray()).toEqual([{ id: 'm1' }]);
 });
 
-test('云端一批只处理了前缀（工作量到了上限）：通知确认了在路上那批的一部分，设备在同一条连接上接着推剩下的，不重连', async () => {
+test('partial batch processing at push budget: poke confirms prefix, device pushes remaining on same connection', async () => {
   const { server, device, connection, drain, cloudNotes } = await linked(1);
   const accepted = vi.spyOn(server, 'accept');
-  // A 先推出去；B、C 等 A 确认了一起推，云端只处理 B
+  // A pushes first; B and C push together once A is confirmed, cloud processes only B under limit.
   for (const id of ['A', 'B', 'C']) await write(device, (tx) => tx.insert(note).values({ id }));
   await drain();
   expect(device.private.pendingCount()).toBe(0);

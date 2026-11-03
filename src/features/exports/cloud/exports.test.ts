@@ -7,12 +7,12 @@ import { createWorkout, tables, workout } from '../../../test/test-schema.ts';
 import { cloudStorage, restoredStorage } from '../../../test/test-storage.ts';
 import { exportChunk } from './exports.ts';
 
-// 导出（跨 DO 汇总统计等）：每个导出者从去处存着的位置接着拉，给改过的行的当前值；写成功才往前走，历史变了从头重来
+// Exports (cross-DO aggregation, analytics, etc.): each exporter resumes from stored destination position, receiving current values of mutated rows; advances only on successful write, restarting from scratch if history changes.
 
-/** 一个去处：存着导到哪（位置） */
+/** Destination: tracks exported position. */
 type Destination = { position: string | undefined };
 
-/** 云端的空间与从它导出的一块（经 poll 读：不报拉取的事件）；events 收空间报的事 */
+/** Cloud space and export chunk reader (reads via poll: omits pull events); events receives emitted space events. */
 function setup(events?: Events) {
   const storage = cloudStorage(createWorkout);
   const space = new Space(storage, tables, events ? { events } : {});
@@ -20,7 +20,7 @@ function setup(events?: Events) {
   return { space, chunk };
 }
 
-/** 一个去处导到追上为止（每块写下就存下位置），返回各块的改动 */
+/** Exports to destination until caught up (saves position after writing each chunk); returns changes per chunk. */
 function exportAll(chunk: (to: Destination, limit?: number) => ReturnType<typeof exportChunk>, to: Destination, limit?: number) {
   const chunks: Op[][] = [];
   for (;;) {
@@ -31,7 +31,7 @@ function exportAll(chunk: (to: Destination, limit?: number) => ReturnType<typeof
   }
 }
 
-test('第一次整份（先清空）、分块导到追上；之后只给改过的行的当前值，删掉的给删除', () => {
+test('initial export delivers full snapshot in chunks (starting with clear) until caught up; subsequent exports deliver current values of mutated rows and deletions for removed rows', () => {
   const { space, chunk } = setup();
   const stats: Destination = { position: undefined };
   space.mutate((tx) => {
@@ -42,70 +42,70 @@ test('第一次整份（先清空）、分块导到追上；之后只给改过�
   expect(first.flat()[0]).toEqual({ op: 'clear' });
   expect(first.flat().filter(({ op }) => op === 'put')).toHaveLength(3);
 
-  space.mutate((tx) => tx.update(workout, { id: 'w2', note: '改过' }));
+  space.mutate((tx) => tx.update(workout, { id: 'w2', note: 'updated' }));
   space.mutate((tx) => tx.delete(workout, { id: 'w3' }));
   expect(exportAll(chunk, stats).flat()).toEqual([
-    { op: 'put', table: 'workout', key: { id: 'w2' }, row: { id: 'w2', note: '改过' } },
+    { op: 'put', table: 'workout', key: { id: 'w2' }, row: { id: 'w2', note: 'updated' } },
     { op: 'del', table: 'workout', key: { id: 'w3' } },
   ]);
   expect(exportAll(chunk, stats).flat()).toEqual([]);
 });
 
-test('写失败（去处没存下位置）下次照原样再给，from 是去处存着的位置；两个去处各走各的；认不出的位置从头整份、报出来', () => {
+test('write failure (destination does not save position) redelivers identical chunk next time, with from as stored position; destinations advance independently; unrecognized position resets to full snapshot from scratch and reports error', () => {
   const { space, chunk } = setup();
   const stats: Destination = { position: undefined };
   const search: Destination = { position: undefined };
   exportAll(chunk, stats);
   exportAll(chunk, search);
-  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: '深蹲' }));
+  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
   const failed = chunk(stats);
   expect(chunk(stats)).toMatchObject({ from: stats.position, patch: failed.patch, done: true });
-  expect(exportAll(chunk, search).flat()).toEqual([{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: '深蹲' } }]);
+  expect(exportAll(chunk, search).flat()).toEqual([{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'squat' } }]);
   expect(exportAll(chunk, stats).flat()).toEqual(failed.patch);
   const reported = captureReported();
   expect(chunk({ position: 'not json' }).patch[0]).toEqual({ op: 'clear' });
   expect(reported).toEqual([expect.stringContaining('not json')]);
 });
 
-test('历史变了（时间点恢复）：位置不在历史上，下一块从头整份给、标 reset，导出者丢掉导出过的东西再写它；导出不是设备在拉，不报拉取的块', () => {
+test('history changes (point-in-time recovery): position not in history causes next chunk to deliver full snapshot marked reset; exporter discards previous exports before writing; exports are not device pulls and omit pulled chunk events', () => {
   const events: Event[] = [];
   const storage = cloudStorage(createWorkout);
   const space = new Space(storage, tables, { events: (event) => events.push(event) });
   const stats: Destination = { position: undefined };
-  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: '深蹲' }));
+  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
   const image = storage.image();
-  space.mutate((tx) => tx.update(workout, { id: 'w1', note: '回滚掉' }));
+  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'rolled back' }));
   exportAll((to, limit) => exportChunk((position, size) => space.poll(position, size), to.position, limit), stats);
   const restored = new Space(restoredStorage(image), tables, { events: (event) => events.push(event) });
   const reset = exportChunk((position, size) => restored.poll(position, size), stats.position);
   expect(reset).toMatchObject({
     reset: true,
     done: true,
-    patch: [{ op: 'clear' }, { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: '深蹲' } }],
+    patch: [{ op: 'clear' }, { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'squat' } }],
   });
   expect(events).toEqual([]);
   restored.pull({ cookie: null }, 1_000_000);
   expect(events).toEqual([expect.objectContaining({ type: 'chunk.pulled', space: 'private' })]);
 });
 
-test('第一次整份导到一半做了时间点恢复：从头整份重给的第一块标 reset，导出者丢掉已导出的（含回滚掉的行）；第一次导出的第一块不标', () => {
+test('point-in-time recovery mid-way through initial full export: restarts full snapshot with first chunk marked reset, discarding previously exported rows (including rolled back rows); initial export first chunk is not marked reset', () => {
   const storage = cloudStorage(createWorkout);
   const space = new Space(storage, tables);
   space.mutate((tx) => {
     for (const id of ['w1', 'w2', 'w3']) tx.insert(workout, { id, note: id });
   });
   const image = storage.image();
-  space.mutate((tx) => tx.insert(workout, { id: 'w0', note: '回滚掉' }));
+  space.mutate((tx) => tx.insert(workout, { id: 'w0', note: 'rolled back' }));
   const first = exportChunk((position, size) => space.poll(position, size), undefined, 40);
   expect(first).toMatchObject({ reset: false, done: false });
-  expect(first.patch).toContainEqual({ op: 'put', table: 'workout', key: { id: 'w0' }, row: { id: 'w0', note: '回滚掉' } });
+  expect(first.patch).toContainEqual({ op: 'put', table: 'workout', key: { id: 'w0' }, row: { id: 'w0', note: 'rolled back' } });
   const restored = new Space(restoredStorage(image), tables);
   const next = exportChunk((position, size) => restored.poll(position, size), first.next, 40);
   expect(next).toMatchObject({ reset: true });
   expect(next.patch[0]).toEqual({ op: 'clear' });
 });
 
-test('增量导到一半做了时间点恢复（回到导完的那一版）：接着读的位置认不出，从头整份重给、标 reset，回滚掉的行不留在去处', () => {
+test('point-in-time recovery during incremental export (restoring to completed version): resume position unrecognized, redelivers full snapshot marked reset; rolled back rows are purged from destination', () => {
   const storage = cloudStorage(createWorkout);
   const space = new Space(storage, tables);
   const stats: Destination = { position: undefined };
@@ -113,7 +113,7 @@ test('增量导到一半做了时间点恢复（回到导完的那一版）：�
   exportAll((to, limit) => exportChunk((position, size) => space.poll(position, size), to.position, limit), stats);
   const image = storage.image();
   space.mutate((tx) => {
-    for (const id of ['w2', 'w3', 'w4']) tx.insert(workout, { id, note: '回滚掉' });
+    for (const id of ['w2', 'w3', 'w4']) tx.insert(workout, { id, note: 'rolled back' });
   });
   const first = exportChunk((position, size) => space.poll(position, size), stats.position, 40);
   expect(first).toMatchObject({ reset: false, done: false });

@@ -25,28 +25,34 @@ import type { Transaction } from './transaction.ts';
 import { WrittenRows } from './written-rows.ts';
 
 /**
- * 一个空间在云端怎么提交写、怎么下发改动，整个空间一个版本号；共用空间（shared）只由服务端写、按订阅的桶下发：
- * 每处理一条写记一行提交记录，记下这次改到的行，某版本之后改了什么从提交记录查；各客户端处理到第几条记在客户端表。
- * 设备的写与服务端的写（导入等）都这样提交，设备一律按增量收到。
- * 拉取分块，读到哪全在 cursor 里，云端不记：先扫描、再追尾巴，追到最新一版才是末块。行读的都是当前值，
- * 开始之后改过的行在尾巴里再给一次，所以设备把各块暂存到末块、一起生效，就等于末块那一版的云端。
- * 设备推来的写是它改到的行，按行写；服务端的写用 Transaction。
- * 同步的范围是设备的表：只下发交给 Syncline 的表与列，云端的表可以多出只在云端的列（可空，按行写与 Transaction 都只写给出的列，不碰它们），
- * 只在云端的表不交给 Syncline，服务端的写照常写它、不记进提交（设备的 schema 决定同步什么）。
- * 不该知道的：消息怎么传、身份与权限、接入方的业务。
+ * Executes commits and streams changes for a cloud sync space under a single monotonically increasing version.
+ * Shared spaces (shared) are written exclusively by server writes and streamed according to subscribed buckets.
+ * Every write records a commit log row noting touched rows; changes after a given version are queried from the log.
+ * Client mutation progress (lmid) is maintained in the client table.
+ * Both device writes and server writes (such as data imports) commit through this log and stream incrementally to devices.
+ * Pull pagination state is stored entirely within the client's cursor without server-side session state:
+ * pulls scan modified tables first, then walk the commit tail up to head. Rows reflect current values;
+ * rows modified after the pull began are re-emitted in the tail, so staging intermediate chunks until the final chunk lands
+ * reconstructs an exact snapshot matching the cloud head.
+ * Pushed device writes apply row-level changes; server writes execute via Transaction.
+ * Sync scope is governed by the declared schema: only declared tables and columns are streamed; cloud tables may contain extra
+ * nullable cloud-only columns (untouched by row writers and Transaction). Undeclared cloud-only tables commit without sync tracking.
+ * What it should not know: transport protocols, auth credentials, or application business logic.
  * @see https://doc.replicache.dev/strategies/per-space-version
- * @see https://zero.rocicorp.dev/llms.txt（zero-cache keeps clients up to date via logical replication）
+ * @see https://zero.rocicorp.dev/llms.txt
  */
 
-/** 发给在线设备的通知改动太多（超过 limit 字节，UTF-8），没拼：只有版本与确认，在线设备收到提示、走 HTTP 拉取 */
+/** Opaque notice when live patch exceeds socket limit (UTF-8 bytes): carries version and confirmations without patch; client pulls over HTTP. */
 export type Oversized = Omit<Poke, 'patch'>;
 
 /**
- * validation：接入方给表的 Standard Schema，改到的行再按它查；声明了同步不了的列（BLOB、bigint）就抛错。
- * shared：共用空间（只由后台写、设备只读、按订阅的桶下发、拉取经缓存发出）的桶规则与块边界的间隔。
- * retired：删掉的表与列（「表.列」），不再回到同步。readOnly：只由云端写的同步表，设备推来的写改到就扣下。
- * commitFloor：日志的上限至少多少字节（Commits，测试里调小）；checksum：拉取要的校验和怎么算，不给就不给校验和；
- * pushRows：一批推送至多写多少行（计费的行写，见 push；默认一次写的上限 writeRows，测试里调小）
+ * validation: Standard Schema for validating modified rows; throws if un-syncable columns (BLOB, bigint) are declared.
+ * shared: configuration for shared spaces (server-written, client-read-only, bucket subscription filtering, edge-cached pulls).
+ * retired: retired table and column names (table.column) permanently excluded from sync.
+ * readOnly: synced tables writable only on the server; pushed client mutations modifying them are held.
+ * commitFloor: minimum commit log cap in bytes (Commits, reduced in tests).
+ * checksum: computes row checksums for pull verification.
+ * pushRows: maximum billed row writes per push batch (defaults to writeRows, reduced in tests).
  */
 type SpaceOptions = {
   validation?: Validation;
@@ -71,17 +77,17 @@ export class Space {
   readonly #pushRows: number;
   readonly #daily = new DailyWrites(() => this.#log.used());
   readonly #query: Query = (sql, ...bindings) => this.#daily.count(this.#storage.sql.exec(sql, ...bindings));
-  /** 共用空间的桶规则与每个桶有多少行（BucketRows，后台数、删的一步步由对象的外壳做）；私有空间没有 */
+  /** Shared space bucket rules and per-bucket row tallies (BucketRows, maintained by upkeep chores); undefined for private spaces. */
   readonly #buckets: Buckets | undefined;
   readonly bucketRows: BucketRows | undefined;
-  /** 提交写要用到的（commitWrite） */
+  /** Commit execution context for commitWrite. */
   readonly #context: CommitContext;
-  /** 同步着的表结构与删掉的名字：判断设备兼不兼容、丢掉推来的写里改到已删的部分 */
+  /** Declared schema and retired names: evaluates client compatibility and strips retired entries from pushed writes. */
   readonly declaration: Declaration;
   readonly retired: ReadonlySet<string>;
-  /** 只由云端写的表的名字 */
+  /** Names of tables writable only on the server. */
   readonly #readOnly: ReadonlySet<string>;
-  /** 打开时同步的范围变了、记了提交（表进入同步、桶规则改了等）：在那之前的最新一版，共用空间据此通知分片；没变是 undefined */
+  /** Prior head cookie before scope changes on open (entered tables, bucket rule revisions); undefined if unchanged. */
   readonly evolvedFrom: Cookie | undefined;
 
   constructor(storage: CloudStorage, tables: SQLiteTable[], options: SpaceOptions = {}) {
@@ -93,7 +99,7 @@ export class Space {
     this.#storage = storage;
     this.#rows = new Rows(tables);
     const validator = new Validator(tables, validation);
-    // Drizzle 的参数写成 Workers 的 DurableObjectStorage 类型，它只用到 Storage 里的几个成员
+    // Casts storage to DurableObjectStorage parameters expected by Drizzle.
     this.#db = drizzle(storage as unknown as Parameters<typeof drizzle>[0]);
     prepareInternalTables(storage);
     const chunkRows = shared && (shared.chunkRows ?? defaultRows);
@@ -105,7 +111,7 @@ export class Space {
     buckets?.check(query);
     this.#buckets = buckets;
     const opened = this.#log.head();
-    // 进入同步的表从下一版起重扫；桶规则改了，规则变了的表也重扫
+    // Entering tables rescan from next commit version; revised bucket rules also rescan.
     const record = (keys: Keys) => this.#log.record(keys);
     const evolved = evolveOnOpen(storage, query, tables, retired ?? [], opened.version === 0, record, this.#events);
     const counts = buckets && new BucketRows(storage, query, buckets, this.#reader.tables.order());
@@ -118,19 +124,21 @@ export class Space {
   }
 
   /**
-   * 按顺序逐条执行一批写：已处理过的跳过；序号正好接在处理到的后面的照常执行。比那大、又标着是这个客户端本机最早的
-   * 待上传（first）的跳号：处理到的跳到它之前、照常执行，与这条写同一个事务（时间点恢复回滚掉了它前面已确认的几条，模型的 Process）；
-   * 写的身份（客户端，序号）一经生成永不改变，不靠设备重编序号接上。不看它在这批里是不是第一条：标记由设备照待上传算，一批不是前缀也不会误跳。
-   * 其余来自未来的（前面还缺）跳过、报出 write.skipped，正常运行不会出现（P3）。执行出错与改动认不出的（Pushed 的 malformed，模型里与执行不了的一样）
-   * 扣下、推进序号；存储出错这类暂时的错（isTransient）抛出，出错那条起不处理、不推进序号（P2），之前的写留着、随这一轮结束提交；存储严重出错（SQLite 回滚了整个事务）时 workerd 把对象标坏、重置，
-   * 这次推送一起作废。这批在一轮同步代码里执行，隐式事务要让出这一轮之后、对象没坏才提交（startImplicitTxnImpl）；
-   * 超出 CPU 或内存时平台中止并把对象标坏（IoContext::abort）。写的行（计费的，回滚的也算）累计到 pushRows 就停在这条之后，设备接着推剩下的（模型 HandlePush 只处理前缀的一支：
-   * 不然几条连带删很多行的写一起超过 CPU 上限，整批作废、原样重推，永远推不上去）。有新提交时返回发给所有在线设备的通知（只确认已执行的）；
-   * 给了 limit、改动的 JSON 超过它就不拼（Oversized），不白读改到的行
-   * @see https://doc.replicache.dev/reference/server-push（ids greater than lastMutationID + 1 must be ignored）
-   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/util/sqlite.c%2B%2B（handleCriticalError）
-   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/io/actor-sqlite.c%2B%2B（onCriticalError、startImplicitTxnImpl、shutdown）
-   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/io/io-context.c%2B%2B（abort）
+   * Executes a batch of pushed client mutations sequentially.
+   *
+   * Skips already-processed mutation IDs; executes mutation IDs matching lmid + 1.
+   * If mutation ID is greater than lmid + 1 and marked first (earliest pending write on that client after PITR rolled back confirmed writes),
+   * advances lmid across the gap and executes within the same transaction (Process in TLA+ models).
+   * Permanent client mutation identity (client, id) is preserved without renumbering.
+   * Other gaps (missing prior writes without first) are skipped and emit write.skipped.
+   * Non-executable writes and malformed mutations are held and advance lmid.
+   * Transient storage errors (isTransient) throw without advancing lmid for the failing write, preserving earlier committed writes.
+   * Workload accumulates billed row writes up to pushRows, stopping after the cap-reaching write while the client pushes remainder (HandlePush in TLA+ models).
+   * Returns poke notice for online devices confirming executed writes, or Oversized if JSON payload exceeds limit.
+   * @see https://doc.replicache.dev/reference/server-push
+   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/util/sqlite.c%2B%2B
+   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/io/actor-sqlite.c%2B%2B
+   * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/io/io-context.c%2B%2B
    */
   push(mutations: Pushed[]): Poke | undefined;
   push(mutations: Pushed[], limit: number): Poke | Oversized | undefined;
@@ -138,7 +146,7 @@ export class Space {
     const base = this.#log.head();
     let head = base;
     const written = new WrittenRows(limit);
-    // 各客户端处理到第几条：查过的记着，一批里同一个客户端只查一次；executed 是这批里执行了的
+    // Tracks processed mutation IDs per client within batch; executed records writes processed in this push.
     const known = new Map<string, number>();
     const executed = new Map<string, number>();
     const start = this.#daily.written;
@@ -157,28 +165,28 @@ export class Space {
       if (this.#daily.written - start >= this.#pushRows) break;
     }
     if (executed.size === 0) return undefined;
-    // 最新一版之后只有这批的提交：确认的就是这批里执行了的各客户端处理到的
+    // Confirms mutation IDs processed across clients in this batch.
     return this.#notify(base, head, { lmids: Object.fromEntries(executed), ...heldIn(this.#held.since(base.version)) }, written);
   }
 
-  /** 执行设备的一条写（见 push），执行不了就扣下；used 是当天写了几行，记进它的提交记录。返回记下的最后一版 */
+  /** Executes a single pushed client write, holding it on failure; used reports cumulative daily writes. Returns head cookie. */
   #apply(mutation: Pushed, used: () => Used, written: WrittenRows): Cookie {
     const { client, id, changes } = mutation;
     try {
-      // 改动认不出（设备的缺陷、版本不符）：不执行，与执行不了的一样扣下
+      // Malformed changes (client bug or version mismatch): held without execution, advancing lmid.
       if ('malformed' in mutation) throw new Reject(mutation.malformed);
       const kept = withoutRetired(mutation.changes, this.retired, this.declaration, (names) =>
         this.#events({ type: 'values.dropped', client, id, names }),
       );
       const readOnly = readOnlyIn(kept, this.#readOnly);
-      if (readOnly) throw new Reject(`${readOnly} 只由云端写，设备推来的写不能改它`);
+      if (readOnly) throw new Reject(`Table ${readOnly} is read-only and cannot be modified by pushed client mutations.`);
       return written.record((touched) =>
         commitWrite(this.#context, client, id, (changed) => this.#rows.write(this.#query, kept, changed), { used, touched }),
       );
     } catch (error) {
-      // 暂时的错不推进序号、设备退避后重推；其余每次执行都会再出，重试只会让这个客户端之后的写永远推不上去（照 Replicache：permanent error 记为处理过）
+      // Transient storage errors propagate without advancing lmid; client retries with backoff. Permanent errors advance lmid and hold the write.
       if (isTransient(error)) throw error;
-      // 执行不了：整条回滚后记一次不改行的提交、照样推进序号，原样的改动与原因扣下待修复
+      // Non-executable writes: rolls back, records a keyless commit advancing lmid, and stores raw mutation in _syncline_held.
       const reason = error instanceof Error ? error.message : String(error);
       const held = commitWrite(
         this.#context,
@@ -193,9 +201,10 @@ export class Space {
   }
 
   /**
-   * 服务端的写（导入、付费回调等，不经设备）：在一个事务里执行，记一次没有客户端的提交，返回发给所有在线设备的通知。
-   * 外键与设备推来的写一样：删父行连带删子行；写完后还引用不在的行就抛 Reject。出错（含 Reject）整条回滚、不提交，抛给调用方。
-   * 给了 limit、改动的 JSON 超过它就不拼通知（Oversized）：没有在线设备时给 0，导入一批几千行不在内存里留它们的值
+   * Executes a server write transaction (imports, webhooks, etc., without client origin) and broadcasts notifications.
+   * Cascades deletions along foreign keys; throws Reject if foreign keys remain unsatisfied after execution.
+   * Rolls back completely on error without recording a commit.
+   * Omits poke construction (Oversized) when JSON payload exceeds limit or when limit is 0 (no online devices).
    */
   mutate(write: (tx: Transaction) => void): Poke;
   mutate(write: (tx: Transaction) => void, limit: number): Poke | Oversized;
@@ -210,7 +219,7 @@ export class Space {
     return this.#notify(base, head, { lmids: {} }, written);
   }
 
-  /** 拉一块，怎么切块由读取一侧的 pull 函数定；catchUp 是连上时的补齐 */
+  /** Fetches a pull chunk; catchUp indicates connection handshake catch-up. */
   pull(request: PullRequest, limit: number, catchUp = false): Poke | Chunk {
     const checksum = this.#checksum;
     const report = {
@@ -222,14 +231,14 @@ export class Space {
     return pull(this.#log, this.#reader, request, limit, report, catchUp);
   }
 
-  /** 导出者（另一个消费者）读一块：不报拉取的事件，不是设备在拉 */
+  /** Polls a chunk for an external consumer/exporter without emitting client pull events. */
   poll(position: string | undefined, limit: number) {
     return this.#reader.poll(position, limit);
   }
 
   /**
-   * 共用空间拉一块：subscribed 是设备的订阅（入口按令牌算出）与它的指纹，一块至多给 limit 个字符的改动；
-   * 怎么切块由 pullShared 定。都带上订阅的指纹与空间的这一代
+   * Fetches a pull chunk for a shared space according to authorized bucket subscriptions.
+   * Responses include subscription hash and space incarnation.
    */
   pullShared(request: PullRequest, subscribed: Subscribed, limit = chunkLimit): Poke | Chunk | Reset {
     const counts = { buckets: this.#shared(), rows: this.bucketRows as BucketRows };
@@ -239,24 +248,26 @@ export class Space {
     });
   }
 
-  /** 扣下的写（待修复），按扣下的先后：原样的改动、原因、记下它的版本与时刻；分页见 HeldWrites.list */
+  /** Lists held writes in chronological order; see HeldWrites.list for pagination. */
   held(batch?: { limit?: number; after?: number }) {
     return this.#held.list(batch);
   }
 
   /**
-   * 重新提交一条扣下的写（修好数据或代码之后）：照设备推来时一样按行写，记一次没有客户端的提交，成功就不再扣着，
-   * 返回发给所有在线设备的通知。changes 不给就用原样的改动（照推送一样解析：扣下时就认不出的，抛给调用方）；还执行不了就整条回滚、抛给调用方，照样扣着
+   * Resubmits a held write as a server commit after repairing data or code.
+   * Executes changes as row mutations without client ID; on success, clears the held record and broadcasts notifications.
+   * Defaults to stored raw changes; throws and remains held if execution fails.
    */
   resubmit(client: string, id: number, changes?: Change[]): Poke;
   resubmit(client: string, id: number, changes: Change[] | undefined, limit: number): Poke | Oversized;
   resubmit(client: string, id: number, changes?: Change[], limit = Number.POSITIVE_INFINITY): Poke | Oversized {
-    // 只重新提交还扣着的：重新提交过的、从没扣下过的再执行一遍，会盖掉之后的写
-    if (!this.#held.has(client, id)) throw new Error(`没有扣下这条写：${client} 的第 ${id} 条`);
+    // Re-executes only currently held writes: re-executing unheld or previously resubmitted writes would overwrite newer changes.
+    if (!this.#held.has(client, id))
+      throw new Error(`Held write not found for client ${client} at mutation ID ${id}; provide an existing held mutation ID.`);
     changes ??= parseChanges(this.#held.changes(client, id));
-    // 重新提交的按设备推来的写算：改到只由云端写的表就抛错，服务端要改它用 mutate
+    // Resubmitted writes enforce read-only table rules: client mutations cannot modify read-only tables; use mutate instead.
     const readOnly = readOnlyIn(changes, this.#readOnly);
-    if (readOnly) throw new Error(`${readOnly} 只由云端写，重新提交不能改它`);
+    if (readOnly) throw new Error(`Table ${readOnly} is read-only and cannot be modified by resubmitted client mutations.`);
     const base = this.#log.head();
     const written = new WrittenRows(limit);
     const head = written.record((touched) =>
@@ -275,15 +286,15 @@ export class Space {
     return this.#notify(base, head, { lmids: {} }, written);
   }
 
-  /** 给出一块：报给接入方（行数与字符数；chars 是拼块时量过的，opChars 之和），原样返回 */
+  /** Emits chunk.pulled event with row count and character size, returning the chunk. */
   #pulled<T extends Poke | Chunk>(space: 'private' | 'shared', chunk: T, chars: number): T {
     this.#events({ type: 'chunk.pulled', space, rows: chunk.patch.length, chars, last: 'cookie' in chunk });
     return chunk;
   }
 
-  /** 共用空间的桶规则；不是共用空间抛错 */
+  /** Returns shared space bucket rules; throws if called on a private space. */
   #shared() {
-    if (!this.#buckets) throw new Error('不是共用空间');
+    if (!this.#buckets) throw new Error('Space is not configured as a shared space; configure shared options with bucket rules.');
     return this.#buckets;
   }
 
@@ -291,12 +302,12 @@ export class Space {
     return this.#log.overLimit(this.#storage.sql.databaseSize);
   }
 
-  /** 截日志的一步（后台任务做）：返回还要不要接着截 */
+  /** Executes one log truncation step during upkeep chore, returning true if further truncation steps remain. */
   truncate() {
     return this.#storage.transactionSync(() => this.#log.truncate(this.#storage.sql.databaseSize));
   }
 
-  /** 设备推来的写当天（UTC）写了几行：每天的上限按它拦 */
+  /** Returns cumulative billed rows written today (UTC) by client pushes. */
   pushedToday() {
     return this.#daily.today().rows;
   }
@@ -305,14 +316,15 @@ export class Space {
     return this.#log.head();
   }
 
-  /** 游标在不在当前历史上：连接时带的游标不在就关掉连接，设备先经 HTTP 整份重拉 */
+  /** Determines whether cookie is on current history; off-history cookies require a full pull over HTTP. */
   onHistory(cookie: Cookie) {
     return this.#log.onHistory(cookie);
   }
 
   /**
-   * 发给在线设备的通知：从 base 到 head（这次记下的最后一版），这次推送或服务端写改到的行写完后的值（WrittenRows，不回表读）；
-   * 装不下就只有版本与确认（Oversized）
+   * Constructs a poke notification for online devices from base to head (the final commit in this batch),
+   * carrying post-write values from WrittenRows without re-reading the database.
+   * Returns Oversized if the payload exceeds limit.
    */
   #notify(base: Cookie, head: Cookie, confirmed: Pick<Poke, 'lmids' | 'held'>, written: WrittenRows): Poke | Oversized {
     const update = { base, cookie: head, ...confirmed };
@@ -321,8 +333,10 @@ export class Space {
   }
 
   /**
-   * 共用空间发给广播分片的一轮：base 之后改到的行、它们现在在的桶与改前或改后在的桶，分片按每条连接的订阅筛；
-   * 改到的太多（超过 limit 个字符）、有不带键的一版、base 不在当前历史上都不带行，分片只发提示。不给 base 就是最新一版、没有改动
+   * Generates a fanout round for broadcast shards in a shared space:
+   * contains rows modified after base with their current and prior bucket memberships.
+   * Emits hint without rows if changes exceed limit, if keyless commits occurred, or if base is off history.
+   * Defaults to head if base is omitted.
    */
   round(limit: number, base = this.#log.head()): Round {
     const rows = sharedRound(this.#log, this.#reader.tables, this.#shared(), this.#query, base, limit);

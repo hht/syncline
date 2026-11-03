@@ -6,8 +6,7 @@ import { Device } from '../test/test-device.ts';
 import { write } from '../test/test-schema.ts';
 import { cloudStorage, countStatements, deviceStorage, measureReads } from '../test/test-storage.ts';
 
-// 一次写改到的行数有上限，连带删的也算：一条删除只有一个主键，连带删能放大成任意多行，
-// 不设上限时云端的内存与 CPU 随它涨、超了对象被重置，设备原样重推也一样，这台设备之后的写全堵住
+// Enforces row modification limits per mutation, including cascade deletes.
 
 const parent = sqliteTable('parent', { id: text().primaryKey() });
 const child = sqliteTable('child', {
@@ -16,7 +15,7 @@ const child = sqliteTable('child', {
 });
 const schema = ['CREATE TABLE parent (id TEXT PRIMARY KEY)', 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT)'];
 
-/** 父行 p1 带 children 个子行（默认 writeRows：删 p1 连同子行共改到 writeRows + 1 行） */
+// Fills table parent with p1 and children child rows (default writeRows, so deleting p1 touches writeRows + 1 rows).
 function fill(storage: ReturnType<typeof cloudStorage>, children = writeRows) {
   storage.sql.exec("INSERT INTO parent (id) VALUES ('p1')");
   storage.sql.exec(
@@ -28,7 +27,7 @@ function fill(storage: ReturnType<typeof cloudStorage>, children = writeRows) {
 const count = (storage: ReturnType<typeof cloudStorage>, table: string) =>
   Number(storage.sql.exec(`SELECT count(*) AS n FROM "${table}"`).toArray()[0]?.n);
 
-test('设备推来的删除连带删超过一次写的上限：云端扣下这条写、一行也不删，序号照样推进', () => {
+test('holds pushed delete mutations exceeding row limits via cascade deletes and advances client lmid without deleting rows', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [parent, child]);
   fill(cloud);
@@ -38,7 +37,7 @@ test('设备推来的删除连带删超过一次写的上限：云端扣下这�
   expect(count(cloud, 'child')).toBe(writeRows);
 });
 
-test('连带删超过上限：删之前先数、超了就拒收，一条语句读进来的不超过上限，不把一整层子行读进内存', () => {
+test('counts rows before deleting in cascade deletes, rejecting oversized batches without reading them into memory', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [parent, child]);
   fill(cloud, writeRows * 2);
@@ -48,7 +47,7 @@ test('连带删超过上限：删之前先数、超了就拒收，一条语句�
   expect(count(cloud, 'child')).toBe(writeRows * 2);
 });
 
-test('服务端的写连带删超过上限：抛错、整条回滚', () => {
+test('aborts and rolls back server writes exceeding row limits via cascade deletes', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [parent, child]);
   fill(cloud);
@@ -57,7 +56,7 @@ test('服务端的写连带删超过上限：抛错、整条回滚', () => {
   expect(count(cloud, 'child')).toBe(writeRows);
 });
 
-test('服务端删一批同步表的行：连带删一批做完，不再逐行补删一遍（语句条数不随行数涨）；不同步的表照样删掉', () => {
+test('executes batched cascade deletes in single operations per table rather than per-row deletes, while deleting untracked tables normally', () => {
   const note = sqliteTable('note', { id: text().primaryKey() });
   const cloud = cloudStorage(...schema, 'CREATE TABLE note (id TEXT PRIMARY KEY)');
   const space = new Space(cloud, [parent, child]);
@@ -71,11 +70,11 @@ test('服务端删一批同步表的行：连带删一批做完，不再逐行�
   const deletes = statements.take().filter((sql) => /^\s*delete/i.test(sql));
   expect(count(cloud, 'parent')).toBe(0);
   expect(count(cloud, 'note')).toBe(1);
-  // 同步表：父行一批、子表一批；不同步的表逐行删，这里一行
+  // Synced tables: parent batch and child batch; untracked table deleted row by row.
   expect(deletes).toHaveLength(3);
 });
 
-test('共用空间的服务端写改到的行超过共用空间的上限（每行要维护桶，比私有空间贵）：抛错、整条回滚；正好到上限的照常写', () => {
+test('aborts and rolls back server writes exceeding shared space row limits, while allowing mutations at the limit', () => {
   const cloud = cloudStorage(...schema.slice(0, 1));
   const space = new Space(cloud, [parent], { shared: { buckets: { all: { parent: {} } } } });
   const insert = (rows: number) =>
@@ -88,7 +87,7 @@ test('共用空间的服务端写改到的行超过共用空间的上限（每�
   expect(count(cloud, 'parent')).toBe(sharedWriteRows);
 });
 
-test('本机写连带删超过上限：抛错、整条回滚，不进待上传', async () => {
+test('aborts and rolls back local writes exceeding row limits via cascade deletes without queuing pending writes', async () => {
   const storage = deviceStorage(...schema);
   const device = new Device(storage, [parent, child]);
   fill(storage);
@@ -97,7 +96,7 @@ test('本机写连带删超过上限：抛错、整条回滚，不进待上传',
   expect(device.private.pendingCount()).toBe(0);
 });
 
-test('子表有两个外键引用同一张父表：连带删按不同的行计数，没到上限的照常删全（不因同一行查到两次而漏删）', () => {
+test('counts cascade deletes across multiple foreign keys to the same parent table without undercounting', () => {
   const user = sqliteTable('user', { id: text().primaryKey() });
   const msg = sqliteTable('msg', {
     id: text().primaryKey(),
@@ -110,7 +109,7 @@ test('子表有两个外键引用同一张父表：连带删按不同的行计�
   );
   const space = new Space(cloud, [user, msg]);
   cloud.sql.exec("INSERT INTO user (id) VALUES ('u1'), ('u2')");
-  // 6 万条两个外键都指向 u1，3 万条只有收件人是 u1：删 u1 共改到 90001 行，没到上限
+  // 60,000 rows reference u1 on both foreign keys, 30,000 reference u1 only as recipient: deleting u1 touches 90,001 rows, below limit.
   const insert = (from: number, count: number, sender: string) =>
     cloud.sql.exec(
       `WITH RECURSIVE n(i) AS (SELECT ? UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO msg SELECT 'm' || i, ?, 'u1' FROM n`,
@@ -124,7 +123,7 @@ test('子表有两个外键引用同一张父表：连带删按不同的行计�
   expect(count(cloud, 'msg')).toBe(0);
 });
 
-/** 父行 p1 带 children 个子行，子行的主键是 length 个字符 */
+// Fills table parent with p1 and children child rows having length-byte primary keys.
 function fillLong(storage: ReturnType<typeof cloudStorage>, children: number, length: number) {
   storage.sql.exec("INSERT INTO parent (id) VALUES ('p1')");
   storage.sql.exec(
@@ -133,7 +132,7 @@ function fillLong(storage: ReturnType<typeof cloudStorage>, children: number, le
   );
 }
 
-test('连带删的行数没到上限、主键加起来超过一次写的字节上限：云端扣下这条写、一行也不删，删之前先数，不把这些主键读进内存', () => {
+test('holds pushed delete mutations exceeding key byte limits via cascade deletes without reading oversized keys into memory', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [parent, child]);
   const rows = Math.ceil(writeKeyBytes / 400) + 1000;
@@ -145,7 +144,7 @@ test('连带删的行数没到上限、主键加起来超过一次写的字节�
   expect(read.chars).toBeLessThan(writeKeyBytes / 10);
 });
 
-test('服务端的写连带删两张子表，各自没到字节上限、加起来超过：抛错、整条回滚', () => {
+test('aborts and rolls back server writes when cascade deletes across multiple child tables cumulatively exceed key byte limits', () => {
   const other = sqliteTable('other', { id: text().primaryKey(), parent_id: text().references(() => parent.id) });
   const cloud = cloudStorage(...schema, 'CREATE TABLE other (id TEXT PRIMARY KEY, parent_id TEXT)');
   const space = new Space(cloud, [parent, child, other]);
@@ -156,7 +155,7 @@ test('服务端的写连带删两张子表，各自没到字节上限、加起�
   expect(count(cloud, 'child') + count(cloud, 'other')).toBe(rows * 2);
 });
 
-test('共用空间连带删大行：只读回主键与它在的桶，不把删掉的整行读进内存；只收到在过的桶里的行的删除', () => {
+test('reads only primary keys and bucket identifiers during cascade deletes in shared spaces without loading full row payloads', () => {
   const cloud = cloudStorage(...schema.slice(0, 1), 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT, audience TEXT)');
   const audienced = sqliteTable('child', { id: text().primaryKey(), parent_id: text().references(() => parent.id), audience: text() });
   const buckets = { public: { parent: {}, child: { where: "audience = 'public'" } }, all: { parent: {}, child: {} } };
@@ -171,7 +170,7 @@ test('共用空间连带删大行：只读回主键与它在的桶，不把删�
   const read = measureReads(cloud);
   space.mutate((tx) => tx.delete(parent, { id: 'p1' }), 0);
   expect(read.chars).toBeLessThan(body.length);
-  // 公开的桶里有过父行与受众是 public 的那一个子行，没有另外 50 个
+  // Public bucket received parent row and public child row, omitting the other 50 rows.
   const rows = space.round(1_000_000, base).rows ?? [];
   const keys = (bucket: string) =>
     rows
@@ -182,7 +181,7 @@ test('共用空间连带删大行：只读回主键与它在的桶，不把删�
   expect(keys('["all"]')).toHaveLength(52);
 });
 
-test('两层连带删：上一层已用掉一半名额，下一层一批按剩下的名额先数，超了就拒收、不读进来', () => {
+test('bounds cascade deletes across multi-level hierarchies, rejecting operations before reading lower levels into memory', () => {
   const grand = sqliteTable('grand', { id: text().primaryKey() });
   const middle = sqliteTable('parent', { id: text().primaryKey(), grand_id: text().references(() => grand.id) });
   const leaf = sqliteTable('child', { id: text().primaryKey(), parent_id: text().references(() => middle.id) });
@@ -193,7 +192,7 @@ test('两层连带删：上一层已用掉一半名额，下一层一批按剩�
   );
   const space = new Space(cloud, [grand, middle, leaf]);
   cloud.sql.exec("INSERT INTO grand VALUES ('g1')");
-  // 父行用掉约一半的字节名额，其中一个父行下的子行要约 60%：剩下的装不下
+  // Parent rows consume approximately half of the byte budget, child rows under one parent require 60%: exceeding remaining room.
   const fill = (table: string, share: number, parent: string) =>
     cloud.sql.exec(
       `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO ${table} SELECT printf('%0400d', i), ${parent} FROM n`,
@@ -203,12 +202,12 @@ test('两层连带删：上一层已用掉一半名额，下一层一批按剩�
   fill('child', 0.6, "printf('%0400d', 1)");
   const read = measureReads(cloud);
   expect(() => space.mutate((tx) => tx.delete(grand, { id: 'g1' }))).toThrow(String(writeKeyBytes));
-  // 读得最多的一条是父行那一层（约一半），子行那一层先数就拒收、没有读
+  // The largest read is the parent level; the child level is rejected during count without reading rows.
   expect(read.chars).toBeLessThan(writeKeyBytes * 0.55);
 });
 
-test('共用空间的主键列名与读回的桶的列名相近（buckets）：连带删照样按主键记，收到对的删除', () => {
-  // 库里的列名与读回的桶那一列的名字只差一个双引号
+test('handles primary key column names matching bucket result columns during cascade deletes in shared spaces', () => {
+  // Column name in database differs from readback bucket column only by quotes.
   const column = 'buckets';
   const owner = sqliteTable('owner', { id: text(column).primaryKey() });
   const item = sqliteTable('item', { id: text(column).primaryKey(), ownerId: text('owner').references(() => owner.id) });
@@ -224,7 +223,7 @@ test('共用空间的主键列名与读回的桶的列名相近（buckets）：�
   expect(keys).toEqual(['i1', 'o1']);
 });
 
-/** 子表引用父表的 code 列（外键引用的不是主键）；fill 往父表插行。返回删掉全部父行的一次服务端写 */
+// Sets up a child table referencing a non-primary key column of the parent table.
 function codedParents(fill: string, ...bindings: unknown[]) {
   const coded = sqliteTable('parent', { id: text().primaryKey(), code: text() });
   const byCode = sqliteTable('child', { id: text().primaryKey(), parent_code: text().references(() => coded.code) });
@@ -245,8 +244,8 @@ function codedParents(fill: string, ...bindings: unknown[]) {
   return { cloud, removeAll };
 }
 
-test('外键引用的不是主键（大的文字列）：先数时连同读回的被引用的列一起算，超了名额就拒收、不读进来', () => {
-  // 10 个父行，各带一个约 1.8 MB 的 code：共约 18 MB，超过一次写的字节名额
+test('counts referenced non-primary key columns toward mutation limits, rejecting operations before reading oversized payloads', () => {
+  // 10 parent rows with ~1.8 MB code values (~18 MB total, exceeding byte limit).
   const { cloud, removeAll } = codedParents(
     "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10) INSERT INTO parent SELECT 'p' || i, printf('%01800000d', i) FROM n",
   );
@@ -256,8 +255,8 @@ test('外键引用的不是主键（大的文字列）：先数时连同读回�
   expect(count(cloud, 'parent')).toBe(10);
 });
 
-test('外键引用的不是主键：几批各自装得下、加起来留在内存里的被引用列超过名额，也拒收', () => {
-  // 主键 100 个字符，按值的上限分成几批；每个父行带 1000 字节的 code，共约 22 MB
+test('rejects cascade deletes when cumulative retained referenced non-primary key columns exceed memory limits across batches', () => {
+  // 100-character primary keys across batches with 1000-byte code values (~22 MB total).
   const rows = Math.ceil((writeKeyBytes * 1.4) / 1000);
   const { cloud, removeAll } = codedParents(
     "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO parent SELECT printf('%0100d', i), printf('%01000d', i) FROM n",

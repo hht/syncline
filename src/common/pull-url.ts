@@ -3,24 +3,19 @@ import { type Cookie, formatCookie, type PullRange } from './protocol.ts';
 import { protocolVersion, versionParam } from './version.ts';
 
 /**
- * HTTP 拉取与 WebSocket 连接的请求怎么带：共用空间的拉取只用 GET、请求全在查询串里（照 ElectricSQL：只有 GET 能进缓存，共用空间的响应要经缓存发出）；
- * 私有空间的拉取不进缓存，用 POST、请求放在 JSON 正文里，网址只带协议版本（列出的客户端随启动次数涨，放网址会超过 16 KB）；
- * WebSocket 的网址只带协议版本与游标（私有空间连上时按游标补齐确认，不列客户端）。
- * 不该知道的：拉取怎么切块、响应长什么样。
+ * Request formatting for HTTP pulls and WebSocket connections.
+ * Shared space pulls use HTTP GET with all request parameters encoded into query strings for edge caching.
+ * Private space pulls bypass the CDN cache using HTTP POST with JSON request bodies to avoid 16 KB URL limits from client ID lists.
+ * WebSocket connection URLs carry protocol version and cookie query parameters.
  * @see https://doc.replicache.dev/reference/server-pull
- * @see https://developers.cloudflare.com/workers/platform/limits/（URL size）
+ * @see https://developers.cloudflare.com/workers/platform/limits/
  */
 
 /**
- * 拉取的请求：本机游标（还没同步过是 null），分块拉取中途时带暂存的最后一块的 next。
- * 共用空间另带 landed（落地时的订阅，末块给的、原样带回）；发现末块比暂存的块早时另带 atLeast（暂存各块最大的 seen）：新的缓存键，
- * 它的响应只能在云端到了这一版之后算出；分片说的这一代与本机的不同时另带 incarnation（分片说的那一代）：同样是新的缓存键，云端不在这一代时现算、不进缓存。
- * 私有空间另带：refetch：从头整份给、游标与待上传不动（App 回滚期间不声明的表再声明时）；
- * checksum：末块带从这里起一段的校验和（上一段给的 next，从头是空串；设备追平、没有待上传、该对了时要，云端当场算这一段），
- * 这一段至多 checksumRows 行（设备对的途中库变了就减半；没给是云端的上限）；
- * ranges：按范围重下的几张表（校验和对不上的那一段，每张表至多一项），只在不带 cursor 的增量拉取里算数；
- * clients：带上待上传的与当前的客户端，末块只带它们处理到第几条（每次启动一个客户端，全带会随启动次数一直涨）；
- * earliest：列出的客户端各自最早的待上传序号（没有待上传的当前客户端是它下一条写的序号），末块只带从它起扣下的写（设备只用得到这次确认的写里扣下的）
+ * Pull request parameters.
+ * Cookie specifies the local cookie (null before initial sync), and cursor carries pagination resume tokens.
+ * Shared spaces carry landed subscriptions, atLeast version floors, and incarnation tokens.
+ * Private spaces carry refetch flags, checksum parameters, range pulls, and client sequence boundaries.
  */
 export type PullRequest = {
   cookie: Cookie | null;
@@ -36,18 +31,18 @@ export type PullRequest = {
   earliest?: Record<string, number>;
 };
 
-/** 放进网址的请求：共用空间的 HTTP 拉取，与 WebSocket 的连接（只带游标） */
+// Query parameters for shared space HTTP pulls and WebSocket connection URLs.
 type QueryRequest = Pick<PullRequest, 'cookie' | 'cursor' | 'landed' | 'atLeast' | 'incarnation'>;
 
-/** 游标在网址里的写法：参数 cookie=版本.随机数；还没同步过不带 */
+// Cookie query parameter formatted as `cookie=version.nonce`.
 const cookieParam = 'cookie';
-/** 分块拉取中途的 cursor、共用空间落地时的订阅、下限与这一代在网址里的参数名 */
+// Query parameter names for cursors, landed subscriptions, version floors, and incarnations.
 const cursorParam = 'cursor';
 const landedParam = 'landed';
 const atLeastParam = 'atLeast';
 const incarnationParam = 'incarnation';
 
-/** 拉取或连接的网址：url 带上协议版本与放进网址的请求（不给就只带版本：私有空间的 POST） */
+/** Builds a pull or WebSocket connection URL with protocol version and request query parameters. */
 export function pullURL(url: string, { cookie, cursor, landed, atLeast, incarnation }: QueryRequest = { cookie: null }) {
   const target = new URL(url);
   target.searchParams.set(versionParam, String(protocolVersion));
@@ -59,23 +54,23 @@ export function pullURL(url: string, { cookie, cursor, landed, atLeast, incarnat
   return target.href;
 }
 
-/** 网址里一个不小于 0 的整数参数；没有是 undefined */
+// Parses a non-negative integer query parameter or returns undefined when absent.
 function countOf(url: URL, name: string, what: string) {
   const text = url.searchParams.get(name);
   if (text !== null && !/^\d+$/.test(text)) invalid(what, text);
   return text === null ? undefined : Number(text);
 }
 
-/** 网址的查询串只认这几个参数：别的都是设备不会发的，回错误（共用空间的缓存键由网址决定，多一个参数就多一份缓存） */
+/** Parses shared space pull query parameters, rejecting unrecognized parameters to protect CDN cache keys. */
 export function parsePullRequest(url: URL): QueryRequest {
   const unknown = [...url.searchParams.keys()].find(
     (key) => ![versionParam, cookieParam, cursorParam, landedParam, atLeastParam, incarnationParam].includes(key),
   );
-  if (unknown !== undefined) invalid('拉取的参数', unknown);
+  if (unknown !== undefined) invalid('Pull param', unknown);
   const cursor = url.searchParams.get(cursorParam);
   const landed = url.searchParams.get(landedParam);
-  const atLeast = countOf(url, atLeastParam, '拉取的下限');
-  const incarnation = countOf(url, incarnationParam, '拉取的这一代');
+  const atLeast = countOf(url, atLeastParam, 'Pull floor');
+  const incarnation = countOf(url, incarnationParam, 'Pull incarnation');
   return {
     cookie: parseCookie(url.searchParams.get(cookieParam)),
     ...(cursor === null ? {} : { cursor }),
@@ -85,40 +80,40 @@ export function parsePullRequest(url: URL): QueryRequest {
   };
 }
 
-/** 私有空间 HTTP 拉取的正文 */
+/** Serializes a private space HTTP pull request body to JSON. */
 export const pullBody = ({ cookie, cursor, refetch, checksum, checksumRows, ranges, clients, earliest }: PullRequest) =>
   JSON.stringify({ cookie, cursor, refetch, checksum, checksumRows, ranges, clients, earliest });
 
-/** 正文里按范围重下的表：每张表至多一项 */
+// Parses table ranges requested for rescan, allowing at most one entry per table.
 function rangesOf(value: unknown): PullRange[] {
-  if (!Array.isArray(value)) invalid('按范围重下', value);
+  if (!Array.isArray(value)) invalid('Pull ranges', value);
   const tables = new Set<string>();
   return value.map((item: unknown) => {
-    if (!isObject(item) || typeof item.table !== 'string' || item.table === '' || tables.has(item.table)) invalid('按范围重下', item);
+    if (!isObject(item) || typeof item.table !== 'string' || item.table === '' || tables.has(item.table)) invalid('Pull ranges', item);
     tables.add(item.table);
     return { table: item.table, ...bounds(item) };
   });
 }
 
-/** 正文里各项认不认得出：没列的项是设备不会发的 */
+// Validates permitted request body field types.
 const bodyChecks: Record<string, (value: unknown) => boolean> = {
   cursor: (value) => typeof value === 'string',
   refetch: (value) => value === true,
   checksum: (value) => typeof value === 'string',
   checksumRows: (value) => isCount(value) && value > 0,
   clients: isNames,
-  // 各客户端最早的待上传序号：序号从 1 起
+  // Earliest pending mutation ID per client (1-based sequence numbers).
   earliest: (value) => isObject(value) && Object.values(value).every((id) => isCount(id) && id > 0),
 };
 
-/** 私有空间 HTTP 拉取的正文只认这几项：别的、类型不对的都是设备不会发的，回错误 */
+/** Parses a private space HTTP pull request body, rejecting unrecognized or malformed properties. */
 export function parsePullBody(text: string): PullRequest {
   const value: unknown = JSON.parse(text);
-  if (!isObject(value)) invalid('拉取的正文', value);
+  if (!isObject(value)) invalid('Pull body', value);
   const { cookie, ranges, ...rest } = value;
-  // 只认 bodyChecks 自己的项：constructor、toString 这类名字查到的是 Object.prototype 上的函数
+  // Checks own properties against bodyChecks to exclude Object.prototype methods.
   for (const [key, item] of Object.entries(rest))
-    if (!Object.hasOwn(bodyChecks, key) || !bodyChecks[key]?.(item)) invalid(`拉取的 ${key} `, item);
+    if (!Object.hasOwn(bodyChecks, key) || !bodyChecks[key]?.(item)) invalid(`Pull ${key}`, item);
   return {
     ...(rest as Omit<PullRequest, 'cookie' | 'ranges'>),
     cookie: cookie === null ? null : parseCookieValue(cookie),

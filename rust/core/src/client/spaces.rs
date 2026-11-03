@@ -1,5 +1,6 @@
-//! 各空间的同步：开始（私有空间带表结构的握手，共用空间先占下、建表排进队列）、App 对它的调用，网络的事按编号交给认得它的空间。
-//! 不该知道的：一个空间的同步怎么做。
+//! Synchronization management across spaces: initializing connections (private spaces attach schema declaration handshakes;
+//! shared spaces must be claimed and queue table creation), routing app calls, and dispatching network events by request ID.
+//! What it should not know: how an individual space synchronizes.
 
 use super::{Client, Input, Task};
 use crate::declaration::Handshake;
@@ -10,7 +11,7 @@ use crate::sync::{Context, Job};
 use crate::tables::Table;
 
 impl Client {
-    /// App 对一个空间的同步的调用：开始、停下（退到后台又回来）、拉一次、整份重下、重连
+    /// App calls directed to a space's sync connection: start, stop (background/foreground), sync once, resync, reconnect.
     pub(super) fn space(&mut self, input: Input, jobs: &mut Vec<Job>, now: f64) {
         match input {
             Input::Start { channel } => self.with(&channel, jobs, now, Connection::start),
@@ -31,15 +32,15 @@ impl Client {
                     error: None,
                 });
             }),
-            _ => unreachable!("别的事件不在这里"),
+            _ => unreachable!("other input variants not handled here"),
         }
     }
 
-    /// 网络与计时器的事：按编号交给认得它的空间（socket、请求、token 的编号各空间不重），到时的计时器照记下的做
+    /// Network and timer events: dispatches to the space matching the ID (socket, request, and token IDs are globally unique across spaces); expired timers run recorded actions.
     pub(super) fn network(&mut self, input: Input, jobs: &mut Vec<Job>, now: f64) {
         match input {
             Input::Token { request, token, error } => {
-                let token = token.ok_or_else(|| Failure::new(error.unwrap_or_else(|| "取不到 token".to_owned())));
+                let token = token.ok_or_else(|| Failure::new(error.unwrap_or_else(|| "failed to get token".to_owned())));
                 self.each(jobs, now, |connection, ctx| connection.token(ctx, request, token.clone()));
             }
             Input::Opened { socket } => self.each(jobs, now, |connection, ctx| connection.socket_opened(ctx, socket)),
@@ -55,11 +56,11 @@ impl Client {
                 self.each(jobs, now, |connection, ctx| connection.response(ctx, request, status, &body));
             }
             Input::Fired { timer } => self.fired(timer, jobs, now),
-            _ => unreachable!("别的事件不在这里"),
+            _ => unreachable!("other input variants not handled here"),
         }
     }
 
-    /// 占下一个共用空间、建表与升级排进队列
+    /// Claims a shared space, queuing table creation and upgrades.
     pub(super) fn shared(&mut self, name: &str, tables: Vec<Table>, owner: Option<String>) -> Result<(), Failure> {
         self.device.declare_shared(name, tables)?;
         self.opened.insert(name.to_owned(), Opened::Pending);
@@ -70,7 +71,7 @@ impl Client {
         Ok(())
     }
 
-    /// 一个空间的同步做一件事（没开就什么也不做）
+    /// Invokes an action on a space's connection if present (no-op if not connected).
     pub(super) fn with(&mut self, channel: &str, jobs: &mut Vec<Job>, now: f64, body: impl FnOnce(&mut Connection, &mut Context)) {
         let Some(mut connection) = self.connections.remove(channel) else {
             return;
@@ -79,16 +80,16 @@ impl Client {
         self.connections.insert(channel.to_owned(), connection);
     }
 
-    /// App 对一个空间的调用：没开这个空间的同步就回错
+    /// Invokes an action for an app call on a space, replying with an error if the space is not connected.
     pub(super) fn call(&mut self, id: u64, channel: &str, jobs: &mut Vec<Job>, now: f64, body: impl FnOnce(&mut Connection, &mut Context)) {
         if self.connections.contains_key(channel) {
             self.with(channel, jobs, now, body);
         } else {
-            self.reply(id, Err(Failure::new(format!("没有这个空间的同步：{channel}"))));
+            self.reply(id, Err(Failure::new(format!("sync not established for space: {channel}"))));
         }
     }
 
-    /// 每个空间的同步都看一眼（socket、请求、token 的编号各空间不重，认不出的不理）
+    /// Dispatches an event to every space connection (socket, request, and token IDs are distinct across spaces).
     pub(super) fn each(&mut self, jobs: &mut Vec<Job>, now: f64, mut body: impl FnMut(&mut Connection, &mut Context)) {
         let channels: Vec<String> = self.connections.keys().cloned().collect();
         for channel in channels {
@@ -96,17 +97,21 @@ impl Client {
         }
     }
 
-    /// 建一个空间的同步、报一次状态，开始由 App 另发 `start`：私有空间带表结构的握手；共用空间要先占下，它的建表与升级排在队列里
-    /// （本机写开着时（可以跨好几次调用）建的表会落进它的保存点），连接等它做完
+    /// Establishes sync for a space and reports initial status (sync started by subsequent `Start` call):
+    /// private spaces attach a schema handshake; shared spaces must already be claimed and queue table creation
+    /// (which must not be created inside an open local write savepoint), with connection awaiting completion.
     pub(super) fn connect(&mut self, channel: &str, url: &str, jobs: &mut Vec<Job>, now: f64) -> Result<(), Failure> {
         if self.connections.contains_key(channel) {
-            return Err(Failure::new(format!("这个空间已经在同步：{channel}")));
+            return Err(Failure::new(format!("space is already syncing: {channel}")));
         }
         let (handshake, opened) = if channel.is_empty() {
             (Some(Handshake::new(self.device.declaration().clone())), Opened::Ready)
         } else {
             let opened = self.opened.get(channel).cloned();
-            (None, opened.ok_or_else(|| Failure::new(format!("没有共用空间 {channel}")))?)
+            (
+                None,
+                opened.ok_or_else(|| Failure::new(format!("shared space {channel} does not exist")))?,
+            )
         };
         let mut ctx = self.context(jobs, now);
         let connection = Connection::new(&mut ctx, channel, url, handshake, opened)?;

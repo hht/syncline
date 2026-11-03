@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { alarmAfter, object, online, squat } from './test-space.ts';
 
-test('接入方自己的定时：到时候调 scheduled，与导出共用一个 alarm、互不覆盖；撤掉的不调；名字不能以 syncline: 开头', async () => {
+test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix', async () => {
   const { name, phone } = await online(1);
   const hour = 3_600_000;
   await object(name).remind('weekly', Date.now() + hour);
@@ -20,7 +20,7 @@ test('接入方自己的定时：到时候调 scheduled，与导出共用一个 
   expect(await object(name).alarmAt()).toBeNull();
 });
 
-test('接入方在 scheduled 里给自己排下一次（循环的定时）：做完不被删，下一次照样到', async () => {
+test('supports recurring tasks that reschedule themselves in scheduled callbacks', async () => {
   const { name } = await online(1);
   await object(name).remind('recurring', Date.now());
   await alarmAfter(object(name), 0);

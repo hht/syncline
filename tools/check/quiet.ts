@@ -8,12 +8,12 @@ const tail = 30;
 
 type Run = { command: string; code: number; seconds: number; output: string; outputFile: string };
 
-/** 成功一行；失败给出错的行加最后 30 行，按原顺序、不重复 */
+/** Emits a single line on success; on failure emits error lines plus the last 30 lines in original order without duplicates. */
 export function summarize({ command, code, seconds, output, outputFile }: Run): string[] {
-  if (code === 0) return [`✓ ${command} ${seconds}s 日志 ${outputFile}`];
+  if (code === 0) return [`✓ ${command} ${seconds}s log ${outputFile}`];
   const lines = stripVTControlCharacters(output).trimEnd().split('\n');
   const kept = lines.filter((line, index) => index >= lines.length - tail || failure.test(line));
-  return [...kept, `✗ ${command} 退出码 ${code} ${seconds}s 日志 ${outputFile}`];
+  return [...kept, `✗ ${command} exit ${code} ${seconds}s log ${outputFile}`];
 }
 
 if (import.meta.main) {

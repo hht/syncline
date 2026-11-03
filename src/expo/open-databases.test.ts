@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest';
 import { OpenDatabases } from './open-databases.ts';
 
-// 一个进程里一个本机库只开一份：前台打开与后台任务的 syncOnce 怎么共用
+// Verifies single open instance coordination between foreground and background syncOnce tasks.
 
-/** 假的一份库：记下同步与关掉了几次；sync 等 finish 才结束 */
+/** Mock database instance tracking sync and close counts; sync awaits finish before resolving. */
 type Fake = { synced: number; closed: number; sync(): Promise<void>; close(): Promise<void>; finish(): void };
 
 function fake(databases: OpenDatabases<Fake>, name: string): Fake {
@@ -26,7 +26,7 @@ function fake(databases: OpenDatabases<Fake>, name: string): Fake {
   return space;
 }
 
-/** 后台任务的 syncOnce 正开着 u1 的库时，前台打开同一个人的 */
+/** Sets up a background syncOnce task active for owner u1 when foreground opens the same owner. */
 function adopted() {
   const databases = new OpenDatabases<Fake>();
   const background = fake(databases, 'app');
@@ -35,17 +35,17 @@ function adopted() {
   return { databases, background, once, foreground };
 }
 
-test('后台任务的 syncOnce 开着库时用户点开 App（同一个人）：前台接管开着的那份，不抛错；syncOnce 同步完不关它', async () => {
+test('foreground adopts background instance for same owner when user opens app; syncOnce completes without closing it', async () => {
   const { databases, background, once, foreground } = adopted();
   expect(foreground).toBe(background);
   background.finish();
   await once;
   expect(background.closed).toBe(0);
-  // 前台照常用它：再打开一次是重复打开
-  expect(() => databases.open('app', 'u1', () => fake(databases, 'app'))).toThrow('已经开着');
+  // Foreground continues using adopted instance: opening again throws already open.
+  expect(() => databases.open('app', 'u1', () => fake(databases, 'app'))).toThrow('already open');
 });
 
-test('后台开着的是别人的库（换了人登录）：前台不接管，先关掉后台那份再开自己的，不抛错；syncOnce 同步完不再关第二次', async () => {
+test('foreground closes background instance of different owner before opening its own; syncOnce does not close twice', async () => {
   const databases = new OpenDatabases<Fake>();
   const background = fake(databases, 'app');
   const once = databases.syncOnce('app', 'u1', () => background);
@@ -56,10 +56,10 @@ test('后台开着的是别人的库（换了人登录）：前台不接管，�
   await once;
   expect(background.closed).toBe(1);
   expect(foreground.closed).toBe(0);
-  expect(() => databases.open('app', 'u2', () => fake(databases, 'app'))).toThrow('已经开着');
+  expect(() => databases.open('app', 'u2', () => fake(databases, 'app'))).toThrow('already open');
 });
 
-test('前台开着时后台任务的 syncOnce 用开着的那份、不关；没开着就开一份，同步完关掉', async () => {
+test('syncOnce reuses open foreground instance without closing it; opens and closes instance if not already open', async () => {
   const databases = new OpenDatabases<Fake>();
   const foreground = databases.open('app', 'u1', () => fake(databases, 'app'));
   const once = databases.syncOnce('app', 'u1', () => fake(databases, 'app'));
@@ -75,7 +75,7 @@ test('前台开着时后台任务的 syncOnce 用开着的那份、不关；没�
   expect(other.closed).toBe(1);
 });
 
-test('前台接管之后又关掉了（退出登录），syncOnce 同步完不再关第二次', async () => {
+test('closing adopted instance on sign-out does not cause syncOnce to close a second time on completion', async () => {
   const { background, once, foreground } = adopted();
   await foreground.close();
   background.finish();
@@ -83,10 +83,10 @@ test('前台接管之后又关掉了（退出登录），syncOnce 同步完不�
   expect(background.closed).toBe(1);
 });
 
-test('同步出错时 syncOnce 开的那份照样关掉，错误抛给调用方', async () => {
+test('syncOnce closes opened instance when sync fails and propagates error to caller', async () => {
   const databases = new OpenDatabases<Fake>();
   const space = fake(databases, 'app');
-  space.sync = () => Promise.reject(new Error('断网'));
-  await expect(databases.syncOnce('app', 'u1', () => space)).rejects.toThrow('断网');
+  space.sync = () => Promise.reject(new Error('Network disconnected'));
+  await expect(databases.syncOnce('app', 'u1', () => space)).rejects.toThrow('Network disconnected');
   expect(space.closed).toBe(1);
 });

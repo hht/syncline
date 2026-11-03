@@ -1,7 +1,7 @@
-//! 设备的待上传怎么存、怎么编号、什么时候删：
-//! 每次启动、每次被清空是一个新的客户端，序号从 1 起；每条本机写连同它的改动集按本机顺序存进 `_syncline_pending`；云端确认到的删掉，其余重新记改动集。
-//! 都在调用方开好的本机事务里执行；`_syncline_pending` 与 Syncline 自己的其他表一起建。
-//! 不该知道的：改动集怎么撤回与重放、待上传怎么发给云端。
+//! How device pending mutations are stored, numbered, and removed:
+//! Each startup or clear creates a new client, numbering mutations from 1; each local write along with its changeset is stored in local order in `_syncline_pending`; confirmed writes are deleted, remainder recompute changesets.
+//! All executed within local transactions opened by callers; `_syncline_pending` is created alongside other Syncline internal tables.
+//! What it should not know: how changesets are rolled back or replayed, how pending mutations are sent to cloud.
 //! @see <https://doc.replicache.dev/concepts/how-it-works>
 //! @see <https://docs.powersync.com/architecture/client-architecture>
 
@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 
-/// 存着的一条待上传：本机顺序、客户端与序号、改动、记下的改动集（撤回用）
+/// A stored pending mutation: local sequence, client and id, changes, and recorded changeset (for rollback).
 pub struct Pending {
     pub seq: i64,
     pub client: String,
@@ -23,7 +23,7 @@ pub struct Pending {
     pub changeset: Vec<u8>,
 }
 
-/// 发给云端的一条写；每个客户端在一批里最早的那条标上 first
+/// A mutation sent to cloud; earliest mutation for each client in a batch is marked `first`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Mutation {
     pub client: String,
@@ -34,10 +34,10 @@ pub struct Mutation {
 }
 
 pub struct UploadQueue {
-    /// 取客户端编号
+    /// Client id generator.
     random_uuid: Box<dyn FnMut() -> String>,
     client: String,
-    /// 云端确认到这个客户端的哪个序号之后（确认了的从待上传删掉，序号不再用）：只增不减，时间点恢复回滚掉了确认也不退回，新写接在它后面、云端跳号
+    /// Highest mutation id confirmed by cloud for this client (confirmed mutations deleted from pending, ids never reused): monotonically increasing, not rolled back even on point-in-time recovery, new writes follow it with cloud skipping gaps.
     confirmed: i64,
 }
 
@@ -53,7 +53,7 @@ impl UploadQueue {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn is_empty(db: &Connection) -> rusqlite::Result<bool> {
         Ok(db
             .query_row("SELECT 1 FROM _syncline_pending LIMIT 1", [], |_| Ok(()))
@@ -61,11 +61,11 @@ impl UploadQueue {
             .is_none())
     }
 
-    /// 拉取带上的客户端，末块给它们处理到第几条（据此删掉已处理的）：待上传里的（按本机顺序），加上当前的——
-    /// 请求发出之后、结果回来之前的本机写都是当前客户端的，不列它，这些写就确认不了
+    /// Clients included in pull request, for which the final chunk reports processed mutation ids (to delete processed writes): clients in pending (in local order) plus the current client—
+    /// local writes between sending request and receiving response belong to the current client; omitting it would leave those writes unconfirmed.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn clients(&self, db: &Connection) -> rusqlite::Result<Vec<String>> {
         let mut statement = db.prepare_cached("SELECT client FROM _syncline_pending GROUP BY client ORDER BY min(seq)")?;
         let mut clients = statement
@@ -77,11 +77,11 @@ impl UploadQueue {
         Ok(clients)
     }
 
-    /// 拉取带上的客户端（clients）各自最早的待上传序号，末块只给从它起扣下的写：当前的客户端没有待上传时是它下一条写的序号——
-    /// 请求发出之后、结果回来之前的本机写都是它的，从这里起
+    /// Earliest pending mutation id per client (from `clients`), so final chunk only reports mutations withheld from that point: if current client has no pending mutations, uses its next mutation id—
+    /// local writes between sending request and receiving response belong to it, starting here.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn earliest(&self, db: &Connection) -> rusqlite::Result<BTreeMap<String, i64>> {
         let mut earliest = BTreeMap::from([(self.client.clone(), self.confirmed + 1)]);
         let mut statement = db.prepare_cached("SELECT client, min(id) FROM _syncline_pending GROUP BY client")?;
@@ -93,20 +93,20 @@ impl UploadQueue {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn count(db: &Connection) -> rusqlite::Result<i64> {
         db.query_row("SELECT count(*) FROM _syncline_pending", [], |row| row.get(0))
     }
 
-    /// 待上传的写，按本机顺序；给了 limit 就只取前面一批：改动的 JSON 共约 limit 字节（UTF-8，至少一条），条数在一次推送的上限之内
-    /// （`PUSH_MUTATIONS`，云端照它拒收）。每个客户端最早的那条标上 first，云端处理到的比它前一条小时据此跳号：
-    /// 取的总是前缀、一个客户端的序号随 seq 递增（add），所以它在这批里第一次出现的那条就是它最早的待上传
+    /// Pending mutations in local order; if `limit` is given, fetches leading batch: ~`limit` bytes of change JSON (UTF-8, at least one mutation), count capped by push limit
+    /// (`PUSH_MUTATIONS`, cloud rejects batches exceeding it). Earliest mutation for each client marked `first`, allowing cloud to skip gaps when its processed counter is smaller than preceding id:
+    /// always fetches a prefix and a client's id increases monotonically with `seq` (`add`), so its first appearance in this batch is its earliest pending mutation.
     ///
     /// # Errors
-    /// 读库出错；存着的改动读不出。
+    /// Returns an error if reading the database fails or stored changes cannot be parsed.
     pub fn list(db: &Connection, limit: Option<f64>) -> Result<Vec<Mutation>, Error> {
-        // 每条之前已累计的字节数小于 limit 就取：第一条之前是 0，总取得到。累计只在前 PUSH_MUTATIONS 条里算、只读字节数：
-        // 按 seq 对整张表开窗要扫完全部正文，攒了上万条时每批都读一遍
+        // Take mutations while cumulative bytes before each mutation is below limit: 0 before the first, so always takes at least one. Cumulative sum bounded within first PUSH_MUTATIONS, reading only byte lengths:
+        // windowing over the whole table by seq would scan all payloads, which would read all rows per batch when thousands of mutations accumulate.
         let mut statement = db.prepare_cached(
             "SELECT p.client, p.id, p.changes FROM (
                SELECT seq, sum(bytes) OVER (ORDER BY seq) - bytes AS before
@@ -132,10 +132,10 @@ impl UploadQueue {
         Ok(mutations)
     }
 
-    /// 全部待上传，按本机顺序（撤回与重放用）
+    /// All pending mutations in local order (for rollback and replay).
     ///
     /// # Errors
-    /// 读库出错；存着的改动读不出。
+    /// Returns an error if reading the database fails or stored changes cannot be parsed.
     pub fn all(db: &Connection) -> Result<Vec<Pending>, Error> {
         let mut statement = db.prepare_cached("SELECT seq, client, id, changes, changeset FROM _syncline_pending ORDER BY seq")?;
         let rows = statement.query_map([], |row| {
@@ -161,15 +161,15 @@ impl UploadQueue {
         Ok(pending)
     }
 
-    /// 记一条本机写，序号在同一个事务里从库里定：这个客户端待上传里最后一条的下一个，删光了就接着已确认的。
-    /// 不在内存里计数：提交报错却已落盘时内存里的数不知道该不该加，重号的写云端当作处理过、丢掉。
-    /// 改动超过 `WRITE_BYTES` 就报错，调用方回滚这次写（字节数由 SQLite 数，各平台一样）
+    /// Records a local write, determining its id in the database within the same transaction: next id after this client's last pending mutation, or following confirmed id if empty.
+    /// Not counted in memory: if commit fails after disk flush, in-memory counter state is ambiguous; duplicate mutation ids would be treated as already processed and discarded by cloud.
+    /// Errors if changes exceed `WRITE_BYTES`, causing caller to rollback the write (byte count measured by SQLite, consistent across platforms).
     ///
     /// # Errors
-    /// 写库出错；改动太多。
+    /// Returns an error if writing to database fails or write is too large.
     pub fn add(&self, db: &Connection, changes: &[Change], changeset: &[u8]) -> Result<(), Error> {
         let text = changes_json(changes);
-        // 一个客户端的序号随 seq 递增：从最后一行往前找到它的第一行就是最大的
+        // A client's id increases with seq: scanning backward from last row finds the highest id.
         let bytes: i64 = db
             .prepare_cached(
                 "INSERT INTO _syncline_pending (client, id, changes, changeset)
@@ -179,16 +179,16 @@ impl UploadQueue {
             .query_row(params![self.client, self.confirmed, text, changeset], |row| row.get(0))?;
         if bytes > WRITE_BYTES {
             return Err(Error::Failed(format!(
-                "这次本机写改动太多（{bytes} 字节，上限 8 MiB），已回滚：分成几次写"
+                "local write is too large ({bytes} bytes, limit 8 MiB) and was rolled back; split into smaller writes"
             )));
         }
         Ok(())
     }
 
-    /// lmids 有没有确认到待上传：一条语句扫一遍待上传（连上时的补齐带着游标之后有提交的全部客户端，可以有几百个）
+    /// Returns whether `lmids` confirms any pending mutations: single statement scans pending mutations once (catch-up on connect carries all clients with commits past cookie, potentially hundreds).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn confirms(db: &Connection, lmids: &Lmids) -> Result<bool, Error> {
         let lmids = serde_json::to_string(lmids).map_err(|error| Error::Failed(error.to_string()))?;
         let found = db
@@ -200,12 +200,12 @@ impl UploadQueue {
         Ok(found.is_some())
     }
 
-    /// 收到云端改动之后：pending（改之前读出的全部待上传）里 lmids 确认到的删掉，其余按顺序交给 replay 重放、记下新的改动集；返回删掉的（被确认的）写。
-    /// 序号不改：写的身份（客户端，序号）一经生成永不改变，系统备份、克隆出的库里的同一条写才认得出、不执行两次（模型的 P11）。
-    /// 时间点恢复回滚掉这个客户端已确认的几条后，留着的序号与云端之间有空缺，由云端跳号接上
+    /// After receiving cloud changes: deletes mutations in `pending` (all pending mutations read before changes) confirmed by `lmids`, passes remainder in order to `replay` to record new changesets; returns deleted (confirmed) mutations.
+    /// Mutation ids never change: write identity (client, id) is immutable once generated, allowing identical writes in system backups or cloned databases to be recognized and not executed twice (P11 in model).
+    /// When point-in-time recovery rolls back confirmed mutations for this client, gaps between remaining ids and cloud counter are bridged by cloud skipping gaps.
     ///
     /// # Errors
-    /// 写库出错；replay 出错。
+    /// Returns an error if writing to database fails or replay fails.
     pub fn rebase(
         &mut self,
         database: &mut Database,
@@ -241,11 +241,11 @@ impl UploadQueue {
         Ok(confirmed)
     }
 
-    /// 丢掉全部待上传，换一个新客户端：丢掉的写可能已推上去、云端执行过却还没确认，沿用这个客户端的话，
-    /// 新写会重用它们的序号、被当作重复丢掉
+    /// Discards all pending mutations and switches to a new client: discarded writes may already have been pushed and executed on cloud without confirmation; continuing with the same client
+    /// would reuse their ids and be discarded as duplicates.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn clear(&mut self, db: &Connection) -> rusqlite::Result<()> {
         db.execute("DELETE FROM _syncline_pending", [])?;
         self.client = (self.random_uuid)();
@@ -255,7 +255,7 @@ impl UploadQueue {
 }
 
 fn parsed(changes: &str) -> Result<Vec<Change>, Error> {
-    serde_json::from_str(changes).map_err(|error| Error::Failed(format!("存着的待上传读不出：{error}")))
+    serde_json::from_str(changes).map_err(|error| Error::Failed(format!("failed to parse stored pending mutations: {error}")))
 }
 
 #[cfg(test)]
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn 序号从库里定_确认的删掉_其余重放_清空后换客户端() {
+    fn id_determined_from_database_confirmed_deleted_remainder_replayed_and_client_rotated_on_clear() {
         let (mut database, mut queue) = queue();
         let db = database.connection();
         queue.add(db, &put("a"), b"1").unwrap();
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(confirmed.iter().map(|m| m.id).collect::<Vec<_>>(), vec![1]);
         let left = UploadQueue::all(db).unwrap();
         assert_eq!((left.len(), left[0].changeset.as_slice()), (1, b"r".as_slice()));
-        // 确认到的不退回：删光了也接着已确认的
+        // Confirmed counter does not regress: continues from confirmed id even after pending is emptied.
         queue
             .rebase(&mut database, left, &Lmids::from([("c-1".to_owned(), 2)]), |_, _| unreachable!())
             .unwrap();
@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn 一批按字节取前缀_至少一条() {
+    fn batch_takes_prefix_by_bytes_at_least_one() {
         let (database, queue) = queue();
         let db = database.connection();
         for id in ["a", "b", "c"] {
@@ -326,7 +326,7 @@ mod tests {
         }
         assert_eq!(UploadQueue::list(db, Some(1.0)).unwrap().len(), 1);
         let one = i64::try_from(changes_json(&put("a")).len()).unwrap();
-        #[expect(clippy::cast_precision_loss, reason = "几十字节")]
+        #[expect(clippy::cast_precision_loss, reason = "a few tens of bytes")]
         let two = (one + 1) as f64;
         assert_eq!(UploadQueue::list(db, Some(two)).unwrap().len(), 2);
         assert!(UploadQueue::confirms(db, &Lmids::from([("c-1".to_owned(), 1)])).unwrap());

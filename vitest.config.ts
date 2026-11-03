@@ -1,8 +1,9 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
 /**
- * git 钩子会导出 GIT_DIR 等变量（链接工作树里是绝对路径），测试在临时目录建的仓库会被它指回宿主仓库：
- * git init 把宿主的共享配置写成 core.bare = true，提交写进宿主的 HEAD 并再次触发钩子。测试只操作自己建的仓库，统统清掉
+ * Git hooks export variables like GIT_DIR (absolute paths in linked worktrees), pointing test repositories back to the host:
+ * git init marks host shared config as core.bare = true, commits write to host HEAD and re-trigger hooks. Clean them up so tests touch only
+ * their own repositories.
  * @see https://git-scm.com/docs/githooks#_description
  */
 for (const name of Object.keys(process.env)) if (name.startsWith('GIT_')) delete process.env[name];
@@ -10,8 +11,9 @@ for (const name of Object.keys(process.env)) if (name.startsWith('GIT_')) delete
 export default defineConfig({
   test: {
     /**
-     * --changed 只按模块图找受影响的测试，设备一侧的测试经编成 wasm 的 Rust 跑、图里没有 Rust 的源码：只改了 Rust 时一条也不跑。
-     * 改了编进测试的 wasm 的 Rust（核心、wasm 外壳、依赖与工具链、编 SQLite 的开关）就整套重跑；构建产物 target 不算（`**` 不进以点开头的目录，.cargo 单列）
+     * --changed resolves affected tests solely from module graphs, omitting Rust sources since device-side tests run via compiled wasm.
+     * Reruns all tests when Rust code compiled into test wasm changes (core, wasm wrapper, dependencies, toolchains, SQLite flags).
+     * Ignores target artifacts.
      * @see https://vitest.dev/config/forcereruntriggers
      */
     forceRerunTriggers: [
@@ -25,9 +27,9 @@ export default defineConfig({
         test: {
           name: 'fast',
           include: ['{src,tools}/**/*.test.ts'],
-          // 设备一侧（Rust）编成 wasm 给测试用
+          // Compiles Rust device side to wasm for tests.
           globalSetup: ['src/build-wasm.mjs'],
-          // 云端的测试跑在 Workers 运行时里（vitest.workerd.config.ts）
+          // Cloud tests run in the Workers runtime (vitest.workerd.config.ts).
           exclude: ['**/node_modules/**', 'src/**/*.workerd.test.ts'],
         },
       },

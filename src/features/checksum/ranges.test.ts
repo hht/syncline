@@ -9,8 +9,7 @@ import { serving } from '../../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../../test/test-storage.ts';
 import { Connection } from '../../test/test-sync.ts';
 
-// 校验和分段对：云端一段至多 2 万行、100 张表，空间大了一轮分几段；设备按云端给的主键范围算本机的同一段，对上了接着下一段，记着从哪起；
-// 对的途中库变了就把段减半，每天至多对一定的行数
+// Checksum segment verification: cloud segments cap at 20,000 rows and 100 tables; large spaces span multiple segments per round. Device computes the same segment over the primary key range provided by the cloud, proceeding to the next segment on match and recording the resume point. If the database mutates during verification, the segment size is halved, bounded by a daily row limit.
 
 const entry = sqliteTable('entry', { owner: text().notNull(), n: integer().notNull(), note: text() }, (table) => [
   primaryKey({ columns: [table.owner, table.n] }),
@@ -19,7 +18,7 @@ const tag = sqliteTable('tag', { id: text().primaryKey() });
 const createEntry = 'CREATE TABLE entry (owner TEXT NOT NULL, n INTEGER NOT NULL, note TEXT, PRIMARY KEY (owner, n))';
 const createTag = 'CREATE TABLE tag (id TEXT PRIMARY KEY)';
 
-/** 云端：两个主人各 rows 行（主键两列；默认 12500，一段切在第二个主人中间）与一个标签 */
+/** Cloud: two owners each with rows entries (composite two-column primary key; defaults to 12,500, splitting a segment mid-way through the second owner) and one tag. */
 function filled(rows = 12_500) {
   const cloud = cloudStorage(createEntry, createTag);
   const space = new Space(cloud, [entry, tag]);
@@ -31,15 +30,15 @@ function filled(rows = 12_500) {
   return space;
 }
 
-/** 整份下载到底：分块拉取从第一块起要了校验和，末块带第一段 */
+/** Downloads full snapshot: chunked pull requests checksum from first chunk, final chunk delivers first segment. */
 async function download(space: Space, device: Device) {
   for (let step = 0; step === 0 || device.private.behind(); step += 1) {
-    if (step > 20) throw new Error('拉不完');
+    if (step > 20) throw new Error('Download exceeded 20 steps');
     await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000));
   }
 }
 
-/** 云端两个主人各 500 行，设备整份下载完 */
+/** Cloud with two owners each having 500 rows; device finishes full download. */
 async function downloaded(options?: ConstructorParameters<typeof Device>[2]) {
   const space = filled(500);
   const storage = deviceStorage(createEntry, createTag);
@@ -48,7 +47,7 @@ async function downloaded(options?: ConstructorParameters<typeof Device>[2]) {
   return { space, storage, device };
 }
 
-/** 一段段对完一轮：每段对完，设备落后（要下一段）就为它拉一次；返回每段对上了没有 */
+/** Completes a round segment by segment: after verifying each segment, pulls the next segment if behind; returns match outcome per segment. */
 async function cycle(space: Space, device: Device) {
   const results: (boolean | undefined)[] = [];
   for (let round = 0; round < 10; round += 1) {
@@ -56,13 +55,13 @@ async function cycle(space: Space, device: Device) {
     if (!device.private.behind()) return results;
     await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000));
   }
-  throw new Error('10 段还没对完一轮');
+  throw new Error('Verification round did not complete within 10 segments');
 }
 
 const verified = (storage: Storage) => storage.sql.exec("SELECT at, next FROM _syncline_verified WHERE space = ''").toArray()[0];
 
-// 两台设备各整份下载 2.5 万行再对两段，空闲时约 3 秒，并行跑门禁时默认的 5 秒不够
-test('空间大了一轮分两段对完：声明了的表按主键读本机的同一段，没声明的表的行（另存着）按存着的主键挑出同一段，都对得上；对完记下时刻、不再要', {
+// Two devices each download 25,000 rows and verify two segments; default 5s timeout is insufficient under parallel check load.
+test('large spaces complete verification across two segments: declared tables read matching local segments by primary key, undeclared table rows (stored separately) filter by stored primary keys and match; records timestamp when complete and stops requesting', {
   timeout: 30_000,
 }, async () => {
   const space = filled();
@@ -84,7 +83,7 @@ test('空间大了一轮分两段对完：声明了的表按主键读本机的�
   }
 });
 
-test('第一段对上之后 App 重启：接着要第二段；第二段里本机的行被改坏了就对不上，只重下第二段', async () => {
+test('app restart after first segment verified: continues requesting second segment; corrupted local rows in second segment fail verification and trigger refetch only for second segment', async () => {
   const space = filled();
   const storage = deviceStorage(createEntry, createTag);
   const first = new Device(storage, [entry, tag]);
@@ -99,7 +98,7 @@ test('第一段对上之后 App 重启：接着要第二段；第二段里本机
   const second = space.pull(request, 1_000_000) as Poke;
   expect(second.checksum?.parts[0]).toMatchObject({ table: 'entry', key: ['owner', 'n'], after: { owner: 'b' } });
   expect(second.checksum?.next).toBeUndefined();
-  storage.sql.exec("UPDATE entry SET note = '坏了' WHERE owner = 'b' AND n = 12500");
+  storage.sql.exec("UPDATE entry SET note = 'corrupted' WHERE owner = 'b' AND n = 12500");
   await restarted.private.receive(second);
   const reported = captureReported();
   expect(await restarted.private.verify()).toBe(false);
@@ -108,7 +107,7 @@ test('第一段对上之后 App 重启：接着要第二段；第二段里本机
   expect(restarted.private.pullRequest().ranges).toEqual([{ table: 'entry', after: second.checksum?.parts[0]?.after }, { table: 'tag' }]);
 });
 
-test('连着时一段对上了、还有下一段：连接自己接着拉、接着对，直到对完一轮', async () => {
+test('active connection with matching segment and remaining segments: connection automatically pulls and verifies next segment until round completes', async () => {
   const space = filled();
   const storage = deviceStorage(createEntry, createTag);
   const device = new Device(storage, [entry, tag]);
@@ -116,7 +115,7 @@ test('连着时一段对上了、还有下一段：连接自己接着拉、接�
   const connection = new Connection(device.private, { url: 'https://sync.test/space', ...network.options(0), token: async () => 'valid' });
   connection.start();
   try {
-    // 校验在批与批之间让出 JS 线程（真的计时器）：网络上的事做完了它可能还没对完，多做几轮
+    // Verification yields JS thread between batches (real timer): network activity may complete before verification finishes; run multiple rounds.
     for (let round = 0; round < 200 && Number(verified(storage)?.at ?? 0) === 0; round += 1) {
       await drain(network);
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -128,7 +127,7 @@ test('连着时一段对上了、还有下一段：连接自己接着拉、接�
   }
 });
 
-test('本机另存着云端不再同步的表的行（残留）：最后一段把它也算进来，对不上', async () => {
+test('local storage retains leftover rows from tables no longer synced by cloud: included in final segment and fails verification', async () => {
   const cloud = cloudStorage(createTag);
   const space = new Space(cloud, [tag]);
   space.mutate((tx) => tx.insert(tag, { id: 't1' }));
@@ -143,7 +142,7 @@ test('本机另存着云端不再同步的表的行（残留）：最后一段�
   expect(reported).toHaveLength(1);
 });
 
-test('一段至多 100 张表、设备要的行数：表多了下一段从第 101 张表起；要的更少时照设备的', () => {
+test('segment caps at 100 tables and requested row count: extra tables defer to next segment starting at table 101; honors smaller limits requested by device', () => {
   const many = Array.from({ length: 150 }, (_, index) => sqliteTable(`t${String(index).padStart(3, '0')}`, { id: text().primaryKey() }));
   const space = new Space(
     cloudStorage(...many.map((_, index) => `CREATE TABLE t${String(index).padStart(3, '0')} (id TEXT PRIMARY KEY)`)),
@@ -164,7 +163,7 @@ test('一段至多 100 张表、设备要的行数：表多了下一段从第 10
   });
 });
 
-test('段按（表名, 主键）的先后排，与声明的先后无关；部署加减了表，下一段照样接着上一段的起点，起点那张表不再同步就从下一个表名起；之前的写法照样接着；认不出的起点从头、起点在全部表之后的是最后一段', () => {
+test('segments are ordered by (table name, primary key), independent of declaration order; schema changes adding or removing tables continue from previous resume point, advancing to next table if start table is no longer synced; continues across earlier formats; unrecognized resume points restart from beginning, and resume points beyond all tables yield final empty segment', () => {
   const named = (name: string) => sqliteTable(name, { id: text().primaryKey() });
   const [a, b, c] = [named('a'), named('b'), named('c')];
   const cloud = cloudStorage(...['a', 'b', 'c'].map((name) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY)`));
@@ -192,9 +191,9 @@ test('段按（表名, 主键）的先后排，与声明的先后无关；部署
   expect(checksumOf(withoutB, first?.next ?? '')?.parts[0]).toEqual({ table: 'c', key: ['id'] });
 });
 
-test('对的途中库变了就作罢、这一段减半，至多减到一批（200 行）；对完一轮，下一轮从最长的段起', () =>
+test('aborts and halves segment size when database mutates during verification, down to a single batch (200 rows); subsequent round resumes at maximum segment size', () =>
   withFakeTimers(async () => {
-    // 一段 1001 行：减半照云端给的这一段的行数，不从 2 万起
+    // 1001-row segment: halved based on segment row count delivered by cloud rather than default 20,000.
     const { space, device } = await downloaded();
     const sizes: (number | undefined)[] = [];
     for (let round = 0; round < 4; round += 1) {
@@ -226,10 +225,10 @@ test('对的途中库变了就作罢、这一段减半，至多减到一批（20
     expect(other.private.pullRequest()).toMatchObject({ checksum: '', checksumRows: 20_000 });
   }, ['Date']));
 
-test('每天至多对 checksumRowsPerDay 行：要的一段不超过当天剩下的，用完了等这一天过完再要', () =>
+test('verifies at most checksumRowsPerDay rows per day: requested segment does not exceed remaining daily budget, waiting until next day once exhausted', () =>
   withFakeTimers(async () => {
     const { space, storage, device } = await downloaded({ checksumRowsPerDay: 300 });
-    // 第一段 300 行（当天剩下的），之后当天不再要
+    // First segment capped at 300 rows (remaining daily budget); no further checksum requests today.
     expect(await cycle(space, device)).toEqual([true]);
     const { next } = verified(storage) ?? {};
     expect(typeof next).toBe('string');
@@ -238,12 +237,12 @@ test('每天至多对 checksumRowsPerDay 行：要的一段不超过当天剩下
     expect(device.private.pullRequest()).toMatchObject({ checksum: next, checksumRows: 300 });
   }, ['Date']));
 
-test('每天的行数不是正整数：打开时就报错，不让每次拉取被云端拒掉', () => {
+test('daily row limit is not a positive integer: throws on open to avoid cloud rejecting every pull', () => {
   for (const checksumRowsPerDay of [0, 1.5, -1])
     expect(() => new Device(deviceStorage(createTag), [tag], { checksumRowsPerDay })).toThrow('checksumRowsPerDay');
 });
 
-test('对不上的一段表多、名字长：要重下的原样放进 POST 的正文，不截短；重下之后都修好', async () => {
+test('mismatched segment with many tables and long names: refetch ranges are sent untruncated in POST body; refetch repairs all rows', async () => {
   const name = (index: number) => `t${String(index).padStart(3, '0')}_${'x'.repeat(70)}`;
   const many = Array.from({ length: 100 }, (_, index) => sqliteTable(name(index), { id: text().primaryKey() }));
   const schema = many.map((_, index) => `CREATE TABLE ${name(index)} (id TEXT PRIMARY KEY)`);

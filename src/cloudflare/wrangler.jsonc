@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  // 平台测试用的 Worker（workerd 测试配置），不部署；兼容日期取接入方部署用的（不早于平台要求的那一天）
+  // Worker for platform tests in workerd, not deployed; uses compatibility date required by Cloudflare.
   "name": "syncline-test",
   "main": "test-worker.ts",
   "compatibility_date": "2026-09-30",
@@ -15,7 +15,7 @@
     { "tag": "v1", "new_sqlite_classes": ["TestSpace"] },
     { "tag": "v2", "new_sqlite_classes": ["TestCatalog", "TestCatalogBroadcast"] }
   ],
-  // 共用空间的入口不缓存，拉取经开了缓存的 TestCatalogEntry（Workers Cache）
+  // The shared space entry point is uncached; pulls pass through cached TestCatalogEntry (Workers Cache).
   "cache": { "enabled": true, "cross_version_cache": true },
   "exports": {
     "default": { "type": "worker", "cache": { "enabled": false } },

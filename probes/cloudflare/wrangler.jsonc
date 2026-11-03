@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  // 量平台限制用的临时 Worker：push-size.ts 用一次性的名字（--name）部署、量完删掉，这里不写名字、不能直接部署；兼容日期同 src/cloudflare/wrangler.jsonc
+  // Ephemeral Worker for probing platform limits: deployed with an ephemeral name (--name) by push-size.ts and deleted when finished; omits name to prevent direct deployment.
   "main": "worker.ts",
   "compatibility_date": "2026-09-30",
   "durable_objects": { "bindings": [{ "name": "SPACE", "class_name": "ProbeSpace" }] },

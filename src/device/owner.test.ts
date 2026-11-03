@@ -5,21 +5,22 @@ import { Device } from '../test/test-device.ts';
 import { createWorkout, tables, workout, workouts, write } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 
-// 一个 App 一个库：私有空间属于登录的人、共用空间按登录的人清：换了人先清掉上一个人的，同一个人接着用
+// One app one database: private space belongs to the logged-in owner, shared spaces cleared by owner: switching owners clears
+// previous owner's data first, same owner continues.
 
 const program = sqliteTable('program', { id: text().primaryKey() });
 const createProgram = 'CREATE TABLE program (id TEXT PRIMARY KEY)';
 const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
-/** 一台设备：私有空间收下一行、又写了一条没上传的；共用空间（登录的人是 admin）收下一个计划 */
+/** One device: private space receives a row and writes an unuploaded row; shared space (logged-in owner is admin) receives a program. */
 async function used() {
   const storage = deviceStorage(createWorkout, createProgram);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.private.receive({
     ...synced,
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: '云端的' } }],
+    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'from cloud' } }],
   });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '没上传' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'unuploaded' }));
   const catalog = device.shared('catalog', [program], 'admin');
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'program', key: { id: 'draft' }, row: { id: 'draft' } }] });
   device.close();
@@ -28,7 +29,7 @@ async function used() {
 
 const programs = (storage: ReturnType<typeof deviceStorage>) => storage.sql.exec('SELECT id FROM program').toArray();
 
-test('换了人打开、上一个人还有没上传的写：抛 PendingWrites（是谁的、几条），什么都不清；同一个人再打开，私有数据、没上传的写、游标都在', async () => {
+test('opened with different owner and previous owner has pending writes: throws PendingWrites (who and how many), clears nothing; reopened by same owner, private data, pending writes, and cookie intact', async () => {
   const storage = await used();
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(expect.objectContaining({ owner: 'alice', count: 1 }));
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(PendingWrites);
@@ -42,7 +43,7 @@ test('换了人打开、上一个人还有没上传的写：抛 PendingWrites（
   expect(workouts(storage)).toEqual([]);
 });
 
-test('换了人打开、明确丢弃没上传的写：上一个人的私有数据、没上传的写、游标都清掉，整份重下；共用空间照样留着', async () => {
+test('opened with different owner and explicitly discard pending writes: clears previous owner private data, pending writes, and cookie, refetched entirely; shared space remains intact', async () => {
   const storage = await used();
   const device = new Device(storage, tables, { owner: 'bob', discardPending: true });
   expect(workouts(storage)).toEqual([]);
@@ -51,7 +52,7 @@ test('换了人打开、明确丢弃没上传的写：上一个人的私有数�
   expect(programs(storage)).toEqual([{ id: 'draft' }]);
 });
 
-test('共用空间换了登录的人：上一个人看过的行先清掉，不留给看不到它的人；人没变照样留着', async () => {
+test('shared space switches logged-in owner: rows viewed by previous owner cleared first, not visible to those unauthorized; preserved if owner unchanged', async () => {
   const storage = await used();
   const device = new Device(storage, tables, { owner: 'bob', discardPending: true });
   await device.shared('catalog', [program], 'admin').opened();
@@ -64,15 +65,15 @@ test('共用空间换了登录的人：上一个人看过的行先清掉，不�
   expect(catalog.cookie()).toBeNull();
 });
 
-test('云端说的空间与第一次同步时记下的不同（这台设备上换了账号，token 已是别人的）：抛 AccountMismatch，这条不收；换了 owner 才重新记', async () => {
+test('cloud space differs from the one recorded on first sync (account switched on device, token belongs to another): throws AccountMismatch, rejects message; re-recorded only after owner change', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.private.receive({
     ...synced,
     space: 'alice',
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: '爱丽丝的' } }],
+    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'alice data' } }],
   });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '没上传' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'unuploaded' }));
   await expect(
     device.private.receive({ base: device.private.cookie(), cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [], space: 'bob' }),
   ).rejects.toThrow(AccountMismatch);
@@ -84,19 +85,19 @@ test('云端说的空间与第一次同步时记下的不同（这台设备上�
   await bob.private.receive({
     ...synced,
     space: 'bob',
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w3' }, row: { id: 'w3', note: '鲍勃的' } }],
+    patch: [{ op: 'put', table: 'workout', key: { id: 'w3' }, row: { id: 'w3', note: 'bob data' } }],
   });
-  expect(workouts(storage)).toEqual([{ id: 'w3', note: '鲍勃的' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w3', note: 'bob data' }]);
 });
 
-test('换了人打开：上一个人的数据在库文件里也抹掉（删掉的行的内容清零，不留在空闲页里）', async () => {
+test('opened with different owner: previous owner data wiped in db file (deleted row contents zeroed out, not left in freelist pages)', async () => {
   const storage = deviceStorage(createWorkout);
   const alice = new Device(storage, tables, { owner: 'alice' });
-  const secret = '爱丽丝的秘密'.repeat(20);
+  const secret = 'alice secret payload'.repeat(20);
   await alice.private.receive({ ...synced, patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: secret } }] });
   await write(alice, (tx) => tx.insert(workout).values({ id: 'w2', note: secret }));
   alice.close();
   new Device(storage, tables, { owner: 'bob', discardPending: true }).close();
   const image = new TextDecoder('utf-8', { fatal: false }).decode(storage.image());
-  expect(image.includes('爱丽丝的秘密')).toBe(false);
+  expect(image.includes('alice secret payload')).toBe(false);
 });

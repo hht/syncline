@@ -7,50 +7,51 @@ import type { Commits, Entry } from './commits.ts';
 import type { scopeOf } from './evolution.ts';
 import type { Position, Range } from './position.ts';
 
-// 读取器（Reader：起计划、核对带回的位置、编 next）的一次读：从位置起扫描、追尾巴、开下一轮，读满预算就停在那里。
-// 照 model/Private.tla 的 HandlePull 与 FinalRows、Shared.tla 的 Chunks。
-// 不该知道的：位置怎么编码、从哪起计划、块怎么回给设备
+// Reader execution step (Reader initializes plans, validates echoed positions, and encodes next cursors):
+// scans from position, walks commit tail, and opens subsequent rounds, pausing when budget is exhausted.
+// Follows HandlePull and FinalRows in model/Private.tla, and Chunks in Shared.tla.
+// What this module should not know: how positions encode, where plans originate, or how chunks return to devices.
 
-/** 一次至多读多少行（库里的行，含跳过的）、给出多少字符（改动的 JSON，opChars） */
+/** Execution budget: row read count ceiling (including skipped rows) and op character limit (JSON, opChars). */
 export type Budget = { rows: number; chars: number };
 
-/** 共用空间的设备看得见哪些行：buckets 是桶规则，subscription 是订阅，added 是订阅里新加的桶（落地时的订阅之外的）。私有空间不给，全看得见 */
+/** Visibility context for shared spaces: `buckets` defines bucket rules, `subscription` lists subscribed buckets, and `added` lists newly added buckets beyond the landed subscription. Omitted for private spaces (all rows visible). */
 export type Visible = { buckets: Buckets; subscription: Subscription; added: ReadonlySet<string> };
 
-/** 扫着的一张表：cleared 是不用清（整份开头已清过、或只扫新加的桶），range 是要求重下的那一段，started 是已给过第一行（清过了） */
+/** Scan state for a table: `cleared` indicates table drop already executed (by full pull clear or added-bucket scan); `range` defines requested range bounds; `started` indicates first row emitted. */
 type TableScan = { table: string; cleared: boolean; range: Range | undefined; started: boolean };
 
-/** 停在一路里：这张表、这一路的桶（私有空间没有）、扫到的主键（还没给这一路的行时没有） */
+/** Constructs a scan point positioned at a specific lane: table name, bucket ID (omitted in private spaces), and last scanned primary key. */
 const laneAt = (table: string, { bucket }: Lane, after: Key | undefined) => ({
   table,
   ...(bucket === undefined ? {} : { bucket }),
   ...(after && { after }),
 });
 
-/** 一次读要的库：同步表怎么读、提交怎么分批读、范围表 */
+/** Storage access required for reading: table reads, commit log batch queries, and scope table evolution. */
 type Store = { tables: TableReads; commits: Pick<Commits, 'after'>; entered: ReturnType<typeof scopeOf> };
 
-/** 一次读：从 position 起扫描、追尾巴到 head（读开始时的最新一版：一次读是一次同步的调用，读的途中不会有新提交）、开下一轮，读满预算就停在 position */
+/** Single reader execution step: scans from position, walks tail to head (latest version at step invocation; synchronous call prevents intervening commits), opens subsequent rounds, and halts when budget is spent. */
 export class Step {
   readonly #store: Store;
   readonly #head: Cookie;
   readonly #budget: Budget;
   readonly #ops: Op[];
   readonly #visible: Visible | undefined;
-  /** 共用空间订阅里的桶 */
+  /** Subscribed buckets in shared space. */
   readonly #subscribed: ReadonlySet<string>;
-  /** 这一块已给过的行（标识见 rowId）：同一行只给一次 */
+  /** Row IDs emitted in this chunk (via rowId): each row is emitted at most once. */
   readonly #sent = new Set<string>();
-  /** 这一块读了库里几行：表的行、提交与其中的项，跳过的也算（对 Budget.rows） */
+  /** Rows read from storage in this chunk: table rows, commit records, and entries, including skipped rows (counted against Budget.rows). */
   #rows = 0;
-  /** 这一块给出的改动共多少字符（opChars）、扫描给出了几行（下载进度用：同一行在几个桶里扫到几次就算几次） */
+  /** Total op characters emitted in this chunk, and row scan count (for download progress: counting multiple memberships separately). */
   chars: number;
   scanned = 0;
-  /** 这一块前进过没有（给了一行、过了尾巴里的一项或一版）：没前进过不因预算停，每块至少前进一步 */
+  /** Tracks whether progress occurred (row emitted, tail item or commit advanced): never pauses on budget before taking at least one step. */
   #moved = false;
   position: Position;
 
-  /** store 是读的库；position 是从哪读起，head 是读开始时的最新一版，ops 是已给的改动（整份开头的清空），visible 是共用空间的设备看得见哪些行 */
+  /** Constructs a read step; `store` provides storage access, `position` is start position, `head` is latest version, `ops` contains prior ops (e.g. full pull clear), and `visible` provides shared space visibility rules. */
   constructor(
     store: Store,
     { position, head, budget, ops, visible }: { position: Position; head: Cookie; budget: Budget; ops: Op[]; visible: Visible | undefined },
@@ -65,7 +66,7 @@ export class Step {
     this.chars = ops.reduce((total, op) => total + opChars(op), 0);
   }
 
-  /** 读到最新为 true，读满预算停下为 false */
+  /** Runs the step; returns true if caught up to head, false if paused on exhausted budget. */
   run() {
     for (;;) {
       if (!this.#scan() || !this.#tail()) return false;
@@ -73,7 +74,7 @@ export class Step {
       if (this.#store.entered.scanSet(to, this.#head).length === 0) return true;
       const { ranges: _first, added: _added, ...rest } = this.position;
       this.position = { ...rest, round: { from: to, to: this.#head }, scan: { table: '' }, tail: { at: this.#head } };
-      // 新一轮从下一块起：一块不跨轮（模型的 HandlePull 开下一轮的那一块停在新一轮的起点），只多一次请求，拉取途中又有表进入才会有
+      // Opens next round in a fresh chunk: chunks do not span rounds (HandlePull halts at round start in model); requires only an extra request when tables enter sync mid-pull.
       if (this.#moved) return false;
     }
   }
@@ -90,8 +91,10 @@ export class Step {
   }
 
   /**
-   * 本轮的扫描：从 scan 停下的表、桶与主键接着扫；扫描集里的每张表先清掉（整份的第一轮由开头的清空代替）、再给它看得见的行，
-   * 要求重下的表只清、只给要求的那一段（也在扫描集里的照扫描集整张扫），订阅里新加的桶只给桶里的行、不清（added，也在扫描集里的照扫描集扫）。扫完为 true
+   * Performs table scans for this round: resumes from active table, bucket, and primary key in `scan`.
+   * Tables in the scan set are dropped first (subsumed by clear op in round 1 of full pulls) before emitting visible rows;
+   * tables in requested ranges drop and scan only requested bounds (tables also in scan set are scanned in full);
+   * newly added buckets in subscription emit matching rows without drops (`added`; tables in scan set are scanned in full). Returns true when complete.
    */
   #scan() {
     const { scan, round, full, ranges = [], added } = this.position;
@@ -118,7 +121,7 @@ export class Step {
     return true;
   }
 
-  /** 扫一张表的各路：私有空间整张表一路；共用空间订阅里覆盖它的每个桶一路，added 时只扫订阅里新加的桶 */
+  /** Returns query lanes for a table: single wholeTable lane for private spaces; one lane per covering bucket in subscription for shared spaces (restricted to `added` when scanning newly added buckets). */
   #lanes(table: string, added: boolean): Lane[] {
     const visible = this.#visible;
     if (!visible) return [wholeTable];
@@ -126,11 +129,12 @@ export class Step {
   }
 
   /**
-   * 扫一张表：从 resumed 停下的那一路、主键之后，一路路给它看得见的行。清掉（cleared：整份开头已清过、或只扫新加的桶）与第一行一起给，
-   * 空表也清（设备上可能还有它离开之前的行）。range 是要求重下的那一段：只清、只给这一段，云端不同步的表只清。扫完为 true
+   * Scans a table: iterates over lanes after `resumed` point, emitting visible rows.
+   * Drops table (unless `cleared`: full pull start or added buckets) before emitting first row; empty tables still drop (clearing stale client rows).
+   * Range bounds drop and scan only specified range; unsynced tables only drop. Returns true when complete.
    */
   #scanTable(table: string, resumed: Position['scan'], { lanes, ...rest }: { cleared: boolean; range: Range | undefined; lanes: Lane[] }) {
-    // 停在一路中间或两路之间的已清过
+    // Mid-lane or between-lane pauses have already executed drops.
     const state: TableScan = { table, ...rest, started: resumed?.after !== undefined || resumed?.bucket !== undefined };
     for (const lane of this.#store.tables.key(table) ? lanes : []) {
       if (lane.bucket !== undefined && resumed?.bucket !== undefined && lane.bucket < resumed.bucket) continue;
@@ -141,13 +145,13 @@ export class Step {
     return true;
   }
 
-  /** 扫一路：从主键 after 之后给它的行；读到下一行要给时才看预算，停在它前面。扫完为 true */
+  /** Scans a lane: emits rows after primary key `after`; checks budget before emitting next row, pausing immediately before it. Returns true when complete. */
   #scanLane(state: TableScan, lane: Lane, from: Key | undefined) {
     const { table, range } = state;
     let after = from;
     for (const { rows: batch, read } of this.#store.tables.rows(table, after ?? range?.after, range?.until, lane)) {
       this.#rows += read;
-      // 读进来没给的留给下一块（读行照样算上）
+      // Unsent fetched rows remain for next chunk (row count still billed to budget).
       for (const { key, row } of batch) {
         if (this.#spent) return this.#stop(state.started ? laneAt(table, lane, after) : { table });
         this.#start(state);
@@ -160,7 +164,7 @@ export class Step {
     return true;
   }
 
-  /** 给这张表的第一行之前先清掉它（cleared 时不清） */
+  /** Drops table prior to emitting first row (skipped if `cleared`). */
   #start(state: TableScan) {
     if (!state.started && !state.cleared) this.#clear(state.table, state.range);
     state.started = true;
@@ -171,7 +175,7 @@ export class Step {
     return false;
   }
 
-  /** 扫描先清一张表，或要求重下的那一段 */
+  /** Drops a table or a bounded primary-key range. */
   #clear(table: string, range: Range | undefined) {
     if (!range?.after && !range?.until) return this.#drop(table);
     forgetTable(this.#sent, table);
@@ -182,7 +186,7 @@ export class Step {
     this.chars += opChars(op);
   }
 
-  /** 一张表清掉：这一块里之前给过的这张表的行作废 */
+  /** Drops a table or columns, invalidating previously emitted rows for that table in this chunk. */
   #drop(table: string, columns?: string[]) {
     forgetTable(this.#sent, table);
     const op: Op = { op: 'drop', table, ...(columns && { columns }) };
@@ -190,12 +194,12 @@ export class Step {
     this.chars += opChars(op);
   }
 
-  /** 尾巴里跳过的项：扫描集里的表在它进入的那一版及之前的（扫描已给了当前值） */
+  /** Identifies commits skipped in tail: commits at or before table entry version for tables in scan set (current values already scanned). */
   #skipped(version: number, table: string, scanned: Set<string>) {
     return scanned.has(table) && version <= this.#store.entered.since(table);
   }
 
-  /** 尾巴：从 tail 追到最新（head）；追到为 true */
+  /** Walks commit tail from tail version to head; returns true when caught up. */
   #tail() {
     const { round } = this.position;
     const scanned = new Set(this.#store.entered.scanSet(round.from, round.to));
@@ -210,7 +214,7 @@ export class Step {
     }
   }
 
-  /** 过一版提交（前 skip 项已给过）：读到下一项、下一版时才看预算，停在它前面。过完为 true */
+  /** Walks commits for a version (skipping `skip` previously emitted entries); checks budget before processing next item or version. Returns true when complete. */
   #commit(version: Cookie, keys: Entry[], skip: number, scanned: Set<string>) {
     if (this.#spent && keys.length === 0) return false;
     for (let item = skip; item < keys.length; item += 1) {
@@ -224,14 +228,14 @@ export class Step {
     return true;
   }
 
-  /** 尾巴里的一项：离开同步的给 drop；改到的同步表的行，与设备有关的给当前看得见的值（看不见了给 del） */
+  /** Processes a commit tail entry: emits drop for removed tables; emits current visible row value (or del if removed/hidden) for synced tables. */
   #entry(entry: Entry, version: number, scanned: Set<string>) {
     const [table, key, names] = entry;
     this.#rows += 1;
     if (this.#skipped(version, table, scanned)) return;
     if (key === null) return this.#drop(table, names);
     if (!this.#store.tables.key(table) || this.#sent.has(rowId(table, key))) return;
-    // 共用空间只给改前或改后在订阅的桶里的（提交记录的这一项带着它们）
+    // Shared spaces emit rows in subscribed buckets before or after change (carried on commit entry).
     if (this.#visible && !names?.some((bucket) => this.#subscribed.has(bucket))) return;
     const visible = this.#visible && { buckets: this.#visible.buckets, subscribed: this.#subscribed };
     this.#give(this.#store.tables.current(table, key, visible), rowId(table, key));

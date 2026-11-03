@@ -9,13 +9,14 @@ import { cloudStorage } from '../test/test-storage.ts';
 import { Commits } from './commits.ts';
 import { Space } from './space.ts';
 
-// 一次写的提交记录边写边记：攒满一段（主键约 1 MB）就写进库，写完再逐段改定。要守住的：写到一半失败时什么也不留下；
-// 同一行的几项落在不同的段里，各订阅收到的与整次写记成一段时一样；改定后一段照样在单个值的上限之内
+// Multi-segment commit recording: writes segments to database when accumulated primary keys reach ~1 MB, then revises segments upon completion.
+// Invariants: partial write failure leaves no database state; same-row entries across segments produce identical subscription patches;
+// revised segments still remain within single-value limits.
 
-/** 约 400 字节的主键：几千行就攒满一段 */
+/** Generates ~400-byte primary key so a few thousand rows fill a segment. */
 const longId = (index: number) => `d${index}`.padStart(400, 'x');
 
-test('边写边记的一次写失败（已写进库几段之后）：整条回滚，块边界照下一次写之前的计数接着记', () => {
+test('multi-segment write failure rolls back completely, and chunk boundaries continue from count prior to failure', () => {
   const storage = cloudStorage();
   prepareInternalTables(storage);
   const commits = new Commits(queryOf(storage), { chunkRows: 3 });
@@ -29,11 +30,11 @@ test('边写边记的一次写失败（已写进库几段之后）：整条回�
     storage.transactionSync(() => {
       const recording = commits.begin(null, null);
       for (let index = 0; index < 5; index += 1) recording.add(['program', { id: `x${index}` }]);
-      throw new Error('写到一半失败');
+      throw new Error('Mid-write failure');
     }),
-  ).toThrow('写到一半失败');
+  ).toThrow('Mid-write failure');
   expect(commits.head().version).toBe(1);
-  // 回滚之后接着失败之前的 1 行数：再 2 行满 3 行，块边界在第 2 版（失败的那次写中途记过块边界，不能从那里接着数）
+  // Resumes count from 1 row prior to failure: 2 more rows reach threshold of 3, recording boundary at version 2 (ignoring aborted mid-write boundary).
   commits.record([
     ['program', { id: 'b' }],
     ['program', { id: 'c' }],
@@ -41,7 +42,7 @@ test('边写边记的一次写失败（已写进库几段之后）：整条回�
   expect(boundaries()).toEqual([2]);
 });
 
-test('共用空间一次写里同一行先改得出了公开的桶、再删，几项分在几段：看公开的收到它的删除，从没看过的草稿一个也不给', () => {
+test('shared space multi-segment write where same row leaves public bucket then deletes: public subscriber receives deletion without unviewed drafts', () => {
   const buckets = { public: { program: { where: "status = 'published'" } }, all: { program: {} } };
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 3 } });
   space.mutate((tx) => tx.insert(program, { id: 'p1', status: 'published' }));
@@ -52,16 +53,16 @@ test('共用空间一次写里同一行先改得出了公开的桶、再删，�
     for (let index = 0; index < 3000; index += 1) tx.insert(program, { id: longId(index), status: 'draft' });
     tx.delete(program, { id: 'p1' });
   });
-  // 这次写分成了几版：第一项（改成草稿）与删除不在同一版
+  // Write splits across versions: first change (moved to draft) and deletion are recorded in different versions.
   expect(space.head().version - base.version).toBeGreaterThan(1);
-  // 看公开的只收到看过的 p1，最后是删除；看全部的收到全部，p1 最后也是删除（同一行落在几块里各给一次当前值）
+  // Public subscriber receives only viewed p1 followed by del; admin subscriber receives all 3,001 items with p1 ending in del.
   expect(finalOps(opsSince(space, viewer, before.public))).toEqual({ p1: 'del' });
   const all = finalOps(opsSince(space, admin, before.admin));
   expect(Object.keys(all)).toHaveLength(3001);
   expect(all.p1).toBe('del');
 });
 
-test('共用空间规则多、名字长，一次写改很多小行：切段时给补上的桶留了地方，改定后每版照样在单个值的上限之内', () => {
+test('shared space with many long-named rules: segment splitting reserves headroom for bucket additions so revised commits stay within size limit', () => {
   const name = (index: number) => `rule-${index}-${'x'.repeat(30)}`;
   const buckets = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [name(index), { program: {} }]));
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 100_000 } });
@@ -73,7 +74,7 @@ test('共用空间规则多、名字长，一次写改很多小行：切段时�
   expect(opsSince(space, first, before)).toHaveLength(2000);
 });
 
-test('不改行的提交照样记一版：空表进入同步、桶规则改了（设备据此知道同步的范围变了、要重扫）；服务端的写没改到同步的行不记', () => {
+test('keyless commits still record version: empty table enters sync or bucket rules revise; server writes touching no synced rows record nothing', () => {
   const other = sqliteTable('other', { id: text().primaryKey() });
   const storage = cloudStorage(createProgram, 'CREATE TABLE other (id TEXT PRIMARY KEY)');
   const before = new Space(storage, [program]).head().version;
@@ -91,10 +92,10 @@ test('不改行的提交照样记一版：空表进入同步、桶规则改了�
 type Request = Parameters<Space['pullShared']>[0];
 type Subscribed = ReturnType<typeof subscribed>;
 
-/** 按顺序应用改动后每行最后是 put 还是 del：主键 id → 操作 */
+/** Aggregates final put or del operation per row: primary key id -> operation. */
 const finalOps = (ops: Op[]) => Object.fromEntries(ops.flatMap((op) => ('key' in op ? [[String(op.key.id), op.op]] : [])));
 
-/** 从 first 起一块块拉到末块，给出各块的改动与落地后接着拉的请求（游标与落地的订阅） */
+/** Fetches all chunks until the final chunk, returning all patch ops and the landing request (cookie and landed subscription). */
 function pullAll(space: Space, who: Subscribed, first: Request) {
   const ops: Op[] = [];
   for (let request = first; ; ) {
@@ -102,18 +103,18 @@ function pullAll(space: Space, who: Subscribed, first: Request) {
     if ('patch' in chunk) ops.push(...chunk.patch);
     if ('cookie' in chunk)
       return { ops, landed: { cookie: chunk.cookie, ...(chunk.landed === undefined ? {} : { landed: chunk.landed }) } };
-    if (!('next' in chunk)) throw new Error('不应重置');
+    if (!('next' in chunk)) throw new Error('Expected incremental chunk without reset');
     request = { ...first, cursor: chunk.next };
   }
 }
 
-/** 这份订阅的设备整份拉到末块，落地后接着拉的请求 */
+/** Fetches full pull to final chunk for subscription, returning request to resume landing. */
 const landedOf = (space: Space, who: Subscribed) => pullAll(space, who, { cookie: null }).landed;
 
-/** 这份订阅的设备从落地的地方起收到的改动 */
+/** Fetches changes received for subscription starting from landed request. */
 const opsSince = (space: Space, who: Subscribed, landed: Request) => pullAll(space, who, landed).ops;
 
-test('一次写分成几段写进库：改定后没变的段不改写（私有空间、共用空间补上的桶与改前一样），变了的才改写', () => {
+test('multi-segment commit updates only modified segments during revision, skipping unchanged segments to save writes', () => {
   const updates = (storage: ReturnType<typeof cloudStorage>, write: () => void) => {
     let count = 0;
     const exec = storage.sql.exec;
@@ -129,23 +130,23 @@ test('一次写分成几段写进库：改定后没变的段不改写（私有�
     space.mutate((tx) => {
       for (let index = 0; index < 5000; index += 1) tx.insert(program, { id: longId(index), status: 'draft' });
     });
-  // 5000 行约 2 MB 的主键，分成 3 段，前 2 段先写进库。都在桶里：补上的与改前（插入前没有）不同
+  // 5,000 rows (~2 MB keys) split into 3 segments with 2 pre-written to storage. All match bucket: revised differs from initial (inserted without prior bucket).
   const changed = cloudStorage(createProgram);
   const all = new Space(changed, [program], { shared: { buckets: { all: { program: {} } } } });
   expect(updates(changed, () => inserts(all))).toBe(2);
-  // 不在任何桶里：补上的是空的，与改前一样
+  // Matches no bucket: revised buckets remain empty, identical to pre-revision state.
   const unchanged = cloudStorage(createProgram);
   const none = new Space(unchanged, [program], { shared: { buckets: { none: { program: { where: '0' } } } } });
   expect(updates(unchanged, () => inserts(none))).toBe(0);
 });
 
-test('多列主键的项记成规范写法（各列按列名排），与表定义里的先后无关', () => {
+test('compound primary keys are recorded in canonical order (sorted by column name) regardless of table definition order', () => {
   const { cloud } = filled();
   const [commit] = cloud.sql.exec('SELECT keys FROM _syncline_commit WHERE version = 1').toArray();
   expect(String(commit?.keys)).toContain('["set",{"index":0,"workoutId":"w1"}]');
 });
 
-test('游标之后有提交的客户端（lmidsSince）：同一个客户端在游标前后都有提交时给它最新的序号；只在游标之前有提交的不给', () => {
+test('lmidsSince returns latest mutation ID for clients committing after cookie, omitting clients with commits only prior to cookie', () => {
   const space = new Space(cloudStorage(createProgram), [program]);
   const put = (id: string) => [{ op: 'put' as const, table: 'program', row: { id, status: 'draft' } }];
   space.push([
@@ -161,7 +162,7 @@ test('游标之后有提交的客户端（lmidsSince）：同一个客户端在�
   expect(Object.keys((space.pull({ cookie }, 1_000_000, true) as Poke).lmids)).toEqual(['c1']);
 });
 
-test('设备的一次写分成几版记（主键多、攒满一段）：从写之前的游标补齐照样确认这个客户端；服务端的写不带客户端', () => {
+test('device write split across multi-segment commit confirms client when catching up from prior cookie; server writes omit client', () => {
   const space = new Space(cloudStorage(createProgram), [program]);
   const cookie = space.head();
   const changes = Array.from({ length: 3000 }, (_, index) => ({

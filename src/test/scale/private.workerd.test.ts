@@ -8,20 +8,20 @@ import { readRows, truncateBytes, truncateRows, writeRows } from '../../common/l
 import { chunkLimit, type Poke, socketLimit } from '../../common/protocol.ts';
 import type { PullRequest } from '../../common/pull-url.ts';
 
-// 私有空间每个入口一次请求读的行数有与规模无关的上界：提交记录、表、扣下的写、子表各铺 2 万（scale），量 DO 计费用的 rowsRead
+// Private space per-entrypoint rowsRead bounds independent of scale: seeds 20k items (scale) across commits, tables, held writes, and child tables.
 
 const tables = [note, tag];
 
-/** 新的对象里跑 body */
+/** Runs body within a new space object. */
 const inSpace = <T>(body: Parameters<typeof measured<T>>[1]) => measured(env.SPACE.getByName(crypto.randomUUID()), body);
 
-/** 只改了离开同步的表的一次提交（部署前记下的项） */
+/** A commit that modified only a table that left sync (pre-deployment recorded item). */
 const departed = `'[["archived",{"id":"k' || i || '"}]]'`;
 const put = (id: string) => ({ op: 'put' as const, table: 'note', row: { id, text: 't' } });
 
 /**
- * 从游标 cookie 顺着 next 一块块拉到末块（request 是每次都带的，如列出的客户端）：给出最多的一次请求读了几行、回复多少字符，
- * 一共几次请求与末块；每次都要前进（next 变了）
+ * Pulls chunks along next from cookie to final chunk (request passed every round, e.g. client list):
+ * returns peak rowsRead and char count across requests, total request count, and final chunk.
  */
 function pullToEnd(space: Space, cookie: ReturnType<Space['head']>, reads: Reads, request: Partial<PullRequest> = {}) {
   const most = { reads: 0, chars: 0, requests: 0 };
@@ -32,55 +32,55 @@ function pullToEnd(space: Space, cookie: ReturnType<Space['head']>, reads: Reads
     most.reads = Math.max(most.reads, reads.total);
     most.chars = Math.max(most.chars, JSON.stringify(chunk).length);
     if ('cookie' in chunk) return { ...most, last: chunk };
-    expect(chunk.next, '每次请求都前进').not.toBe(cursor);
+    expect(chunk.next, 'advances on every request').not.toBe(cursor);
     cursor = chunk.next;
   }
-  throw new Error(`拉了 ${scale} 次还没到末块`);
+  throw new Error(`exceeded ${scale} requests without reaching final chunk`);
 }
 
 for (const [label, keys] of [
-  ['只改了离开同步的表', departed],
-  ['同一行改了很多次，后面的项都因已给过被跳过', `'[["note",{"id":"a"}]]'`],
+  ['touching only tables that left sync', departed],
+  ['modifying the same row repeatedly with subsequent items skipped as already emitted', `'[["note",{"id":"a"}]]'`],
 ] as const)
-  test(`增量拉取：游标之后的 H 次提交都被跳过（${label}），拉到末块的每次请求读的行数有上界`, () =>
+  test(`incremental pull: H commits after cookie are skipped (${label}), rowsRead per chunk request has upper bound`, () =>
     inSpace(({ raw, storage, reads }) => {
       const space = new Space(storage, tables);
       const cookie = space.head();
       fillCommits(raw, scale, keys);
       const most = pullToEnd(space, cookie, reads);
-      expectBounded(most.reads, `游标之后 ${scale} 次提交，拉了 ${most.requests} 次`);
+      expectBounded(most.reads, `${scale} commits after cookie across ${most.requests} requests`);
     }));
 
-test('整份拉取的第一块：读的行数有上界，不随表的行数涨', () =>
+test('full pull first chunk: rowsRead has upper bound independent of table row count', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
     fillRows(raw, 'note', scale, `'n' || i, hex(randomblob(50))`);
     reads.reset();
-    // 一块约百行
+    // One chunk is roughly 100 rows.
     expect(space.pull({ cookie: null }, 10_000)).toHaveProperty('next');
-    expectBounded(reads.total, `表有 ${scale} 行`);
+    expectBounded(reads.total, `table has ${scale} rows`);
   }));
 
-test('增量拉取的第一块：游标之后有 H 次提交，读的行数有上界', () =>
+test('incremental pull first chunk: rowsRead has upper bound with H commits after cookie', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
     const cookie = space.head();
-    // 第一次提交改 3 个大行，一块只装得下一行
+    // First commit modifies 3 large rows; a single chunk only fits one row.
     space.mutate((tx) => {
       for (const id of ['a', 'b', 'c']) tx.insert(note, { id, text: 'x'.repeat(20_000) });
     }, 0);
     fillCommits(raw, scale, departed);
     reads.reset();
     expect(space.pull({ cookie }, 10_000)).toHaveProperty('next');
-    expectBounded(reads.total, `游标之后 ${scale} 次提交`);
+    expectBounded(reads.total, `${scale} commits after cookie`);
   }));
 
-// 设备列出它待上传的客户端与各自最早的待上传：末块只带这之后扣下的（设备只用得到这次确认的写里扣下的）
+// Device lists pending clients and earliest pending write: final chunk returns held writes since then.
 for (const [label, request, held] of [
-  ['没列客户端', {}, 0],
-  ['列出了 c1、最早的待上传是倒数第 10 条', { clients: ['c1'], earliest: { c1: scale - 9 } }, 10],
+  ['no clients listed', {}, 0],
+  ['lists c1 with earliest pending write 10 from end', { clients: ['c1'], earliest: { c1: scale - 9 } }, 10],
 ] satisfies [string, Partial<PullRequest>, number][])
-  test(`游标之后有 N 条扣下的写（${label}）：拉到末块的每次请求读的行数有上界，回复不超过一块`, () =>
+  test(`N held writes after cookie (${label}): rowsRead has upper bound and response fits in chunkLimit`, () =>
     inSpace(({ raw, storage, reads }) => {
       const space = new Space(storage, tables);
       const cookie = space.head();
@@ -88,11 +88,11 @@ for (const [label, request, held] of [
       fillRows(raw, '_syncline_held', scale, `'c1', i, 0, i, 'reason ' || hex(randomblob(40)), 0, '[]'`);
       const most = pullToEnd(space, cookie, reads, request);
       expect(most.last.held ?? []).toHaveLength(held);
-      expect(most.chars, `回复至多 ${most.chars} 字符`).toBeLessThanOrEqual(chunkLimit);
-      expectBounded(most.reads, `${scale} 条扣下的写，拉了 ${most.requests} 次`);
+      expect(most.chars, `response at most ${most.chars} chars`).toBeLessThanOrEqual(chunkLimit);
+      expectBounded(most.reads, `${scale} held writes across ${most.requests} requests`);
     }));
 
-/** 库里有 H 次 old 这个客户端的提交 */
+/** Database has H commits from client old. */
 const withHistory = (body: (space: Space, reads: Reads) => void) =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
@@ -101,36 +101,36 @@ const withHistory = (body: (space: Space, reads: Reads) => void) =>
     body(space, reads);
   });
 
-test('新客户端第一次推送：库里有 H 次别人的提交，读的行数有上界', () =>
+test('new client first push: rowsRead has upper bound with H existing commits from others', () =>
   withHistory((space, reads) => {
     space.push([{ client: 'new', id: 1, changes: [put('n1')] }], socketLimit);
-    expectBounded(reads.total, `库里 ${scale} 次提交`);
+    expectBounded(reads.total, `database has ${scale} commits`);
   }));
 
-test('从没有设备写的空间第一次推送：库里有 H 次服务端的提交，读的行数有上界', () =>
+test('first push to space with no prior client writes: rowsRead has upper bound with H server commits', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
     fillCommits(raw, scale, `'[]'`);
     reads.reset();
     space.push([{ client: 'new', id: 1, changes: [put('n1')] }], socketLimit);
-    expectBounded(reads.total, `库里 ${scale} 次提交`);
+    expectBounded(reads.total, `database has ${scale} commits`);
   }));
 
-test('一批来自未来序号的写（都被跳过）：读的行数有上界，不随批里的条数与库里的提交数涨', () =>
+test('batch of writes with gap mutation IDs (all skipped): rowsRead has upper bound independent of batch and commit count', () =>
   withHistory((space, reads) => {
-    // 序号从 2 起，缺第 1 条：全部跳过
+    // Mutation IDs starting at 2 without ID 1: all skipped.
     space.push(
       Array.from({ length: 200 }, (_, index) => ({ client: 'new', id: index + 2, changes: [put(`n${index}`)] })),
       socketLimit,
     );
-    expectBounded(reads.total, `一批 200 条，库里 ${scale} 次提交`);
+    expectBounded(reads.total, `batch of 200 writes, ${scale} commits in database`);
   }));
 
-test('连上时的补齐：游标之后每版一个不同的客户端、一块读得完，确认它们时多读的行数至多约这段提交数的 3 倍（lmidsSince）', () =>
+test('catch-up on connect: one client per version after cookie reading in one chunk; extra rowsRead capped at ~3x commits (lmidsSince)', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
     const cookie = space.head();
-    // 一块读得完的最多的提交：读取器每版计 2 行
+    // Max commits fitting in one chunk: reader counts 2 rows per version.
     const count = readRows / 2 - 100;
     fillCommits(raw, count, `'[]'`);
     raw.sql.exec("UPDATE _syncline_commit SET client = 'c' || version WHERE version > 0");
@@ -138,19 +138,19 @@ test('连上时的补齐：游标之后每版一个不同的客户端、一块�
     reads.reset();
     const catchUp = space.pull({ cookie }, Number.POSITIVE_INFINITY, true);
     expect(Object.keys((catchUp as Poke).lmids)).toHaveLength(count);
-    expect(reads.total, `读了 ${reads.total} 行`).toBeLessThanOrEqual(readBound + 3 * count);
+    expect(reads.total, `read ${reads.total} rows`).toBeLessThanOrEqual(readBound + 3 * count);
   }));
 
-test('末块给出设备列出的客户端处理到第几条：库里有 H 次提交，读的行数有上界', () =>
+test('final chunk returning lmids for device client list: rowsRead has upper bound with H commits in database', () =>
   withHistory((space, reads) => {
     const cookie = space.head();
     reads.reset();
     expect(space.pull({ cookie, clients: ['new'] }, chunkLimit)).toHaveProperty('cookie');
-    expectBounded(reads.total, `库里 ${scale} 次提交`);
+    expectBounded(reads.total, `database has ${scale} commits`);
   }));
 
-// 过了宽限期的退休表由后台任务删（DROP 不计读写行数，量不到，断言表还在）
-test('打开对象时不删过了宽限期的退休表：打开的工作量不随表的大小涨', () =>
+// Expired retired tables are dropped by background upkeep (DROP statements do not increment rowsRead; asserts table remains).
+test('opening space does not drop expired retired tables: open workload is independent of table size', () =>
   inSpace(({ raw, storage }) => {
     raw.sql.exec('CREATE TABLE archived (id TEXT PRIMARY KEY, body TEXT) WITHOUT ROWID');
     fillRows(raw, 'archived', scale, `'k' || i, hex(randomblob(100))`);
@@ -159,7 +159,7 @@ test('打开对象时不删过了宽限期的退休表：打开的工作量不�
     expect(raw.sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'archived'").toArray()).toHaveLength(1);
   }));
 
-test('截日志的每一步：库里有 10 倍一步的提交，读的行数不超过一步的两倍（找到删到哪、删掉），删掉的不超过一步', () =>
+test('each log truncation step: with 10x step commits, rowsRead is at most 2x step (find floor then delete) and deleted commits within step', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables, { commitFloor: 1 });
     fillCommits(raw, 10 * truncateRows, `'[["note",{"id":"' || hex(randomblob(20)) || '"}]]'`);
@@ -169,15 +169,15 @@ test('截日志的每一步：库里有 10 倍一步的提交，读的行数不�
     expect(space.truncate()).toBe(true);
     expect(reads.total).toBeLessThanOrEqual(2 * truncateRows + 100);
     const after = raw.sql.exec<{ count: number }>('SELECT count(*) AS count FROM _syncline_commit').one().count;
-    // 还没截过时第 0 版（空库）也随第一段删掉
+    // Version 0 (empty database) deleted with the first tranche before any truncation.
     expect(before - after).toBe(truncateRows + 1);
-    // 截过之后的下一步也一样
+    // Subsequent truncation step behaves the same.
     reads.reset();
     expect(space.truncate()).toBe(true);
     expect(reads.total).toBeLessThanOrEqual(2 * truncateRows + 100);
   }));
 
-test('截日志的每一步：每版的主键约 800 KB 时，删掉的主键不超过 truncateBytes', () =>
+test('each log truncation step: with primary keys ~800 KB per version, deleted keys do not exceed truncateBytes', () =>
   inSpace(({ raw, storage }) => {
     const space = new Space(storage, tables, { commitFloor: 1 });
     fillCommits(raw, 100, `'[["note",{"id":"' || hex(randomblob(400000)) || '"}]]'`);
@@ -190,7 +190,7 @@ test('截日志的每一步：每版的主键约 800 KB 时，删掉的主键不
     expect(low() - first).toBeLessThanOrEqual(truncateBytes);
   }));
 
-test('删一行父行：子表有 N 行都不引用它，读的行数有上界', () =>
+test('deleting a single parent row: rowsRead has upper bound when child table has N unreferencing rows', () =>
   inSpace(({ raw, storage, reads }) => {
     const space = new Space(storage, tables);
     fillRows(raw, 'note', 2, `CASE i WHEN 1 THEN 'p' ELSE 'other' END, 't'`);
@@ -198,13 +198,13 @@ test('删一行父行：子表有 N 行都不引用它，读的行数有上界',
     reads.reset();
     space.mutate((tx) => tx.delete(note, { id: 'p' }), 0);
     expect(raw.sql.exec("SELECT 1 FROM note WHERE id = 'p'").toArray()).toHaveLength(0);
-    expectBounded(reads.total, `子表 ${scale} 行`);
+    expectBounded(reads.total, `child table has ${scale} rows`);
   }));
 
-/** 一次写的 K：铺的规模，但不超过一次写的上限（writeRows，仍是上界的 4 倍多） */
+/** K for large write: seeded scale capped by writeRows (>4x upper bound). */
 const bigWrite = Math.min(scale, writeRows);
 
-/** 一次服务端写插入 K 行（limit 是拼通知的上限，0 是不拼）：给出写之前的游标与空间，reads 从这次写量起 */
+/** Inserts K rows in a single server write (limit is poke budget, 0 disables inline poke): reads measured from this write. */
 const afterBigWrite = <T>(limit: number, body: (space: Space, cookie: ReturnType<Space['head']>, reads: Reads) => T) =>
   inSpace(({ storage, reads }) => {
     const space = new Space(storage, tables);
@@ -216,22 +216,22 @@ const afterBigWrite = <T>(limit: number, body: (space: Space, cookie: ReturnType
     return body(space, cookie, reads);
   });
 
-// 一次写 K 行空闲时约 2 秒，与别的重测试并行时会超过默认的 5 秒
+// Writing K rows takes ~2s when idle; may exceed default 5s under parallel test load.
 for (const [label, limit] of [
-  ['连上时的补齐（一条 WebSocket 消息）', socketLimit],
-  ['经 HTTP 拉一块', 50_000],
+  ['catch-up on connect (single WebSocket message)', socketLimit],
+  ['HTTP pull chunk', 50_000],
 ] as const)
-  test(`一次写改了 K 行之后，落后的设备${label}：读的行数有上界`, { timeout: 30_000 }, () =>
+  test(`after single write modifying K rows, lagging device ${label}: rowsRead has upper bound`, { timeout: 30_000 }, () =>
     afterBigWrite(0, (space, cookie, reads) => {
       reads.reset();
       expect(space.pull({ cookie }, limit)).toHaveProperty('next');
-      expectBounded(reads.total, `一次写改了 ${bigWrite} 行`);
+      expectBounded(reads.total, `single write modified ${bigWrite} rows`);
     }),
   );
 
-// 两次各写 K 行（一次拼通知、一次不拼），空闲时约 5 秒，默认的 5 秒不够
-test('一次写改了 K 行：拼通知多读的行数有上界', { timeout: 30_000 }, async () => {
+// Two runs writing K rows each (with and without poke), ~5s when idle; needs 30s timeout.
+test('single write modifying K rows: additional rowsRead to assemble poke has upper bound', { timeout: 30_000 }, async () => {
   const written = (limit: number) => afterBigWrite(limit, (_space, _cookie, reads) => reads.total);
   const extra = (await written(socketLimit)) - (await written(0));
-  expectBounded(extra, `一次写改了 ${bigWrite} 行，拼通知`);
+  expectBounded(extra, `single write modified ${bigWrite} rows assembling poke`);
 });

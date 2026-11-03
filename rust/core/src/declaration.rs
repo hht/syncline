@@ -1,13 +1,15 @@
-//! 同步的表结构怎么描述（与云端认的同一套写法）：列名 → 存成哪种（非空的后面加 !）、主键的列、外键（「列,列>父表.列,列」，排好序）。
-//! 设备连接时带它的指纹，云端回了它的表结构时判断兼不兼容（`Handshake`）；照声明与库里留着的列描述，重放待上传时据它去掉删掉的表与列。
-//! 不该知道的：表怎么建、怎么同步。
+//! Schema declaration formatting and compatibility matching the cloud representation:
+//! column name -> storage type (appended with `!` for NOT NULL), primary key columns, and sorted foreign keys ("cols>parent.cols").
+//! Devices send a fingerprint on connect, checking compatibility when the cloud returns its declaration ([`Handshake`]);
+//! pending writes replay using declarations and stored column descriptions to strip retired tables and columns.
+//! What it should not know: how tables are created or synchronized.
 
 use crate::change::{Change, Row};
 use crate::tables::Table;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-/// 一张表：列名 → 类型（非空的后面加 !）、主键的列、外键
+/// Table schema: column names -> type (appended with `!` if NOT NULL), primary key columns, foreign keys.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TableShape {
     pub columns: BTreeMap<String, String>,
@@ -15,16 +17,16 @@ pub struct TableShape {
     pub references: Vec<String>,
 }
 
-/// 同步的表结构：表名 → 表
+/// Synced schema declaration: table name -> table schema.
 pub type Declaration = BTreeMap<String, TableShape>;
 
-/// 一列的描述：存成哪种加上要不要非空（!）。声明的列与设备库里留着的、当前 App 没声明的列都经它，两边才比得上
+/// Column description: storage kind plus optional NOT NULL (`!`). Used for both declared columns and stored undeclared columns so both ends match.
 #[must_use]
 pub fn column_shape(kind: &str, required: bool) -> String {
     format!("{kind}{}", if required { "!" } else { "" })
 }
 
-/// 照声明描述
+/// Generates a schema declaration from a slice of table definitions.
 #[must_use]
 pub fn declare(tables: &[Table]) -> Declaration {
     tables
@@ -60,7 +62,7 @@ pub fn declare(tables: &[Table]) -> Declaration {
         .collect()
 }
 
-/// 一组改动里改到删掉的表与列的部分丢掉（设备重放待上传时），其余原样；只剩主键的修改整条丢掉
+/// Strips modifications to retired tables and columns from a slice of changes (used during local replay of pending writes); drops patch operations that only contain primary keys.
 #[must_use]
 pub fn without_retired<S: std::hash::BuildHasher>(
     changes: &[Change],
@@ -95,14 +97,14 @@ pub fn without_retired<S: std::hash::BuildHasher>(
         .collect()
 }
 
-/// 不兼容：用到了删掉的名字（要更新 App，retired），或用到了云端没有、对不上的（等云端部署，ahead）；names 是哪些表与列
+/// Compatibility failure: references retired names (requires app update, `retired`), or references tables/columns missing or mismatched on cloud (awaiting cloud deployment, `ahead`); `names` lists affected tables and columns.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Incompatibility {
     pub kind: &'static str,
     pub names: Vec<String>,
 }
 
-/// 表结构的指纹（FNV-1a 64，16 位十六进制）：两端各自照自己的算，相同就是同一份。表、列排好序，与先后无关；不算删掉的名字
+/// Fingerprint of a schema declaration (64-bit FNV-1a, 16 hex digits): computed identically on both ends; matching fingerprints denote identical declarations. Tables and columns are sorted; retired names are excluded.
 /// @see <http://www.isthe.com/chongo/tech/comp/fnv/>
 #[must_use]
 pub fn fingerprint(declaration: &Declaration) -> String {
@@ -114,14 +116,14 @@ pub fn fingerprint(declaration: &Declaration) -> String {
         })
         .collect();
     let text = serde_json::Value::Array(tables).to_string();
-    // 与 JS 一样按 UTF-16 的码元算（名字只有英文字母、数字、下划线，与按字节算相同）
+    // Computes over UTF-16 code units matching JS (names contain only ASCII letters, digits, and underscores, matching byte-wise calculation)
     let hash = text.encode_utf16().fold(0xcbf2_9ce4_8422_2325_u64, |hash, unit| {
         (hash ^ u64::from(unit)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
 }
 
-/// 设备一侧的握手：连接与拉取带哪个指纹，云端回了它的表结构时判断兼不兼容。先带自己的；判断过兼容就带云端的，直到云端再换。记在内存里
+/// Device-side handshake: determines which fingerprint to send on connect and pull, checking compatibility when the cloud returns its schema. Initially sends own fingerprint; uses cloud fingerprint once verified compatible until cloud schema changes. Stored in memory.
 pub struct Handshake {
     declaration: Declaration,
     own: String,
@@ -144,18 +146,23 @@ impl Handshake {
         self.accepted.as_deref().unwrap_or(&self.own)
     }
 
-    /// 云端的表结构（schemaConflict 的正文）兼容就记下它的指纹、返回 None，不兼容返回哪里不兼容
+    /// Checks compatibility with the cloud schema (body of schemaConflict), recording its fingerprint and returning `None` if compatible, or returning incompatibility details.
     ///
     /// # Errors
-    /// 正文格式不对。
+    ///
+    /// Returns an error if the cloud payload cannot be parsed.
     pub fn judge(&mut self, cloud: &str) -> Result<Option<Incompatibility>, String> {
         #[derive(Deserialize)]
         struct Schema {
             declaration: Declaration,
             retired: Vec<String>,
         }
-        let Schema { declaration, retired } =
-            serde_json::from_str(cloud).map_err(|_| format!("云端的表结构格式不对：{}", cloud.chars().take(200).collect::<String>()))?;
+        let Schema { declaration, retired } = serde_json::from_str(cloud).map_err(|_| {
+            format!(
+                "invalid cloud schema declaration format: {}",
+                cloud.chars().take(200).collect::<String>()
+            )
+        })?;
         let found = incompatibility(&declaration, &retired.into_iter().collect(), &self.declaration);
         if found.is_none() {
             self.accepted = Some(fingerprint(&declaration));
@@ -164,7 +171,7 @@ impl Handshake {
     }
 }
 
-/// 设备用到的表与列云端都要同步着：类型、主键、外键相同，设备认为能为空的云端不能要求非空；用到删掉的先报
+/// Verifies that all device tables and columns exist in cloud: matching types, primary keys, and foreign keys; cloud cannot require NOT NULL if device allows NULL; retired names reported first.
 fn incompatibility(cloud: &Declaration, retired: &HashSet<String>, device: &Declaration) -> Option<Incompatibility> {
     let mut found: Vec<(String, &'static str)> = Vec::new();
     for (name, table) in device {
@@ -193,7 +200,7 @@ fn incompatibility(cloud: &Declaration, retired: &HashSet<String>, device: &Decl
     })
 }
 
-/// 主键相同；外键只比设备有的列上的（设备少了引用列，是还没升级，也兼容）
+/// Matching primary keys; foreign keys only compare against columns present on device (missing referencing columns indicate pending upgrade, considered compatible).
 fn same_table(cloud: &TableShape, device: &TableShape) -> bool {
     let references: Vec<&String> = cloud
         .references
@@ -208,7 +215,7 @@ fn same_table(cloud: &TableShape, device: &TableShape) -> bool {
     cloud.key == device.key && references.into_iter().eq(device.references.iter())
 }
 
-/// 设备的一列放得进云端的：云端有这一列、类型相同，云端要求非空时设备也要求
+/// Checks whether device column fits cloud: cloud has column, matching types, and device requires NOT NULL if cloud requires NOT NULL.
 fn fits(cloud: Option<&String>, device: &str) -> bool {
     cloud.is_some_and(|cloud| cloud.replace('!', "") == device.replace('!', "") && (!cloud.ends_with('!') || device.ends_with('!')))
 }

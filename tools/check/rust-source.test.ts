@@ -1,38 +1,38 @@
 import { expect, test } from 'vitest';
 import { rustNames, rustSource } from './rust-source.ts';
 
-test('注释按行切出，相邻的同类文档注释合成一条；字符串、原始字符串、字符里的 // 与 /* 不是注释，生命周期不当字符', () => {
+test('extracts comments by line, merges adjacent doc comments of same kind, ignores // and /* in strings, and preserves lifetimes', () => {
   const { comments, code } = rustSource(
     [
-      '//! 模块说明',
-      '//! 第二行',
-      '/// 文档一',
-      '/// 文档二',
-      '//// 普通注释',
-      '// 普通一',
-      '// 普通二',
-      `fn f<'a>(x: &'a str) -> char { let s = "// 不是"; let r = r#"/* "也不是" */"#; let c = '"'; let q = '\\''; 'x' }`,
-      '/* 外 /* 嵌套 */ 仍在注释里 */ const A: u8 = 1;',
+      '//! Module overview',
+      '//! Second line',
+      '/// First doc line',
+      '/// Second doc line',
+      '//// Regular comment with extra slashes',
+      '// First regular comment',
+      '// Second regular comment',
+      `fn f<'a>(x: &'a str) -> char { let s = "// not a comment"; let r = r#"/* "also not a comment" */"#; let c = '"'; let q = '\\''; 'x' }`,
+      '/* outer /* nested */ still in comment */ const A: u8 = 1;',
     ].join('\n'),
   );
   expect(comments).toEqual([
-    { line: 0, text: '//! 模块说明\n//! 第二行' },
-    { line: 2, text: '/// 文档一\n/// 文档二' },
-    { line: 4, text: '//// 普通注释' },
-    { line: 5, text: '// 普通一' },
-    { line: 6, text: '// 普通二' },
-    { line: 8, text: '/* 外 /* 嵌套 */ 仍在注释里 */' },
+    { line: 0, text: '//! Module overview\n//! Second line' },
+    { line: 2, text: '/// First doc line\n/// Second doc line' },
+    { line: 4, text: '//// Regular comment with extra slashes' },
+    { line: 5, text: '// First regular comment' },
+    { line: 6, text: '// Second regular comment' },
+    { line: 8, text: '/* outer /* nested */ still in comment */' },
   ]);
   expect(code.split('\n')).toHaveLength(9);
-  expect(code).not.toMatch(/不是|也不是|仍在/);
+  expect(code).not.toMatch(/not a comment|still in comment/);
   expect(code).toContain("fn f<'a>(x: &'a str) -> char");
   expect(code).toContain('const A: u8 = 1;');
-  // 没有结尾的字符串、块注释到文件末尾为止
-  expect(rustSource('let s = r#"没有结尾').code).toBe(`let s = ${' '.repeat(7)}`);
-  expect(rustSource('/* 没有结尾').comments).toEqual([{ line: 0, text: '/* 没有结尾' }]);
+  // Unterminated strings and block comments continue to the end of the file
+  expect(rustSource('let s = r#"open').code).toBe(`let s = ${' '.repeat(7)}`);
+  expect(rustSource('/* unclosed').comments).toEqual([{ line: 0, text: '/* unclosed' }]);
 });
 
-test('新起的名字：条目、let、字段与参数、enum 变体；路径、标签、宏变量、解构的模式与字符串里的不算', () => {
+test('extracts declared names across items, let bindings, fields, parameters, and enum variants, ignoring paths, labels, macros, and strings', () => {
   const { code } = rustSource(
     [
       'pub(crate) const fn table_info(row_data: &str) -> u8 { 0 }',

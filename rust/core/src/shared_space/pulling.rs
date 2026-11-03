@@ -1,6 +1,8 @@
-//! 共用空间要不要拉、拉取带什么：没有游标、有暂存、目标比本机新（另一代，或同一代里版本更大）、听到的订阅与落地的不同就要拉；
-//! 请求带游标、落地时的订阅、分块中途的位置与下限（model/Shared.tla 的 Outgoing）。目标怎么记、拉取回来放不放下它。
-//! 不该知道的：收下的块怎么写进本机库。
+//! Determining whether to pull and constructing pull requests for shared spaces: pulls when
+//! missing cookie, staging chunks, target is newer than local (different incarnation or higher version),
+//! or heard subscription differs from landed subscription; request carries cookie, landed subscription,
+//! mid-pull cursor, and floor (Outgoing in model/Shared.tla). Tracks and settles target position.
+//! What it should not know: how accepted chunks write into the local database.
 
 use super::SharedSpace;
 
@@ -8,7 +10,7 @@ use crate::protocol::{Cookie, Point, Pulled};
 use rusqlite::Connection;
 use serde::Serialize;
 
-/// HTTP 拉取（GET）的网址参数
+/// HTTP pull (GET) query parameters
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryRequest {
@@ -23,7 +25,7 @@ pub struct QueryRequest {
     pub incarnation: Option<i64>,
 }
 
-/// 在路上的拉取请求带的下限：版本、代与它取自的目标
+/// Floor carried by in-flight pull request: version, incarnation, and originating target
 #[derive(Clone, Copy)]
 pub(super) struct Floor {
     at_least: i64,
@@ -32,7 +34,7 @@ pub(super) struct Floor {
 }
 
 impl Floor {
-    /// 朝目标拉：至少到它的版本、它那一代
+    /// Pulls toward target: at least to its version and incarnation
     fn toward(want: Point) -> Self {
         Floor {
             at_least: want.cookie.version,
@@ -43,11 +45,10 @@ impl Floor {
 }
 
 impl SharedSpace {
-    /// 要不要 HTTP 拉（model/Shared.tla 的 Behind）：没有游标、有暂存的块、目标比本机新（另一代，或同一代里版本更大），
-    /// 或连接上听到的订阅与落地的不同（令牌换了）
+    /// Returns whether an HTTP pull is needed (Behind in model/Shared.tla): missing cookie, staged chunks present, target newer than local (different incarnation or higher version), or connection subscription differs from landed (token changed).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn behind(&self, db: &Connection) -> rusqlite::Result<bool> {
         let Some(local) = self.local(db)? else { return Ok(true) };
         if self.staging(db)? {
@@ -59,15 +60,14 @@ impl SharedSpace {
         Ok(self.heard.is_some() && self.heard != self.subscription(db)?.sub)
     }
 
-    /// HTTP 拉取要带的：游标与落地时的订阅，分块中途另带暂存的最后一块的 next。下限（model/Shared.tla 的 Outgoing 与 Receive）：
-    /// 新起的请求在目标比本机新时带目标；最后暂存的是当中间块的末块时带暂存各块的 seen 与目标版本里大的（目标是另一代就带目标）
+    /// Constructs HTTP pull request parameters: cookie and landed subscription, plus last staged chunk next cursor mid-pull. Floor calculation (Outgoing and Receive in model/Shared.tla): fresh requests carry target when target is newer than local; when last staged chunk was a stale final chunk, floor uses max of staged seen and target version (or target directly if from another incarnation).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn pull_request(&mut self, db: &Connection) -> rusqlite::Result<QueryRequest> {
         let cursor = self.stage.last(db)?;
         let want = self.wanted;
-        // 暂存的块是哪一代只在内存里：重启后不知道就当同一代
+        // Incarnation of staged chunks is in-memory only: assume same incarnation if unknown after restart
         let seen = self.stage.max_seen(db)?;
         let floor = if self.stage.ends_with_final(db)? {
             match want {
@@ -94,20 +94,19 @@ impl SharedSpace {
         })
     }
 
-    /// 拉取落地的订阅与这条连接上听到的不同：连接是旧令牌连的，连接据此换一条
+    /// Returns whether landed pull subscription differs from heard subscription on connection (connection used old token and must reconnect)
     #[must_use]
     pub fn stale(&self) -> bool {
         self.stale
     }
 
-    /// 开新连接：听到的订阅作废（新连接上的消息再给）；目标留着
+    /// Prepares for new connection: clears heard subscription (new messages will supply it); preserves target
     pub fn connecting(&mut self) {
         self.heard = None;
         self.stale = false;
     }
 
-    /// 拉取回来，放不放下目标（model/Shared.tla 的 Receive）：这次请求带着目标作下限，回来的却不是它那一代（带这一代的请求，云端不在这一代就现算、
-    /// 不进缓存）：分片说的那一代过时了。同一代里回来的低于下限也是现算的：云端没有这一版（伪造、够不着的目标）
+    /// Settles target position upon pull response (Receive in model/Shared.tla): if request carried target as floor but returned a different incarnation (requests carrying incarnation are computed on the fly if space is on another incarnation, bypassing cache), the target announced by shard was stale. Within same incarnation, returning below floor is also on-the-fly: version does not exist on cloud (forged or unreachable target).
     pub(super) fn settle_want(&mut self, pulled: &Pulled) {
         let Some(Floor {
             at_least,
@@ -125,7 +124,7 @@ impl SharedSpace {
         }
     }
 
-    /// 记成目标（model/Shared.tla 的 Deliver）：没有目标或目标是另一代就换成它，同一代取版本大的
+    /// Records target position (Deliver in model/Shared.tla): replaces if no target or target is from another incarnation; takes higher version within same incarnation
     pub(super) fn want(&mut self, point: Point) {
         if self
             .wanted

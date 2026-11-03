@@ -3,14 +3,15 @@ import { valueBytes } from '../common/limits.ts';
 import { restoredRustStorage, rustStorage } from './test-rust.ts';
 import { sqliteWasmStorage } from './test-sqlite-wasm.ts';
 
-// 测试用的存储：云端（DO 的替身）与设备的 SQLite 库，备份与时间点恢复的整库导出导入，注入的故障，数执行了几条语句、一条语句读进多少
+// Test storage backends: SQLite storage for cloud (Durable Object test double) and device, full database export/import, injected faults, and statement/read counters.
 
 const sqlite3 = await sqlite3InitModule();
 
 /**
- * DO 的 ctx.storage 的替身：同一个 SQLite，接入方的表照云端建成 WITHOUT ROWID；image() 导出整库，用来模拟时间点恢复。
- * 照 DO 的 SQL 上限设 SQLite 的限制：单个字符串、BLOB 或一行 2 MB，一条语句 100 KB，绑定参数 100 个，超过就抛错，与平台一样
- * @see https://developers.cloudflare.com/durable-objects/platform/limits/（SQL storage limits）
+ * Test double for Durable Object ctx.storage: SQLite database with integrator tables created as WITHOUT ROWID;
+ * image() exports database for simulating PITR.
+ * Enforces Cloudflare Durable Object limits: 2 MB per value/row, 100 KB per statement, 100 parameters.
+ * @see https://developers.cloudflare.com/durable-objects/platform/limits/ (SQL storage limits)
  */
 export function cloudStorage(...schema: string[]) {
   const db = open(schema.map((statement) => `${statement} WITHOUT ROWID`));
@@ -21,7 +22,7 @@ export function cloudStorage(...schema: string[]) {
   return asStorage(db);
 }
 
-/** 设备一侧：Rust 的内存设备库，先执行给的语句；image() 导出整库，当作系统备份 */
+/** Device storage: in-memory Rust database; image() exports entire database as backup. */
 export const deviceStorage = rustStorage;
 
 function open(schema: string[]) {
@@ -30,10 +31,10 @@ function open(schema: string[]) {
   return db;
 }
 
-/** 从系统备份恢复出的设备库 */
+/** Restores device storage from backup image. */
 export const restoredDeviceStorage = restoredRustStorage;
 
-/** 从备份恢复出的库：云端时间点恢复，或读一份设备的系统备份 */
+/** Restores database from image for cloud PITR or device backup. */
 export function restoredStorage(image: Uint8Array) {
   const { capi, oo1, wasm } = sqlite3;
   const db = new oo1.DB(':memory:');
@@ -43,8 +44,9 @@ export function restoredStorage(image: Uint8Array) {
 }
 
 /**
- * 包成 Storage：image() 导出整库；每条语句的结果照 DO 的带上写了几行（rowsWritten，按 SQLite 改到的行数算，不含索引）；sql.databaseSize 照 DO 的是库文件多大（页数乘页大小）
- * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/（databaseSize）
+ * Wraps as Storage: image() exports database; statement results include rowsWritten;
+ * sql.databaseSize computes page_count * page_size matching Durable Object API.
+ * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/ (databaseSize)
  */
 function asStorage(db: Database) {
   const storage = sqliteWasmStorage(sqlite3, db);
@@ -63,29 +65,29 @@ function asStorage(db: Database) {
 }
 
 /**
- * 下一条以 prefix 开头的语句出错一次（磁盘满、进程在两句之间被杀），之后照常：查写到一半出错时留没留下半份。
- * Rust 的设备里 SQLite 在它改行之前中断（写语句时整个事务回滚：真的 I/O 错的一种结果，另一种是只撤这一句），错认得出（{@link injectedError}）
+ * Injects a single failure on the next statement matching prefix:
+ * simulates I/O errors or mid-transaction kills to verify rollback semantics.
  */
 export function failOnce<S extends ReturnType<typeof deviceStorage>>(storage: S, prefix: string) {
   storage.database.inject(JSON.stringify({ prefix }));
   return storage;
 }
 
-/** 注入的存储故障（云端的存储出错）：测试据此分清是自己注入的还是真出了错 */
+/** Injected cloud storage fault, allowing tests to distinguish intentional faults from bugs. */
 export class InjectedFault extends Error {
-  /** 第 sql 句出的错（当作 I/O 错） */
+  /** Error injected on specified statement (treated as I/O error). */
   constructor(sql: string) {
-    super(`${injectedPrefix}${sql.slice(0, 40)} 句出错`);
+    super(`${injectedPrefix}${sql.slice(0, 40)} failed`);
   }
 }
 
-/** 注入的故障的消息都以它开头：照常报出的错里认得出哪些是注入的 */
-export const injectedPrefix = 'SQLITE_IOERR: 注入的故障，第 ';
+/** Injected fault message prefix: identifies injected errors in error handlers. */
+export const injectedPrefix = 'SQLITE_IOERR: injected fault on statement ';
 
-/** 设备上注入的错的消息：SQLite 的中断（测试里只有注入会中断语句） */
+/** Error message for injected device fault: SQLite interrupted. */
 export const injectedError = /Error code 9: interrupted/;
 
-/** 是不是注入的故障（云端的 InjectedFault，设备上 SQLite 的中断）：Drizzle 把驱动的错包进 DrizzleQueryError 的 cause 里，顺着 cause 找 */
+/** Distinguishes injected storage faults (cloud InjectedFault or device SQLite interrupt) across Drizzle error wrapping. */
 export function isInjected(error: unknown): boolean {
   return (
     error instanceof InjectedFault ||
@@ -94,8 +96,8 @@ export function isInjected(error: unknown): boolean {
 }
 
 /**
- * 可以随时注入故障的设备库：arm(after) 之后第 after 条读写语句（不算开关事务的 SAVEPOINT、RELEASE、ROLLBACK）以 SQLite 的中断失败，
- * 抛过一次就不再抛；disarm 取消。在 Rust 里数语句（见 failOnce）
+ * Device storage wrapper with armed fault injection:
+ * arm(after) causes the after-th read/write statement to fail with interrupt; disarm clears.
  */
 export function faultable(storage: ReturnType<typeof deviceStorage>) {
   return {
@@ -105,7 +107,7 @@ export function faultable(storage: ReturnType<typeof deviceStorage>) {
   };
 }
 
-/** 数执行了几条语句：take 给出从上次 take 起的条数与各条的 SQL */
+/** Counts executed statements: take() returns and resets statements executed since prior call. */
 export function countStatements(storage: { sql: { exec: ReturnType<typeof cloudStorage>['sql']['exec'] } }) {
   let seen: string[] = [];
   const exec = storage.sql.exec;
@@ -122,7 +124,7 @@ export function countStatements(storage: { sql: { exec: ReturnType<typeof cloudS
   };
 }
 
-/** 记下一条语句读出来的至多多少行、多少字符（值按字符串计）：查一次读进内存的量有没有界 */
+/** Measures peak rows and characters read by any single statement to verify bounded memory consumption. */
 export function measureReads(storage: { sql: { exec: ReturnType<typeof cloudStorage>['sql']['exec'] } }) {
   const read = { rows: 0, chars: 0 };
   const exec = storage.sql.exec;

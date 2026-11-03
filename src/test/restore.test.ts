@@ -4,10 +4,11 @@ import { Device } from '../test/test-device.ts';
 import { createWorkout, install, pulled, rename, tables, unchunked, upload, workout, workouts, write } from './test-schema.ts';
 import { cloudStorage, deviceStorage, restoredDeviceStorage, restoredStorage } from './test-storage.ts';
 
-// 云端时间点恢复之后设备怎么接上：游标还在恢复后的历史上照常增量；不在的整份重拉，待上传留着、序号不变再推，云端跳号接上。
-// 恢复丢掉的只有已提交、被回滚、且设备已据确认删掉的写；设备上还没确认的写恢复撤不掉
+// Device reconnection after cloud point-in-time recovery (PITR): cookies still on the restored history pull incrementally;
+// cookies off-history refetch fully while preserving pending writes and mutation IDs, and the cloud jumps lmid to connect.
+// PITR only loses writes that were committed, rolled back by PITR, and already confirmed-and-cleared on the device; unconfirmed pending writes survive.
 
-/** 云端写 from..to 版（w1 的备注依次是 v1..vto） */
+/** Cloud writes versions from..to (w1 notes become v1..vto). */
 function versions(space: Space, from: number, to: number) {
   for (let version = from; version <= to; version += 1)
     space.mutate((tx) =>
@@ -15,7 +16,7 @@ function versions(space: Space, from: number, to: number) {
     );
 }
 
-/** 云端写到第 to 版 */
+/** Cloud writes up to version to. */
 function cloudAt(to: number) {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, tables);
@@ -23,19 +24,19 @@ function cloudAt(to: number) {
   return { cloud, space };
 }
 
-/** 把整库恢复到 image 那一刻 */
+/** Restores entire cloud database to snapshot image. */
 function restoredFrom(image: Uint8Array) {
   const restoredCloud = restoredStorage(image);
   return { restoredCloud, restored: new Space(restoredCloud, tables) };
 }
 
-/** 本机改 w1 的备注，推上去被确认 */
+/** Modifies local w1 note and pushes to cloud with confirmation. */
 async function confirmed(space: Space, device: Device, note: string) {
   await rename(device, note);
   await upload(space, device, [device]);
 }
 
-/** 游标还在恢复后的历史上：拉一次是空的增量，待上传还是 pending 条 */
+/** Cookie remains on restored history: single pull returns empty patch and pending writes remain intact. */
 async function caughtUp(restored: Space, device: Device, pending: number) {
   const result = restored.pull(device.private.pullRequest(), unchunked);
   expect(result.patch).toEqual([]);
@@ -43,7 +44,7 @@ async function caughtUp(restored: Space, device: Device, pending: number) {
   expect(device.private.pending()).toHaveLength(pending);
 }
 
-/** 本机是 rows；推上去之后待上传清空，恢复后的云端也是 rows */
+/** Local rows match rows; after pushing, pending writes clear and restored cloud matches rows. */
 async function pushedAs(
   restored: Space,
   restoredCloud: ReturnType<typeof restoredStorage>,
@@ -57,17 +58,17 @@ async function pushedAs(
   expect(workouts(restoredCloud)).toEqual(rows);
 }
 
-/** 设备先确认一条写、取镜像，再确认 later 里的写（恢复到镜像时它们被回滚掉） */
-async function confirmedPastImage(later = ['已确认 2']) {
+/** Device confirms one write, takes a backup image, then confirms later writes (which will be rolled back on restore). */
+async function confirmedPastImage(later = ['confirmed 2']) {
   const { cloud, space } = cloudAt(1);
   const { device, storage } = await install(space);
-  await confirmed(space, device, '已确认 1');
+  await confirmed(space, device, 'confirmed 1');
   const image = cloud.image();
   for (const note of later) await confirmed(space, device, note);
   return { device, storage, image };
 }
 
-/** 一直拉到末块落地（分块时一块块收） */
+/** Pulls chunks until final chunk lands (stages intermediate chunks). */
 async function pullAll(space: Space, device: Device, limit = unchunked) {
   for (;;) {
     const result = space.pull(device.private.pullRequest(), limit);
@@ -76,24 +77,24 @@ async function pullAll(space: Space, device: Device, limit = unchunked) {
   }
 }
 
-test('恢复点之后没有新写（这次恢复什么也没回滚）：游标在最新一版、带待上传的设备照常接上，待上传留着、推上去', async () => {
+test('no new writes after restore point: device at head with pending writes reconnects and pushes cleanly', async () => {
   const { cloud, space } = cloudAt(1);
   const { device, storage } = await install(space);
-  await rename(device, '前蹲');
+  await rename(device, 'front squat');
   const { restoredCloud, restored } = restoredFrom(cloud.image());
   expect(restored.head()).toEqual(space.head());
 
   await caughtUp(restored, device, 1);
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: '前蹲' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'front squat' }]);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: '前蹲' }]);
+  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'front squat' }]);
 });
 
-test('游标仍在恢复后的历史上（历史 v1..v10，恢复到 v5，离线设备游标 v3、带 2 条待上传）：上线照常增量，待上传留着、推上去', async () => {
+test('cookie still on restored history (v1..v10 restored to v5, offline device at v3 with 2 pending writes): incremental pull preserves writes', async () => {
   const { cloud, space } = cloudAt(3);
   const { device, storage } = await install(space);
-  await rename(device, '离线写 1');
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '离线写 2' }));
+  await rename(device, 'offline write 1');
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'offline write 2' }));
   versions(space, 4, 5);
   const image = cloud.image();
   versions(space, 6, 10);
@@ -106,12 +107,12 @@ test('游标仍在恢复后的历史上（历史 v1..v10，恢复到 v5，离线
   expect(device.private.cookie()?.version).toBe(5);
   expect(device.private.pending()).toHaveLength(2);
   await pushedAs(restored, restoredCloud, device, storage, [
-    { id: 'w1', note: '离线写 1' },
-    { id: 'w2', note: '离线写 2' },
+    { id: 'w1', note: 'offline write 1' },
+    { id: 'w2', note: 'offline write 2' },
   ]);
 });
 
-test('恢复好之后整份同步过、又离线写下的设备：重连照常增量，待上传留着', async () => {
+test('device synced after restore and wrote offline: reconnects incrementally with pending writes preserved', async () => {
   const { cloud, space } = cloudAt(1);
   const image = cloud.image();
   versions(space, 2, 2);
@@ -119,18 +120,18 @@ test('恢复好之后整份同步过、又离线写下的设备：重连照常�
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
   await device.private.receive(pulled(restored, device));
-  await rename(device, '箱式深蹲');
+  await rename(device, 'box squat');
 
   await caughtUp(restored, device, 1);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: '箱式深蹲' }]);
+  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'box squat' }]);
 });
 
-test('游标不在恢复后的历史上：整份重拉、游标与待上传不动，待上传的序号不变再推、云端跳号接上；已确认又被回滚掉的丢了，没确认的留着', async () => {
-  const { device, storage, image } = await confirmedPastImage(['已确认 2', '已确认 3']);
+test('cookie off restored history: refetches fully preserving pending writes, jumps lmid on push; rolled back writes drop, unconfirmed survive', async () => {
+  const { device, storage, image } = await confirmedPastImage(['confirmed 2', 'confirmed 3']);
   expect(device.private.cookie()?.version).toBe(4);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '离线写 A' }));
-  await rename(device, '离线写 B');
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'offline write A' }));
+  await rename(device, 'offline write B');
   const [client] = device.private.pending().map((mutation) => mutation.client);
   expect(device.private.pending().map(({ id }) => id)).toEqual([4, 5]);
 
@@ -143,38 +144,38 @@ test('游标不在恢复后的历史上：整份重拉、游标与待上传不�
   expect('lmids' in result && result.lmids).toEqual({ [client as string]: 1 });
   await device.private.receive(result);
   expect(device.private.cookie()).toEqual(restored.head());
-  // 第 2、3 条已确认、被回滚：设备早已删掉它们，恢复不会带回来；第 4、5 条留着、序号不变，第 4 条标着是最早的待上传，推上去时云端跳号
+  // Writes 2 and 3 were confirmed and rolled back: device already cleared them; writes 4 and 5 survive with unchanged IDs; write 4 marked first so cloud jumps lmid.
   expect(device.private.pending().map(({ id, first }) => [id, first])).toEqual([
     [4, true],
     [5, undefined],
   ]);
   await pushedAs(restored, restoredCloud, device, storage, [
-    { id: 'w1', note: '离线写 B' },
-    { id: 'w2', note: '离线写 A' },
+    { id: 'w1', note: 'offline write B' },
+    { id: 'w2', note: 'offline write A' },
   ]);
-  // 之后的本机写还是这个客户端，接在第 5 条后面，云端照常收
-  await rename(device, '之后写的');
+  // Subsequent local writes from the same client sequence after write 5; cloud accepts normally.
+  await rename(device, 'later write');
   expect(device.private.pending().map(({ id, client: from }) => [from, id])).toEqual([[client, 6]]);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toContainEqual({ id: 'w1', note: '之后写的' });
+  expect(workouts(restoredCloud)).toContainEqual({ id: 'w1', note: 'later write' });
 });
 
-test('没有待上传、已确认的写被回滚掉：整份重拉后下一条本机写接着本机确认到的，云端跳号接上，不会「来自未来」被跳过、也不会当作重复丢掉', async () => {
-  const { device, image } = await confirmedPastImage(['已确认 2', '已确认 3']);
+test('no pending writes and confirmed writes rolled back: next write sequences after confirmed, cloud jumps without dropping', async () => {
+  const { device, image } = await confirmedPastImage(['confirmed 2', 'confirmed 3']);
   const { restoredCloud, restored } = restoredFrom(image);
   await device.private.receive(restored.pull(device.private.pullRequest(), unchunked));
-  await rename(device, '恢复后写的');
-  // 本机确认到第 3 条，云端恢复后只处理到第 1 条：接着本机记的编成 4，是最早的待上传，云端跳号
+  await rename(device, 'written after restore');
+  // Device confirmed up to 3, restored cloud only processed 1: sequences next as 4, marked first, and cloud jumps lmid.
   expect(device.private.pending().map(({ id }) => id)).toEqual([4]);
   await upload(restored, device, [device]);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: '恢复后写的' }]);
+  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written after restore' }]);
 });
 
-test('游标不在历史上、整份重拉分好几块：中间块接着拉（不是每块都从头来），末块落地后序号不变、照常推', async () => {
+test('cookie off history with multi-chunk refetch: intermediate chunks paginate without restart, final chunk lands and pushes cleanly', async () => {
   const { device, storage, image } = await confirmedPastImage();
   for (let index = 0; index < 6; index += 1)
-    await write(device, (tx) => tx.insert(workout).values({ id: `w${index + 2}`, note: '离线写的' }));
+    await write(device, (tx) => tx.insert(workout).values({ id: `w${index + 2}`, note: 'offline write' }));
   const { restoredCloud, restored } = restoredFrom(image);
   restored.mutate((tx) => {
     for (let index = 0; index < 6; index += 1) tx.insert(workout, { id: `c${index}`, note: 'x'.repeat(40) });
@@ -185,7 +186,7 @@ test('游标不在历史上、整份重拉分好几块：中间块接着拉（�
   expect(await device.private.receive(first)).toBe(true);
   const second = restored.pull(device.private.pullRequest(), 120);
   expect(second).toHaveProperty('next');
-  // 接着拉：第二块接在第一块的 next 上（没有从头来）
+  // Resumes pull: second chunk chains onto first chunk next token without restarting from scratch.
   expect((second as { cursor?: string }).cursor).toBe((first as { next: string }).next);
   expect(await device.private.receive(second)).toBe(true);
   expect(device.private.pending().map(({ id }) => id)).toEqual([3, 4, 5, 6, 7, 8]);
@@ -197,45 +198,45 @@ test('游标不在历史上、整份重拉分好几块：中间块接着拉（�
   expect(workouts(restoredCloud)).toHaveLength(13);
 });
 
-test('拉取请求发出之后本机又写了一条（这条写的客户端不在请求列出的里面），整份落地：这条写照样推上去、不丢', async () => {
+test('local write commits while pull request is in flight with client omitted from request: write pushes cleanly without data loss', async () => {
   const { device, storage, image } = await confirmedPastImage();
   const { restoredCloud, restored } = restoredFrom(image);
   const request = device.private.pullRequest();
-  await rename(device, '请求在路上时写的');
+  await rename(device, 'written while in flight');
   await device.private.receive(restored.pull(request, unchunked));
-  await pushedAs(restored, restoredCloud, device, storage, [{ id: 'w1', note: '请求在路上时写的' }]);
+  await pushedAs(restored, restoredCloud, device, storage, [{ id: 'w1', note: 'written while in flight' }]);
   await device.private.receive(pulled(restored, device));
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: '请求在路上时写的' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'written while in flight' }]);
 });
 
-test('上次启动留下的待上传还在，拉取请求发出之后这次启动的客户端又写了一条、已经推上去执行了，增量落地：两条都被确认、不再留在待上传里', async () => {
+test('reopened client write executes while prior session pending writes exist: incremental pull confirms both without leftover pending writes', async () => {
   const { space } = cloudAt(1);
   const { device, storage } = await install(space);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: '上次启动写的' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'written in previous session' }));
   device.close();
   const reopened = new Device(storage, tables);
   const request = reopened.private.pullRequest();
-  await rename(reopened, '请求在路上时写的');
+  await rename(reopened, 'written while in flight');
   space.push(reopened.private.pending());
   await reopened.private.receive(space.pull(request, unchunked));
   expect(reopened.private.pending()).toEqual([]);
 });
 
-test('时间点恢复后整份落地推上去的写，设备再从之前的系统备份恢复：这条写不再执行第二次，不盖掉别的设备之后的写', async () => {
+test('pushed write after PITR refetch: restoring device from earlier backup does not re-execute write or overwrite subsequent writes', async () => {
   const { device, storage, image } = await confirmedPastImage();
-  await rename(device, '离线写的');
+  await rename(device, 'offline write');
   const backup = storage.image();
   const { restoredCloud, restored } = restoredFrom(image);
   await device.private.receive(restored.pull(device.private.pullRequest(), unchunked));
   await upload(restored, device, [device]);
   const tablet = await install(restored);
-  await rename(tablet.device, '平板之后写的');
+  await rename(tablet.device, 'written on tablet later');
   await upload(restored, tablet.device, [tablet.device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: '平板之后写的' }]);
+  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
 
   const fromBackup = new Device(restoredDeviceStorage(backup), tables);
   expect(fromBackup.private.pending()).toHaveLength(1);
   await pullAll(restored, fromBackup);
   await upload(restored, fromBackup, [fromBackup]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: '平板之后写的' }]);
+  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
 });

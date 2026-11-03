@@ -1,5 +1,5 @@
-//! 外面交来的事件长什么样：App 的调用、token、socket、HTTP 应答、到时的计时器；关库之后再来的 App 调用按 id 回错。
-//! 不该知道的：事件怎么处理。
+//! External input events: app calls, tokens, sockets, HTTP responses, and expired timers; app calls arriving after close fail by call ID.
+//! What it should not know: how events are processed.
 
 #[cfg(feature = "testing")]
 use super::probe::Probe;
@@ -7,52 +7,52 @@ use crate::tables::Table;
 use serde::Deserialize;
 use serde_json::Value as Json;
 
-/// 外面交来的事件
+/// External input event.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Input {
-    /// 读：只读的语句
+    /// Read query: read-only SQL statement.
     Query {
         id: u64,
         sql: String,
         params: Vec<Json>,
     },
-    /// 一条查询读哪些表（不执行）
+    /// Inspects tables read by a query without executing it.
     TablesOf {
         id: u64,
         sql: String,
     },
-    /// 开始一次本机写：轮到它时回复
+    /// Begins a local write: replied when its turn arrives.
     Begin {
         id: u64,
     },
-    /// 在开着的本机写（write 是 begin 的 id）里执行一条语句
+    /// Executes a statement within an open local write (`write` is the `begin` call ID).
     Execute {
         id: u64,
         write: u64,
         sql: String,
         params: Vec<Json>,
     },
-    /// 结束本机写：提交或回滚，做完时回复
+    /// Ends a local write: commit or rollback, replied upon completion.
     End {
         id: u64,
         write: u64,
         commit: bool,
     },
-    /// 建一个空间的同步、报一次状态（私有空间是空串，共用空间要先占下（`shared`））；开始要另发 `start`
+    /// Establishes sync for a space and reports initial status (private space is empty string, shared spaces must first be claimed via `Shared`); sync starts on `Start`.
     Connect {
         id: u64,
         channel: String,
         url: String,
     },
-    /// 占下一个共用空间（tables 是它的表，编好的定义）、建表与升级
+    /// Claims a shared space (`tables` contains compiled definitions), creating and upgrading tables.
     Shared {
         id: u64,
         name: String,
         tables: Vec<Table>,
         owner: Option<String>,
     },
-    /// 开始、停下一个空间的同步（App 退到后台又回来）
+    /// Starts or stops synchronization for a space (e.g. app background/foreground transitions).
     Start {
         channel: String,
     },
@@ -72,13 +72,13 @@ pub enum Input {
         id: u64,
         channel: String,
     },
-    /// 回 `token` 指令：取不到时带着出的错
+    /// Response to a `token` instruction, carrying an optional error if retrieval failed.
     Token {
         request: u32,
         token: Option<String>,
         error: Option<String>,
     },
-    /// 回 `validate` 指令：不合时带着哪张表的行哪里不合；查的时候出了错（接入方的 Standard Schema 抛了别的错，回的结果读不出）时带着错的消息
+    /// Response to a `validate` instruction: carries invalid table row issues if validation failed, or error message if validation threw or response could not be parsed.
     Validated {
         write: u64,
         invalid: Option<Invalid>,
@@ -96,7 +96,7 @@ pub enum Input {
         code: u16,
         reason: String,
     },
-    /// socket 建不出来，或 HTTP 请求出错（网络、多久没收到数据）
+    /// Socket could not be opened, or HTTP request failed (network error, timeout).
     Failed {
         id: u32,
         error: String,
@@ -109,9 +109,9 @@ pub enum Input {
     Fired {
         timer: u32,
     },
-    /// 关库：停下各空间的同步，开着的本机写回滚，排着的都失败
+    /// Closes the database: stops space synchronization, rolls back open local writes, and fails queued requests.
     Close,
-    /// 测试直接喂的（只有测试的构建有）
+    /// Test-injected probe (test builds only).
     #[cfg(feature = "testing")]
     Test {
         id: u64,
@@ -119,14 +119,14 @@ pub enum Input {
     },
 }
 
-/// 本机写改到的一张表的行不合接入方的 Standard Schema
+/// Local write row changes failing integrator Standard Schema validation.
 #[derive(Deserialize)]
 pub struct Invalid {
     pub(super) table: String,
     pub(super) issues: Vec<crate::error::Issue>,
 }
 
-/// App 调用的 id（关库之后再来的都回错）
+/// Returns the call ID of an app request (calls arriving after close fail with this ID).
 #[must_use]
 pub fn call_id(input: &Input) -> Option<u64> {
     match input {
@@ -146,12 +146,12 @@ pub fn call_id(input: &Input) -> Option<u64> {
     }
 }
 
-/// 认不出的输入（JSON 解析不了，如字符串里有 JS 允许、JSON 不允许的孤立代理项）怎么办：不处理的话它的调用方一直等
-/// （开着的本机写不结束，后面的读写都排在它后面）
+/// Handling unreadable input (JSON parse failures, e.g. strings containing lone surrogates permitted in JS but invalid in JSON):
+/// prevents callers from waiting indefinitely behind an unclosed local write.
 pub enum Unreadable {
-    /// 读得出是哪次本机写的校验结果：当成这次校验出错交给核心，核心回滚这次写
+    /// Identifiable local write validation failure: routed to core to roll back the write.
     Control(Input),
-    /// 直接交回：读得出 id 的回这次调用出错，都读不出的照常报出
+    /// Direct failure delivery: replies with failure if `id` is readable, otherwise reports error.
     Deliver(crate::sync::instructions::Instruction),
 }
 
@@ -166,7 +166,7 @@ pub fn unreadable(input: &str, error: &serde_json::Error) -> Unreadable {
         id: Option<u64>,
         write: Option<u64>,
     }
-    let message = format!("Syncline 认不出交来的调用：{error}");
+    let message = format!("syncline received unrecognized call: {error}");
     match serde_json::from_str::<Called>(input) {
         Ok(Called { id: Some(id), .. }) => Unreadable::Deliver(Instruction::Reply {
             id,
@@ -194,13 +194,13 @@ mod tests {
     use crate::sync::instructions::Instruction;
 
     fn reading(input: &str) -> Unreadable {
-        let error = serde_json::from_str::<Input>(input).err().expect("要是读不出的输入");
+        let error = serde_json::from_str::<Input>(input).err().expect("must be unreadable input");
         unreadable(input, &error)
     }
 
     #[test]
-    fn 字符串里有孤立的代理项_回这次调用出错() {
-        // JSON.stringify("a\uD800b") 的写法：JS 的字符串允许孤立的代理项，serde_json 读成 String 时报错
+    fn string_with_lone_surrogate_replies_error() {
+        // JSON.stringify("a\uD800b"): JS strings permit lone surrogates, which fail when serde_json parses String
         let input = r#"{"type":"execute","id":7,"write":3,"sql":"INSERT INTO t VALUES (?)","params":["a\ud800b"]}"#;
         assert!(matches!(
             reading(input),
@@ -209,8 +209,8 @@ mod tests {
     }
 
     #[test]
-    fn 校验结果读不出_当成这次写校验出错交给核心() {
-        // 接入方的 Standard Schema 给的问题里有孤立的代理项
+    fn unreadable_validation_result_controls_rollback() {
+        // Integrator Standard Schema validation issues containing lone surrogates
         let input = r#"{"type":"validated","write":3,"invalid":{"table":"t","issues":[{"message":"\ud800"}]}}"#;
         assert!(matches!(
             reading(input),
@@ -223,11 +223,11 @@ mod tests {
     }
 
     #[test]
-    fn 读不出_id_的照常报出() {
+    fn unreadable_id_reports_error() {
         assert!(matches!(
             reading(r#"{"type":"nothing"}"#),
             Unreadable::Deliver(Instruction::Report { .. })
         ));
-        assert!(matches!(reading("不是 JSON"), Unreadable::Deliver(Instruction::Report { .. })));
+        assert!(matches!(reading("not json"), Unreadable::Deliver(Instruction::Report { .. })));
     }
 }

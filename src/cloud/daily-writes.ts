@@ -1,20 +1,25 @@
 import type { Cursor } from '../common/storage.ts';
 import type { Used } from './commits.ts';
 
-/** 一天多少毫秒：按 UTC 的日子算 */
+/** Milliseconds in one day, calculated by UTC calendar day. */
 const dayMs = 86_400_000;
 
 /**
- * 设备推来的写当天（UTC）写了几行怎么计、怎么存：按执行完的每条语句的 rowsWritten（计费用的值，含索引）计，所在事务之后回滚（扣下）也照算；
- * 服务端的写与 Syncline 自己排导出的写不算。每条写记上到它为止的行数，存在它的提交记录上，与写同一个事务、不为计数多写一行；
- * 对象休眠或重启后从最近记下的接着算。
- * 不该知道的：上限是多少、到了怎么办。
+ * Tracks and persists daily (UTC) written row counts for device pushes.
+ *
+ * Counts rowsWritten from each executed statement (the billed metric, including indexes),
+ * counting even if the containing transaction subsequently rolls back (e.g. held writes).
+ * Server writes and internal export schedule writes are not counted. Each commit records
+ * cumulative rows up to that point directly on its commit record within the same transaction,
+ * requiring no additional database writes for accounting.
+ * When the object hibernates or restarts, it resumes from the latest recorded commit.
+ * What it should not know: write limits or quota enforcement actions.
  * @see https://developers.cloudflare.com/durable-objects/platform/pricing/
  */
 export class DailyWrites {
-  /** 提交记录上最近记下的；还没有是 undefined */
+  /** Latest commit accounting record, or undefined if none exists yet. */
   readonly #recorded: () => Used | undefined;
-  /** 最近记下的；对象醒来后第一次用时从提交记录读 */
+  /** Latest accounting state, loaded lazily from the commit log on first access after wake. */
   #used: Used | undefined;
   #written = 0;
 
@@ -22,26 +27,26 @@ export class DailyWrites {
     this.#recorded = recorded;
   }
 
-  /** 取出一条语句的全部行，加上它写了几行（游标取完之后才是计费用的值） */
+  /** Consumes all rows from a statement cursor and accumulates its written rows (rowsWritten is finalized after exhaustion). */
   count(cursor: Cursor) {
     const rows = cursor.toArray();
     this.#written += cursor.rowsWritten ?? 0;
     return rows;
   }
 
-  /** 对象到现在执行的 SQL 共写了几行（推送按它限一批的工作量） */
+  /** Total SQL rows written by this object so far (used by pushes to bound per-batch workload). */
   get written() {
     return this.#written;
   }
 
-  /** 当天到现在写了几行 */
+  /** Returns the number of rows written so far today (UTC). */
   today(): Used {
     const day = Math.floor(Date.now() / dayMs);
     this.#used ??= this.#recorded() ?? { day, rows: 0 };
     return this.#used.day === day ? this.#used : { day, rows: 0 };
   }
 
-  /** 量一条写：run 执行它，拿到的 used 给出当天到此刻写了几行（记进提交记录）；执行完（出错也是）记下 */
+  /** Measures a single write: run executes it, and used supplies cumulative daily written rows for recording in the commit log. */
   measure<T>(run: (used: () => Used) => T): T {
     const { day, rows } = this.today();
     const start = this.#written;

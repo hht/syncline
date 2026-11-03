@@ -2,7 +2,7 @@
   "forbidden": [
     {
       "name": "device-not-cloud",
-      "comment": "设备上的 JS（expo/ 下的入口与绑定：手机、web 页面与 Worker、React、后台同步）不许经任何路径引用云端的代码：Metro 不摇树，引用到就打进手机包",
+      "comment": "Device JS entry points and bindings (under expo/) must not import cloud code via any path: Metro does not tree-shake, so imported cloud code would be bundled into mobile apps.",
       "severity": "error",
       "from": {
         "path": "^src/expo/[^/]+\\.ts$",
@@ -15,7 +15,7 @@
     },
     {
       "name": "core-not-features",
-      "comment": "核心不许引用可插拔的功能（src/features/：校验和、导出）：核心只定接口，云端的功能由入口文件（组装根：cloudflare/index.ts）接上（设备一侧的在 Rust 的核心里）；不接它们时核心照样完整工作（只有要对校验和的测试才经 test/test-checksum.ts 接上）",
+      "comment": "Core code must not import pluggable features (under src/features/: checksums, exports): the core defines interfaces, while cloud features are wired by the entry assembly root (cloudflare/index.ts) and device features live in the Rust core. The core works completely without them (only tests verifying checksums wire them).",
       "severity": "error",
       "from": {
         "path": "^src/(common|tables|cloud|expo|cloudflare)/",
@@ -27,7 +27,7 @@
     },
     {
       "name": "no-circular",
-      "comment": "循环依赖让加载顺序和测试边界都说不清",
+      "comment": "Circular dependencies obscure load order and test boundaries.",
       "severity": "error",
       "from": {},
       "to": {
@@ -36,7 +36,7 @@
     },
     {
       "name": "product-not-tools",
-      "comment": "产品代码不引用门禁与开发脚本：tools/ 只给开发用",
+      "comment": "Product code must not import gates or development scripts: tools/ is strictly for development.",
       "severity": "error",
       "from": {
         "path": "^(src|probes)/"

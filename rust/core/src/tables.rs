@@ -1,10 +1,10 @@
-//! 接入方的表在设备库里怎么建：照声明建表、补上库里没有的列与索引，库里已有的表只加不减、不删不改（照 expand/contract：
-//! 删列、改名要分几次发布；改主键、改类型打开时就报错，要换一张表）。
-//! 表都是 STRICT（主键列不收 NULL，rowid 表默认收），列只写存储类型（integer、real、text），约束在写时查；不写 NOT NULL 与外键：
-//! 非空由 Syncline 的校验查（删掉的列物理删之前、回滚的 App 不认识的列，新写的行都不带），整份拉取按（表, 主键）分块，子表的行可能先于父表到。
-//! 索引照声明建，另给每个外键的第一列建（连带删按父行找子行），已是声明的索引或主键的第一列的不建；已有的索引按列认（换表后索引名带一代的编号），
-//! 已有同样列的不再建。
-//! 不该知道的：声明合不合法（名字、类型、支持的索引与默认值，JS 从 Drizzle 表编出声明时已查过）、表里的数据、表怎么同步。
+//! How integrator tables are created in the device database: creates tables from declarations, adds missing columns and indexes; existing tables only expand, never contract, drop, or alter in place (following expand/contract:
+//! dropping columns or renaming requires phased releases; changing primary keys or types fails immediately on open, requiring a new table).
+//! Tables are STRICT (primary key columns reject NULL, which rowid tables accept by default); columns specify only storage type (integer, real, text), with constraints verified on write; NOT NULL and foreign keys are omitted from DDL:
+//! non-null constraints are verified by Syncline validation (dropped columns before physical removal or un-upgraded apps omit them in newly written rows); full resync chunks by (table, primary key), so child rows may arrive before parent rows.
+//! Indexes are created as declared, plus an index on the leading column of each foreign key (cascade delete finds children from parents), skipping if already the leading column of a declared index or primary key; existing indexes match by column list (index names carry generation suffix after table recreation),
+//! skipping if an index with identical columns already exists.
+//! What it should not know: whether declarations are valid (names, types, supported indexes and defaults are pre-validated by JS from Drizzle schemas), table data, how tables are synced.
 //! @see <https://sqlite.org/stricttables.html>
 //! @see <https://sqlite.org/lang_altertable.html#altertabaddcol>
 
@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use std::fmt;
 
-/// 一列在库里存成哪种
+/// How a column is stored in the database.
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Storage {
@@ -23,29 +23,29 @@ pub enum Storage {
     Text,
 }
 
-/// 一列的声明（字段名写错就报错，不当作没给）
+/// Declaration of a column (misspelled field names error rather than defaulting).
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Column {
-    /// SQL 列名
+    /// SQL column name.
     pub name: String,
-    /// Drizzle 的字段名：不合声明时报的位置
+    /// Drizzle field name: location reported on declaration mismatch.
     pub field: String,
     pub storage: Storage,
     pub not_null: bool,
-    /// 静态默认值的 SQL 字面量（已照列转成存进库的值）：`0`、`'{"rest":90}'`、`NULL`；没有默认值是 None
+    /// SQL literal for static default value (converted to stored database value): `0`, `'{"rest":90}'`, `NULL`; None if no default value.
     pub default: Option<String>,
-    /// 布尔列：只能是 0 或 1
+    /// Boolean column: must be 0 or 1.
     pub boolean: bool,
-    /// 枚举：文本只能是其中之一
+    /// Enum: text must be one of these values.
     pub values: Option<Vec<String>>,
-    /// 文本至多几个字符（JS 的 UTF-16 单元）
+    /// Maximum text length (JS UTF-16 code units).
     pub length: Option<usize>,
-    /// JSON 列：文本要是合法的 JSON
+    /// JSON column: text must be valid JSON.
     pub json: bool,
 }
 
-/// 一个声明的索引：按列、不唯一、没有条件
+/// A declared index: by column, non-unique, without conditions.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Index {
@@ -53,20 +53,20 @@ pub struct Index {
     pub columns: Vec<String>,
 }
 
-/// 一张表的声明（JS 从 Drizzle 表编出）
+/// Declaration of a table (compiled by JS from Drizzle schema).
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Table {
     pub name: String,
-    /// 按表定义里的先后
+    /// In order of table definition.
     pub columns: Vec<Column>,
-    /// 主键的列，按表定义里的先后
+    /// Primary key columns in order of table definition.
     pub key: Vec<String>,
     pub indexes: Vec<Index>,
     pub foreign_keys: Vec<ForeignKey>,
 }
 
-/// 一个外键：这张表的列 columns 引用 parent 的列 to
+/// A foreign key: columns of this table reference parent table columns `to`.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ForeignKey {
@@ -75,13 +75,12 @@ pub struct ForeignKey {
     pub to: Vec<String>,
 }
 
-/// 建表出错
-/// 照声明建表、补列、建索引，在一个事务里（不能在开着的事务里调用），哪张表出错库里什么也不动。新库先切到 incremental 的 `auto_vacuum`：整份拉取暂存的块清掉后
-/// 只截掉空页，不必 `VACUUM` 重写整个库。它只在建任何表之前、切 WAL 之前设得上，调用方的次序是：打开库、这里、Syncline 自己的表、切 WAL
+/// Defines tables, adds columns, and creates indexes from declarations within a transaction (must not be called inside an open transaction); on error in any table, database remains untouched. New database sets incremental `auto_vacuum`: once staged chunks from full resync are cleared,
+/// only freed pages are truncated without requiring full `VACUUM`. Can only be configured before creating tables and before WAL mode; caller sequence: open database, this function, Syncline internal tables, switch to WAL.
 /// @see <https://sqlite.org/pragma.html#pragma_auto_vacuum>
 ///
 /// # Errors
-/// 声明与库里已有的表合不上（主键、列类型改了，加的非空列没有固定默认值，要换一张表或改声明）是 `Failed`，执行语句出错是 `Sql`。
+/// Returns `Error::Failed` if declarations conflict with existing database tables (primary key or column type altered, not-null column added without fixed default; requires table rename or declaration fix); returns `Error::Sql` on SQL execution failure.
 pub fn define<'a>(db: &Connection, tables: impl IntoIterator<Item = &'a Table>) -> Result<(), Error> {
     let empty: bool = db.query_row("SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)", [], |row| row.get(0))?;
     if empty {
@@ -112,7 +111,7 @@ impl Storage {
         }
     }
 
-    /// 库里的一个类型名存成哪种（照 SQLite 定列亲和的规则）；BLOB、numeric 亲和的没有
+    /// Storage type for a database type name (follows SQLite column affinity determination rules); BLOB and numeric affinities not supported.
     /// @see <https://sqlite.org/datatype3.html#determination_of_column_affinity>
     #[must_use]
     pub fn of(sql_type: &str) -> Option<Self> {
@@ -143,7 +142,7 @@ fn column_definition(column: &Column) -> String {
     format!("{} {}{default}", quote(&column.name), column.storage.sql())
 }
 
-/// 库里一列：名字、类型名、是主键的第几列（0 是不在主键里）
+/// Column in database: name, SQL type name, 1-based index in primary key (0 if not in primary key).
 struct Stored {
     name: String,
     sql_type: String,
@@ -162,7 +161,7 @@ fn stored_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<Stored>>
         .collect()
 }
 
-/// 建一张表；已有的先查主键与列类型没改，再补库里没有的列
+/// Defines a table; checks existing tables for unmodified primary key and column types, then adds missing columns.
 fn define_table(db: &Connection, table: &Table) -> Result<(), Error> {
     let stored = stored_columns(db, &table.name)?;
     if stored.is_empty() {
@@ -180,7 +179,7 @@ fn define_table(db: &Connection, table: &Table) -> Result<(), Error> {
     add_columns(db, table, &stored)
 }
 
-/// 已有的表主键要与声明的相同：SQLite 改不了表的主键，按声明的主键写、按旧主键接着扫都会出错或漏行
+/// Existing table primary key must match declaration: SQLite cannot alter table primary keys; writing or scanning with mismatched primary keys leads to errors or omitted rows.
 fn check_key(table: &Table, stored: &[Stored]) -> Result<(), Error> {
     let mut key: Vec<&Stored> = stored.iter().filter(|column| column.key > 0).collect();
     key.sort_by_key(|column| column.key);
@@ -189,14 +188,14 @@ fn check_key(table: &Table, stored: &[Stored]) -> Result<(), Error> {
         return Ok(());
     }
     Err(Error::Failed(format!(
-        "{} 的主键改了（库里是 {}，声明的是 {}）：主键不能改，换一张表",
+        "primary key of {} changed (database has {}, declared has {}): primary keys cannot change; use a new table",
         table.name,
         key.join(", "),
         table.key.join(", ")
     )))
 }
 
-/// 已有的列类型要与声明的相同（按存储类型比，库里的 text(20) 与声明的 text 一样存）：SQLite 改不了列的类型，STRICT 表收不下新类型的值
+/// Existing column types must match declaration (compared by storage class; database text(20) and declared text store identically): SQLite cannot alter column types, STRICT tables reject new types.
 fn check_types(table: &Table, stored: &[Stored]) -> Result<(), Error> {
     for column in &table.columns {
         let Some(existing) = stored.iter().find(|existing| existing.name == column.name) else {
@@ -204,7 +203,7 @@ fn check_types(table: &Table, stored: &[Stored]) -> Result<(), Error> {
         };
         if Storage::of(&existing.sql_type) != Some(column.storage) {
             return Err(Error::Failed(format!(
-                "{}.{} 的类型改了（库里是 {}，声明的是 {}）：类型不能改，换一张表",
+                "type of {}.{} changed (database has {}, declared has {}): column types cannot change; use a new table",
                 table.name,
                 column.name,
                 existing.sql_type.to_lowercase(),
@@ -215,8 +214,8 @@ fn check_types(table: &Table, stored: &[Stored]) -> Result<(), Error> {
     Ok(())
 }
 
-/// 已有的表补库里没有的列。非空的要有不为空的固定默认值：表上不写 NOT NULL，SQLite 不再替我们拦（它自己也不许加这样的列），
-/// 旧行是空的、没升级的 App 写的行不带它，都不合声明
+/// Adds missing columns to existing table. Non-null columns must provide a non-null fixed default: tables omit NOT NULL in DDL, so SQLite does not enforce it (nor allow adding such columns),
+/// and existing rows or writes from un-upgraded apps would violate declaration.
 fn add_columns(db: &Connection, table: &Table, stored: &[Stored]) -> Result<(), Error> {
     for column in table
         .columns
@@ -225,7 +224,7 @@ fn add_columns(db: &Connection, table: &Table, stored: &[Stored]) -> Result<(), 
     {
         if column.not_null && column.default.as_deref().is_none_or(|value| value == "NULL") {
             return Err(Error::Failed(format!(
-                "{}.{} 非空、又没有固定的默认值：已有的表加这样的列，旧行与没升级的 App 写的行都放不下，改成可空或给固定的默认值",
+                "{}.{} is not null without a fixed default: adding such a column to an existing table fails on existing rows and un-upgraded apps; make it nullable or provide a fixed default",
                 table.name, column.name
             )));
         }
@@ -238,11 +237,11 @@ fn add_columns(db: &Connection, table: &Table, stored: &[Stored]) -> Result<(), 
     Ok(())
 }
 
-/// 库里一张表上按列建的普通索引（不含主键自带的，与唯一、带条件、按表达式的）：名字与列
+/// Normal column-based indexes on a table in database (excluding primary key indexes, unique, partial, or expression indexes): name and columns.
 /// @see <https://sqlite.org/pragma.html#pragma_index_list>
 ///
 /// # Errors
-/// 读库出错。
+/// Returns an error if reading database fails.
 pub fn indexes_on(db: &Connection, table: &str) -> rusqlite::Result<Vec<Index>> {
     let names: Vec<String> = db
         .prepare(&format!("PRAGMA index_list({})", quote(table)))?
@@ -254,7 +253,7 @@ pub fn indexes_on(db: &Connection, table: &str) -> rusqlite::Result<Vec<Index>> 
         .collect::<rusqlite::Result<_>>()?;
     let mut indexes = Vec::new();
     for name in names {
-        // 按表达式的列名是 NULL
+        // Column name is NULL for expression indexes.
         let columns: Option<Vec<String>> = db
             .prepare(&format!("PRAGMA index_info({})", quote(&name)))?
             .query_map([], |row| row.get::<_, Option<String>>("name"))?
@@ -266,8 +265,8 @@ pub fn indexes_on(db: &Connection, table: &str) -> rusqlite::Result<Vec<Index>> 
     Ok(indexes)
 }
 
-/// 一张表还缺的索引：声明的，加上每个外键的第一列（已是某个索引或主键的第一列时不建：设备上是 rowid 表，非整数主键自带按主键的索引，
-/// 整数主键就是 rowid）；库里已有同样列的不建
+/// Missing indexes for a table: declared indexes, plus leading column of each foreign key (omitted if already leading column of an index or primary key: rowid tables have automatic primary key indexes; integer primary keys are rowid);
+/// indexes with identical columns already in database are omitted.
 fn missing_indexes(db: &Connection, table: &Table) -> rusqlite::Result<Vec<Index>> {
     let leading: Vec<&String> = table
         .key
@@ -361,12 +360,12 @@ mod tests {
     fn incompatible(db: &Connection, tables: Value) -> String {
         match define(db, &declared(tables)) {
             Err(Error::Failed(message)) => message,
-            other => panic!("应当合不上，实际是 {other:?}"),
+            other => panic!("expected schema mismatch, got {other:?}"),
         }
     }
 
     #[test]
-    fn 新库先切_incremental_的_auto_vacuum_strict_只写存储类型_不写_not_null_声明的索引与外键第一列的索引都建() {
+    fn new_database_enables_incremental_auto_vacuum_and_creates_indexes_for_declarations_and_foreign_keys() {
         let db = Connection::open_in_memory().unwrap();
         define(&db, &declared(json!([workout(), exercise(), pair()]))).unwrap();
         let vacuum: i64 = db.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
@@ -394,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn 外键的第一列已是主键的第一列时不另建索引_按它找子行走主键自带的索引() {
+    fn foreign_key_leading_column_matching_primary_key_does_not_create_duplicate_index() {
         let db = Connection::open_in_memory().unwrap();
         let set = json!({
             "name": "set",
@@ -412,8 +411,8 @@ mod tests {
     }
 
     #[test]
-    fn 已有的表只补新的列_带默认值的旧行取默认值_再跑一遍什么也不变() {
-        let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT; INSERT INTO workout VALUES ('w1', '腿日');");
+    fn existing_table_only_adds_new_columns_and_is_idempotent() {
+        let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT; INSERT INTO workout VALUES ('w1', 'leg day');");
         define(&db, &declared(json!([workout()]))).unwrap();
         let after = schema(&db);
         define(&db, &declared(json!([workout()]))).unwrap();
@@ -423,31 +422,31 @@ mod tests {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .unwrap();
-        assert_eq!(row, ("w1".to_owned(), "腿日".to_owned(), 0));
+        assert_eq!(row, ("w1".to_owned(), "leg day".to_owned(), 0));
     }
 
     #[test]
-    fn 已有的表主键与声明的不同_打开时就报错() {
+    fn existing_table_primary_key_mismatch_fails_on_define() {
         let db = opened(r#"CREATE TABLE pair ("left" TEXT, "right" TEXT, PRIMARY KEY ("left", "right"))"#);
         let single = json!({ "name": "pair", "columns": [text("left"), text("right")], "key": ["left"], "indexes": [], "foreignKeys": [] });
         assert_eq!(
             incompatible(&db, json!([single])),
-            "pair 的主键改了（库里是 left, right，声明的是 left）：主键不能改，换一张表"
+            "primary key of pair changed (database has left, right, declared has left): primary keys cannot change; use a new table"
         );
         define(&db, &declared(json!([pair()]))).unwrap();
     }
 
     #[test]
-    fn 已有的列改了类型_打开时报错() {
+    fn existing_column_type_mismatch_fails_on_define() {
         let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
         assert_eq!(
             incompatible(&db, json!([workout()])),
-            "workout.done 的类型改了（库里是 text，声明的是 integer）：类型不能改，换一张表"
+            "type of workout.done changed (database has text, declared has integer): column types cannot change; use a new table"
         );
     }
 
     #[test]
-    fn 已有的表加非空_没有固定默认值的列_打开时报错_带固定默认值的照常补() {
+    fn adding_not_null_column_without_fixed_default_fails_while_fixed_default_succeeds() {
         let with_reps = |default: Value| {
             let mut table = workout();
             table["columns"]
@@ -457,10 +456,9 @@ mod tests {
             json!([table])
         };
         let db = opened(
-            "CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT; INSERT INTO workout VALUES ('w1', '腿日', 0);",
+            "CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT; INSERT INTO workout VALUES ('w1', 'leg day', 0);",
         );
-        let message =
-            "workout.reps 非空、又没有固定的默认值：已有的表加这样的列，旧行与没升级的 App 写的行都放不下，改成可空或给固定的默认值";
+        let message = "workout.reps is not null without a fixed default: adding such a column to an existing table fails on existing rows and un-upgraded apps; make it nullable or provide a fixed default";
         assert_eq!(incompatible(&db, with_reps(Value::Null)), message);
         assert_eq!(incompatible(&db, with_reps(json!("NULL"))), message);
         define(&db, &declared(with_reps(json!("5")))).unwrap();
@@ -468,14 +466,14 @@ mod tests {
     }
 
     #[test]
-    fn 库里的_text_n_与声明的_text_算同一种类型() {
+    fn database_text_with_length_matches_declared_text() {
         let coded = json!({ "name": "coded", "columns": [text("id"), text("code")], "key": ["id"], "indexes": [], "foreignKeys": [] });
         let db = opened("CREATE TABLE coded (id TEXT PRIMARY KEY, code TEXT(20))");
         define(&db, &declared(json!([coded]))).unwrap();
     }
 
     #[test]
-    fn 主键列不收_null() {
+    fn primary_key_columns_reject_null() {
         let db = Connection::open_in_memory().unwrap();
         define(&db, &declared(json!([pair()]))).unwrap();
         let error = db.execute("INSERT INTO pair VALUES (NULL, 'a')", []).unwrap_err();
@@ -483,14 +481,14 @@ mod tests {
     }
 
     #[test]
-    fn 声明里的字段名写错就报错() {
+    fn misspelled_declaration_field_name_fails() {
         let mut table = pair();
         table["columns"][0]["defualt"] = json!("5");
         assert!(serde_json::from_value::<Vec<Table>>(json!([table])).is_err());
     }
 
     #[test]
-    fn 哪张表合不上_前面建的表也不留() {
+    fn any_table_failure_rolls_back_entire_definition() {
         let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
         incompatible(&db, json!([pair(), workout()]));
         assert!(!schema(&db).iter().any(|(name, _)| name == "pair"));

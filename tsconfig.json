@@ -5,7 +5,7 @@
     "module": "nodenext",
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
-    // 接入方从 node_modules 里直接跑的脚本写成 JS（Node 不擦那里的 TS 类型），类型照样查
+    // Scripts run directly from dependencies are JavaScript (Node does not strip TypeScript types there), with type checking enabled.
     "allowJs": true,
     "checkJs": true,
     "types": ["node"]

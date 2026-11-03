@@ -9,8 +9,9 @@ import { serving, write } from './test-schema.ts';
 import { cloudStorage, deviceStorage } from './test-storage.ts';
 import { Connection } from './test-sync.ts';
 
-// 一次写很多行：照计划建出全部训练（训练、动作、组拆成三张表）是一条写；删掉全部训练连带删动作与组也是一条写。
-// 规模取教练计划的最大值（96 个训练，每个训练 17 个动作、35 组），约 5 千行，通知超过 1 MB，在线的另一台设备改走 HTTP 拉取
+// Writing many rows in a single write: creating a full plan (workout, exercise, and set tables) is one write;
+// deleting all workouts cascading exercises and sets is also one write. Sized to coach plan maximum (96 workouts,
+// 17 exercises, 35 sets, ~5,000 rows); notification exceeds 1 MB, so the other online device falls back to HTTP pull.
 
 const workout = sqliteTable('workout', { id: text().primaryKey(), title: text().notNull() });
 const exercise = sqliteTable('exercise', {
@@ -38,26 +39,26 @@ const schema = [
 const workouts = 96;
 const exercisesPerWorkout = 17;
 const setsPerWorkout = 35;
-/** 计划里一个动作、一组带的其余字段（处方、备注、单位等），取它们 JSON 的常见长度 */
+/** Remaining fields attached to an exercise or set in a plan (prescriptions, notes, units), sized to typical JSON lengths. */
 const notes = {
   rest_timer: 90,
-  notes: '保持核心收紧，下放两秒，底部停一秒',
+  notes: 'Keep core tight, 2s eccentric, 1s pause at bottom',
   muscles: ['quads', 'glutes'],
   video: 'https://example.com/v.mp4',
 };
 const target = { target: 5, target_type: 'reps', intensity: 75, intensity_unit: 'percent', progressions: [] };
 
-/** 主键长（41 个字符）的动作 id：主键的 JSON 大，几万行就超过 DO 单个值 2 MB */
+/** Long primary key (41 chars) exercise id: primary key JSON is large, exceeding 2 MB single-value limit at tens of thousands of rows. */
 const longId = (e: number) => `${'e'.repeat(36)}${String(e).padStart(5, '0')}`;
 
-/** 一条本机写插入 count 个动作；一条语句的绑定参数有上限，分几条插 */
+/** Inserts count exercises in a single local write; splits across statements to stay within parameter limits. */
 const insertExercises = (device: Device, count: number, workout_id?: string, from = 0) =>
   write(device, async (tx) => {
-    if (workout_id && from === 0) await tx.insert(workout).values({ id: workout_id, title: '第 1 天' });
+    if (workout_id && from === 0) await tx.insert(workout).values({ id: workout_id, title: 'Day 1' });
     for (let start = from; start < from + count; start += 1000)
       await tx
         .insert(exercise)
-        .values(Array.from({ length: 1000 }, (_, e) => ({ id: longId(start + e), workout_id, sort: start + e, name: '动作' })));
+        .values(Array.from({ length: 1000 }, (_, e) => ({ id: longId(start + e), workout_id, sort: start + e, name: 'exercise' })));
   });
 
 function setup() {
@@ -66,24 +67,24 @@ function setup() {
   const events: Event[] = [];
   const { network, server } = serving(space, undefined, (event) => events.push(event));
   const devices = [0, 1].map((index) => {
-    // 新库建表前切到 incremental 的 auto_vacuum（openSyncline 也这样开库），暂存清掉后才收缩得了
+    // Switch to incremental auto_vacuum before creating tables (as openSyncline does); reclaimed only after stage tables clear.
     const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema);
     const device = new Device(storage, tables);
     const connection = new Connection(device.private, { url: 'https://sync.test/space', ...network.options(index) });
     const db = drizzle(storage);
     const counts = () => [workout, exercise, set].map((table) => db.select().from(table).all().length);
-    /** 库文件里空着的页：SQLite 删数据不缩文件，空页留在文件里 */
+    /** Free pages in database: SQLite does not shrink files on delete; free pages remain in file. */
     const freelist = () => Number(storage.sql.exec('PRAGMA freelist_count').toArray()[0]?.freelist_count);
     return { device, connection, counts, freelist };
   });
   const run = () => drain(network);
-  /** 两台设备都连上、收完补齐 */
+  /** Both devices connected and caught up. */
   const online = async () => {
     for (const { connection } of devices) connection.start();
     await run();
   };
   const [phone, tablet] = devices as [(typeof devices)[0], (typeof devices)[0]];
-  /** 手机一条写删掉全部训练（连带删动作与组），两台设备都空了、待上传被确认 */
+  /** Phone deletes all workouts (cascading exercises and sets) in one write; both devices become empty and pending writes confirm. */
   const deleteAll = async () => {
     await write(phone.device, (tx) => tx.delete(workout));
     await run();
@@ -96,7 +97,7 @@ function setup() {
 
 type Side = ReturnType<typeof setup>['phone'];
 
-/** 手机连上，离线攒下的写全部上传、确认，云端有 count 个动作 */
+/** Phone connects, all queued offline writes are pushed and confirmed, and the cloud has count exercises. */
 async function pushOffline(phone: Side, run: () => Promise<void>, count: number) {
   phone.connection.start();
   await run();
@@ -104,25 +105,25 @@ async function pushOffline(phone: Side, run: () => Promise<void>, count: number)
   expect(phone.counts()).toEqual([0, count, 0]);
 }
 
-/** 设备有 count 个动作，库文件的空页随即收缩掉（收缩在提交之后分几步做） */
+/** Device has count exercises and database free pages shrink shortly after (shrink steps run in batches after commit). */
 async function expectCompacted(device: Side, count: number) {
   expect(device.counts()).toEqual([0, count, 0]);
   await vi.waitFor(() => expect(device.freelist()).toBe(0));
 }
 
-test('一条写建出整个计划的训练、动作与组（约 5 千行）：上传一次，在线的另一台设备拉到全部；再一条写删掉全部训练，连带删的动作与组两台都没了', async () => {
+test('single write creates full workout plan (~5k rows): pushes once, online device pulls all; deleting workouts cascades to clear all', async () => {
   const { phone, tablet, devices, run, online, deleteAll } = setup();
   await online();
 
   await write(phone.device, async (tx) => {
     for (let w = 0; w < workouts; w += 1) {
-      await tx.insert(workout).values({ id: `w${w}`, title: `第 ${w + 1} 天` });
+      await tx.insert(workout).values({ id: `w${w}`, title: `Day ${w + 1}` });
       await tx.insert(exercise).values(
         Array.from({ length: exercisesPerWorkout }, (_, e) => ({
           id: `w${w}e${e}`,
           workout_id: `w${w}`,
           sort: e,
-          name: `动作 ${e}`,
+          name: `exercise ${e}`,
           extra: notes,
         })),
       );
@@ -148,7 +149,7 @@ test('一条写建出整个计划的训练、动作与组（约 5 千行）：�
   for (const { connection } of devices) connection.stop();
 }, 60_000);
 
-test('离线时攒下很多条写（共约 3 MB，一条约 100 KB）：连上后分批推送，前一批确认了再推下一批，全部确认；一条的确认通知就超过 WebSocket 一条消息的上限，云端只发提示、不断开，设备连着走 HTTP 拉取确认', async () => {
+test('offline writes (~3 MB total, ~100 KB each) push in batches; large poke notification sends hint, device pulls over HTTP without disconnect', async () => {
   const { phone, run, server, events } = setup();
   const sizes: number[] = [];
   const receive = server.receive.bind(server);
@@ -161,7 +162,7 @@ test('离线时攒下很多条写（共约 3 MB，一条约 100 KB）：连上�
     await write(phone.device, (tx) =>
       tx
         .insert(exercise)
-        .values(Array.from({ length: 100 }, (_, e) => ({ id: `w${w}e${e}`, sort: e, name: `动作 ${e}`, extra: { note } }))),
+        .values(Array.from({ length: 100 }, (_, e) => ({ id: `w${w}e${e}`, sort: e, name: `exercise ${e}`, extra: { note } }))),
     );
   expect(JSON.stringify(phone.device.private.pending()).length).toBeGreaterThan(3_000_000);
 
@@ -171,31 +172,31 @@ test('离线时攒下很多条写（共约 3 MB，一条约 100 KB）：连上�
   phone.connection.stop();
 }, 60_000);
 
-test('离线时攒下很多条小写（每条约 1 KB，共约 300 KB）：连上后分批推送、全部确认；一批在上限之内，确认的通知装得下，不用改走 HTTP', async () => {
+test('small offline writes (~1 KB each, ~300 KB total) push in batches and confirm inline via poke without falling back to HTTP', async () => {
   const { phone, run, events } = setup();
   const note = 'x'.repeat(1000);
   for (let e = 0; e < 300; e += 1)
-    await write(phone.device, (tx) => tx.insert(exercise).values({ id: `e${e}`, sort: e, name: '动作', extra: { note } }));
+    await write(phone.device, (tx) => tx.insert(exercise).values({ id: `e${e}`, sort: e, name: 'exercise', extra: { note } }));
 
   await pushOffline(phone, run, 300);
   expect(events.filter(({ type }) => type === 'connection.closed')).toEqual([]);
   phone.connection.stop();
 });
 
-test('一次本机写的改动超过 8 MiB：写入时抛错、整条回滚，不记进待上传', async () => {
+test('single local write exceeding 8 MiB throws and rolls back completely without queueing in pending writes', async () => {
   const { phone } = setup();
-  // 汉字一个 3 字节：上限按字节算，一行约 1 MiB
-  const name = '深'.repeat((1024 * 1024) / 3);
+  // 3 bytes per character: limit is byte-based, roughly 1 MiB per row.
+  const name = '€'.repeat((1024 * 1024) / 3);
   await expect(
     write(phone.device, (tx) => tx.insert(exercise).values(Array.from({ length: 9 }, (_, e) => ({ id: `e${e}`, sort: e, name })))),
-  ).rejects.toThrow('改动太多');
+  ).rejects.toThrow('local write is too large');
   expect(phone.counts()).toEqual([0, 0, 0]);
   expect(phone.device.private.pending()).toEqual([]);
   await write(phone.device, (tx) => tx.insert(exercise).values(Array.from({ length: 7 }, (_, e) => ({ id: `e${e}`, sort: e, name }))));
   expect(phone.device.private.pending()).toHaveLength(1);
 });
 
-test('一条写改到的行的主键超过 DO 单个值 2 MB（4 万行）：提交记录拆成连续几版、每版远在 DO 单个值 2 MB 之内；两台设备照常收敛、待上传被确认', async () => {
+test('single write with primary keys exceeding 2 MB limit (40k rows): commit log splits into versions under 2 MB, devices converge', async () => {
   const { phone, tablet, devices, run, cloud, online } = setup();
   await online();
   await insertExercises(phone.device, 40_000);
@@ -206,15 +207,15 @@ test('一条写改到的行的主键超过 DO 单个值 2 MB（4 万行）：提
   const commits = cloud.sql.exec('SELECT length(CAST(keys AS BLOB)) AS bytes FROM _syncline_commit WHERE version > 0').toArray();
   expect(commits.length).toBeGreaterThan(1);
   expect(Math.max(...commits.map(({ bytes }) => Number(bytes)))).toBeLessThanOrEqual(1_000_000);
-  // 拆成几版也照样记下客户端处理到了这条写
+  // Recording lmid still tracks that the client write was processed even when split into versions.
   expect(cloud.sql.exec('SELECT lmid FROM _syncline_client').toArray()).toEqual([{ lmid: 1 }]);
   for (const { connection } of devices) connection.stop();
 }, 60_000);
 
-test('删一行连带删很多子行（一层 6 万行，主键的 JSON 超过 DO 单个值 2 MB）：云端分批删，两台设备都收敛', async () => {
+test('deleting a row cascades to 60k child rows exceeding 2 MB key limit: cloud deletes in batches and both devices converge', async () => {
   const { phone, tablet, run, online, deleteAll } = setup();
   await online();
-  // 一次本机写至多 8 MiB：分两次写
+  // Single local write capped at 8 MiB: split across two writes.
   await insertExercises(phone.device, 30_000, 'w1');
   await insertExercises(phone.device, 30_000, 'w1', 30_000);
   await run();
@@ -222,7 +223,7 @@ test('删一行连带删很多子行（一层 6 万行，主键的 JSON 超过 D
   await deleteAll();
 }, 120_000);
 
-test('整份拉取分了很多块：暂存的块生效、删掉后库文件随即收缩，不留下和暂存一样大的空页', async () => {
+test('full pull split across many chunks: staged chunks take effect and delete, database shrinks immediately without leftover free pages', async () => {
   const { phone, tablet, run } = setup();
   phone.connection.start();
   await run();
@@ -232,26 +233,26 @@ test('整份拉取分了很多块：暂存的块生效、删掉后库文件随�
   tablet.connection.start();
   await run();
   await expectCompacted(tablet, 20_000);
-  // 再整份拉一次，照样截掉空页
+  // Refetches again, shrinking free pages just the same.
   await Promise.all([tablet.connection.resync(), run()]);
   await expectCompacted(tablet, 20_000);
   for (const { connection } of [phone, tablet]) connection.stop();
 }, 60_000);
 
-test('服务端的写一行行删掉 500 个父行：攒成一批连带删，每层子表只查两次（先数、再删），不随父行数涨，没有孤儿行', () => {
+test('server write deleting 500 parents: batches cascading deletes with two scans per child table, constant queries, no orphans', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, tables);
   space.mutate((tx) => {
     for (let w = 0; w < 500; w += 1) {
-      tx.insert(workout, { id: `w${w}`, title: '训练' });
-      tx.insert(exercise, { id: `e${w}`, workout_id: `w${w}`, sort: 0, name: '动作' });
+      tx.insert(workout, { id: `w${w}`, title: 'workout' });
+      tx.insert(exercise, { id: `e${w}`, workout_id: `w${w}`, sort: 0, name: 'exercise' });
       tx.insert(set, { id: `s${w}`, exercise_id: `e${w}`, sort: 0 });
     }
   });
   const exec = cloud.sql.exec;
   const scans: string[] = [];
   cloud.sql.exec = (sql: string, ...bindings: unknown[]) => {
-    // 按父行先数、再连带删子行：每批一条语句
+    // Count then cascade delete children for each parent batch: one statement per batch.
     const scanned = /^(?:DELETE|SELECT count\(\*\) .*?) FROM "(exercise|set)" WHERE .* IN \(SELECT json_extract/.exec(sql)?.[1];
     if (scanned) scans.push(scanned);
     return exec(sql, ...bindings);

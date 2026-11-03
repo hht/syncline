@@ -9,21 +9,21 @@ import { offline, type SyncStatus } from './status.ts';
 import type { Channel, Held, LocalDatabase, OpenOptions, Schema } from './syncline.ts';
 
 /**
- * App 这一头的 Syncline，三端一样：调用交给下面（手机上的原生模块、web 的 Worker，里面都是 Rust 的设备），回复按编号交回；
- * 改到的表、扣下的写、各空间的同步状态交给订阅者；替下面取 token、按接入方的 Standard Schema 查本机写改到的行（Drizzle 的表与校验只在 JS 里有）。
- * 打开时把 Drizzle 的表编成纯数据交下去，只看声明的检查在这里做。参数与结果按 JSON 传：BLOB 是字节的数组，JSON 写不了的无穷大另标。
- * 不该知道的：下面是什么、库在哪、同步怎么进行。
+ * Drives the client-side synchronization interface identically across iOS, Android, and web.
+ * Forwards calls to engine; emits changes, held writes, and status to subscribers; resolves tokens and validates writes;
+ * encodes tables as metadata on open; and marshals parameters/results via JSON (Uint8Array for BLOBs, explicit non-finite numbers).
+ * What this module must not know: Host platform implementation, storage location, or internal sync protocol mechanics.
  */
 
-/** 交给下面的调用（核心的输入，加上开库、关库） */
+/** Call sent to the engine (core input plus open and close operations). */
 export type Call = { type: string } & Record<string, unknown>;
 
-/** 下面交回的：核心的指令，与下面坏了（核心线程出错、Worker 坏了） */
+/** Messages emitted by the engine: core instructions and unrecoverable failures (crashed core thread or Worker error). */
 export type Received = Delivered | { type: 'broken'; message: string };
 
 type Reply = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
-/** 参数编成 JSON：BLOB 是字节的数组，JSON 写不了的无穷大另标（NaN 照 SQLite 存成空） */
+/** Encodes parameters as JSON: Uint8Array to byte array, non-finite numbers to explicit objects (NaN stored as null per SQLite). */
 export const encode = (value: unknown) =>
   value instanceof Uint8Array
     ? Array.from(value)
@@ -31,11 +31,11 @@ export const encode = (value: unknown) =>
       ? { real: String(value) }
       : value;
 
-/** 结果里的 BLOB（字节的数组）还原成 Uint8Array */
+/** Reconstructs Uint8Array from byte-array BLOB values in query result rows. */
 export const decodeRows = (rows: unknown[][]) =>
   rows.map((row) => row.map((value) => (Array.isArray(value) ? Uint8Array.from(value) : value)));
 
-/** 打开要交下去的（核心的 `Opening`）：表编成纯数据；在线校验和一直开着，每天的行数不给用核心的默认 */
+/** Serializes opening options for the core: encodes tables as metadata; leaves daily checksum rows to core defaults unless specified. */
 function opening<S extends Schema>(options: OpenOptions<S>) {
   const { schema, localOnly = {}, retired = [], readOnly = [], validation, owner, discardPending, checksumRowsPerDay } = options;
   const tables = Object.values(schema);
@@ -55,7 +55,7 @@ function opening<S extends Schema>(options: OpenOptions<S>) {
   };
 }
 
-/** 一个空间的同步在这一头记着的：状态（下面报来之前是占位的「在连」，还不知道同步过没有）、订阅者、token() */
+/** In-memory state tracked per sync channel: status snapshot (initialized to connecting), subscriber callbacks, and token getter. */
 type Space = { status: SyncStatus; listeners: Set<(status: SyncStatus) => void>; token: () => Promise<string> };
 
 const connecting = (): SyncStatus => ({
@@ -68,7 +68,7 @@ const connecting = (): SyncStatus => ({
   updateNeeded: false,
 });
 
-/** listener 加进订阅者，返回取消订阅 */
+/** Adds listener to set and returns an unsubscribe callback. */
 const subscribe =
   <L>(listeners: Set<L>) =>
   (listener: L) => {
@@ -78,7 +78,7 @@ const subscribe =
     };
   };
 
-/** 调用的回复：signal 中止时带着它的原因失败、不再等（下面照常做完） */
+/** Awaits reply promise with optional abort signal cancellation, rejecting immediately on abort without waiting for engine response. */
 export function abortable(reply: Promise<unknown>, signal?: AbortSignal): Promise<void> {
   if (!signal) return reply.then(() => undefined);
   return new Promise((resolve, reject) => {
@@ -90,8 +90,8 @@ export function abortable(reply: Promise<unknown>, signal?: AbortSignal): Promis
 }
 
 /**
- * 一次本机写跨好几次调用：begin（轮到它时回复，编号就是这次写）、body 里的 execute、end（提交或回滚）；body 抛错就回滚、再抛出原来的错
- * （本机库已关时这次写早已回滚，回滚的回复是出错，不理会）
+ * Executes a local write transaction spanning begin, execute statements, and commit/rollback.
+ * Rolls back and rethrows if body throws; ignores rollback error if local database was closed concurrently.
  */
 export async function localWrite<T>(write: number, call: (call: Call, id?: number) => Promise<unknown>, body: () => Promise<T>) {
   await call({ type: 'begin' }, write);
@@ -106,17 +106,17 @@ export async function localWrite<T>(write: number, call: (call: Call, id?: numbe
   return result;
 }
 
-/** 替下面取一个空间的 token，回 token 调用：token() 同步抛的、拒绝的、没有这个空间的都当取不到，带着出的错（多久没给由核心计时） */
+/** Fetches token for a sync channel and sends token response, relaying thrown errors or missing channel failures to core. */
 export function answerToken(token: (() => Promise<string>) | undefined, channel: string, request: number, send: (call: Call) => void) {
-  new Promise<string>((resolve) => resolve(token ? token() : Promise.reject(new Error(`没有这个空间的同步：${channel}`)))).then(
+  new Promise<string>((resolve) => resolve(token ? token() : Promise.reject(new Error(`No sync channel for space: ${channel}`)))).then(
     (value) => send({ type: 'token', request, token: value }),
     (error: unknown) => send({ type: 'token', request, error: error instanceof Error ? error.message : String(error) }),
   );
 }
 
 /**
- * 按 Standard Schema 查本机写改到的行，给出 validated 调用的结果：不合时是哪张表哪里不合；查的时候出了别的错（接入方的 schema 抛错、返回 Promise）
- * 带着它的消息，核心回滚这次写、把错交给写的调用方，不让这次写一直等
+ * Validates mutated rows against Standard Schema definitions and returns validation result.
+ * Returns schema violations as invalid issues; catches other errors (schema throws or returns Promise) and forwards message to rollback.
  */
 export function validated(validator: Validator, rows: { table: string; row: Record<string, unknown> }[]) {
   try {
@@ -136,9 +136,9 @@ export class Client {
   readonly #changes = new Set<(tables: ReadonlySet<string>) => void>();
   readonly #held = new Set<(writes: Held[]) => void>();
   #next = 0;
-  /** 下面坏了的原因：之后的调用都以它失败 */
+  /** Cause of unrecoverable host failure: subsequent calls reject with this error. */
   #broken: Error | undefined;
-  /** 开库的回复：各空间的同步等它 */
+  /** Promise resolving when initial open operation completes, awaited by space channels. */
   #opened: Promise<unknown> = Promise.resolve();
   #closing: Promise<void> | undefined;
 
@@ -151,8 +151,8 @@ export class Client {
   }
 
   /**
-   * 开库（平台另给的字段放进 open 调用，web 上是库名），开私有空间的同步，回它：开库出错（如换了人、上一个人还有没上传的写）
-   * 由各空间的同步记成它们的下载出错，之后的读写回「本机库已关闭」
+   * Opens local database and initializes private space synchronization.
+   * On open failure (such as pending writes from another account), marks downloadError across space channels; subsequent operations fail.
    */
   open(platform: Record<string, unknown> = {}) {
     const { url, token } = this.#options;
@@ -160,7 +160,7 @@ export class Client {
     return this.channel('', url, token);
   }
 
-  /** 交下去，等它的回复（出错照 JS 的错还原） */
+  /** Dispatches call to engine and awaits reply, deserializing structured errors. */
   call<T>(call: Call, id = this.#id()): Promise<T> {
     if (this.#broken) return Promise.reject(this.#broken);
     return new Promise<T>((resolve, reject) => {
@@ -174,7 +174,7 @@ export class Client {
     return this.#next;
   }
 
-  /** 下面交回的一批（订阅者抛的错由 notifyAll 报出，接入方的 Standard Schema 出的错回给核心，都不耽误同一批后面的） */
+  /** Dispatches received messages to handlers; subscriber errors report via notifyAll and schema errors return to core. */
   receive(received: Received[]) {
     for (const message of received) this.#receive(message);
   }
@@ -206,7 +206,7 @@ export class Client {
     }
   }
 
-  /** 下面坏了：在等的调用都以这个错失败、各空间的同步状态记成下载出错，之后的调用直接失败 */
+  /** Marks engine broken: rejects pending calls, sets downloadError across spaces, and rejects subsequent calls. */
   broken(error: Error) {
     this.#broken = error;
     for (const reply of this.#replies.values()) reply.reject(error);
@@ -215,9 +215,9 @@ export class Client {
   }
 
   /**
-   * 关库（call 由平台给，只发一次，再调给同一个 Promise）。回复到了：还在等的（关库之后才发出的，回复与调用一样按先后，之前发的都已回了）
-   * 与之后的调用都以「本机库已关闭」失败，下面已不再交回这一次打开的回复，同步状态不变；再做平台的收尾（closed）。
-   * 下面坏了（之前或关的途中）也算关完：库已随它关掉（核心线程先关库再交 broken，坏了的 Worker 已被结束），之后照样能删库
+   * Closes the database: issues close call once and returns shared promise.
+   * On completion, rejects subsequent and in-flight calls with "Local database is closed" and invokes closed callback.
+   * Treats engine failure as completed close since resources are released.
    */
   close(call: Call, closed: () => void) {
     this.#closing ??= this.call<void>(call)
@@ -225,7 +225,7 @@ export class Client {
         if (error !== this.#broken) throw error;
       })
       .finally(() => {
-        this.#broken = new Error('本机库已关闭');
+        this.#broken = new Error('Local database is closed');
         for (const reply of this.#replies.values()) reply.reject(this.#broken);
         this.#replies.clear();
         closed();
@@ -233,7 +233,7 @@ export class Client {
     return this.#closing;
   }
 
-  /** 一个空间在下面打开出错：记成它的下载出错，界面照常从状态里看到 */
+  /** Records open failure for a channel as downloadError in its status snapshot. */
   failed(channel: string, error: Error) {
     const space = this.#spaces.get(channel);
     if (space) this.#report(channel, { ...space.status, connecting: false, downloadError: error });
@@ -246,7 +246,7 @@ export class Client {
     notifyAll(space.listeners, status);
   }
 
-  /** 本机库：读写交下去 */
+  /** Local database interface forwarding queries and writes to engine. */
   readonly local: LocalDatabase = {
     query: async (sql, params) => decodeRows(await this.call<unknown[][]>({ type: 'query', sql, params: params.map(encode) })),
     tablesOf: (sql) => this.call<string[]>({ type: 'tablesOf', sql }),
@@ -265,14 +265,11 @@ export class Client {
     onHeld: subscribe(this.#held),
   };
 
-  /** 开一个共用空间的同步（平台的 shared） */
+  /** Initializes shared space synchronization. */
   readonly share = (name: string, tables: SQLiteTable[], url: string, token: () => Promise<string>, owner?: string) =>
     this.channel(name, url, token, { tables, owner });
 
-  /**
-   * 开一个空间的同步：等开库，共用空间先占下（tables 是它的表），建好（报一次状态）再开始。出错（开库出错、同步地址不对、表重名）记成这个空间的下载出错，
-   * 不停在占位的「在连」
-   */
+  /** Initializes synchronization for a channel after database open finishes; records errors as downloadError. */
   channel(name: string, url: string, token: () => Promise<string>, shared?: { tables: SQLiteTable[]; owner: string | undefined }): Channel {
     const space: Space = { status: connecting(), listeners: new Set(), token };
     this.#spaces.set(name, space);
@@ -294,7 +291,7 @@ export class Client {
       sync: (options) => abortable(this.call({ type: 'sync', channel: name }), options?.signal),
       resync: (options) =>
         abortable(this.call({ type: 'resync', channel: name, discardPending: options?.discardPending ?? false }), options?.signal),
-      // 不报错：库没打开、关了、下面坏了时什么也不做（这些已在同步状态里）
+      // No-op on closed database or engine crash; failure state is reflected in sync status.
       reconnect: () => void this.call({ type: 'reconnect', channel: name }).catch(() => undefined),
     };
   }

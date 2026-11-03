@@ -1,5 +1,6 @@
-//! 对一轮校验和：要的人（私有空间的哪一次连接、测试的调用）在对着就等这一轮，否则开始；一步步对，对完告诉各个要的人。
-//! 不该知道的：怎么对、对不上怎么办。
+//! Checksum verification rounds: requesters (specific private space connection attempts or test calls) await an ongoing round or initiate a new one;
+//! steps through verification incrementally and notifies all waiters upon completion.
+//! What it should not know: how verification is performed or how mismatches are repaired.
 
 use super::Client;
 use crate::sync::Job;
@@ -7,27 +8,27 @@ use crate::sync::instructions::{Timer, Work};
 use crate::verifier::Progress;
 use serde_json::Value as Json;
 
-/// 在对的一轮校验和：认哪一次连接还算数（第一个要它的；测试直接要的没有），对完要告诉的
+/// Active checksum verification round: tracks the connection attempt that initiated it (None for direct test calls) and awaiting waiters.
 pub(super) struct Verification {
     pub(super) live: Option<u64>,
     pub(super) waiters: Vec<Waiter>,
 }
 
-/// 要校验和结果的：私有空间的哪一次连接，或测试的调用
+/// Awaiting checksum verification outcome: private space connection attempt or test call.
 #[derive(Clone, Copy)]
 pub(super) enum Waiter {
     Attempt(u64),
-    #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "只有测试的构建直接要校验和"))]
+    #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "direct checksum requests are test-only"))]
     Reply(u64),
 }
 
 impl Client {
-    /// 私有空间的这次连接还算数（测试直接要的总算数）、本机库没关：校验和据此判断这一段还能不能用
+    /// Returns whether the private space connection attempt remains active (direct test calls are always active) and the database is open.
     pub(super) fn live(&self, attempt: Option<u64>) -> bool {
         !self.closed && attempt.is_none_or(|attempt| self.connections.get("").is_some_and(|connection| connection.live(attempt)))
     }
 
-    /// 要对一段校验和：在对着就等这一轮，否则开始；没装、不能对就作罢
+    /// Requests checksum verification: joins ongoing round if active, otherwise initiates one; no-op if disabled or cannot run.
     pub(super) fn verify(&mut self, waiter: Waiter, jobs: &mut Vec<Job>, now: f64) {
         if let Some(verification) = &mut self.verification {
             return verification.waiters.push(waiter);
@@ -52,7 +53,7 @@ impl Client {
         }
     }
 
-    /// 对一步；对完了告诉要它的各次连接
+    /// Executes one verification step, notifying waiters upon completion.
     pub(super) fn verify_step(&mut self, jobs: &mut Vec<Job>, now: f64) {
         let Some(verification) = &self.verification else { return };
         let live = self.live(verification.live);

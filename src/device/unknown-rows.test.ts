@@ -5,7 +5,8 @@ import { captureReported } from '../test/test-errors.ts';
 import { pulled } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
-// 云端的值放不进设备的列（两端这一列的类型不一致）：这一行先存进 _syncline_unknown、报出来；云端之后改了、删了这一行，存着的那份清掉
+// Cloud value incompatible with device column (types diverge across sides): row stored in _syncline_unknown and reported;
+// if cloud later modifies or deletes this row, stored copy is cleared.
 
 const workoutWithReps = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
 const createWorkout = 'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)';
@@ -13,7 +14,7 @@ const createWorkout = 'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, rep
 const rows = (storage: ReturnType<typeof deviceStorage>, table: string) =>
   storage.sql.exec(`SELECT * FROM "${table}" ORDER BY id`).toArray();
 
-/** 云端按 insert 插入这些行；设备是 STRICT 表，reps 只收整数 */
+/** Cloud inserts these rows; device uses STRICT table where reps accepts only integers. */
 function seeded(insert: string) {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, [workoutWithReps]);
@@ -22,28 +23,30 @@ function seeded(insert: string) {
   return { cloud, space, storage, device: new Device(storage, [workoutWithReps]) };
 }
 
-test('云端的值放不进设备的列（两端这一列的类型不一致）：这一行先存进 _syncline_unknown、报出来，这次收下照常生效，校验和对得上', async () => {
-  const { space, storage, device } = seeded("INSERT INTO workout VALUES ('w1', '深蹲', 'abc'), ('w2', '卧推', 3)");
+test('cloud value incompatible with device column (types diverge): row stored in _syncline_unknown and reported, receive takes effect, checksum matches', async () => {
+  const { space, storage, device } = seeded("INSERT INTO workout VALUES ('w1', 'squat', 'abc'), ('w2', 'bench press', 3)");
   const reported = captureReported();
   await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000_000));
   expect(device.private.cookie()).toEqual(space.head());
-  expect(rows(storage, 'workout')).toEqual([{ id: 'w2', note: '卧推', reps: 3, _extra: null }]);
+  expect(rows(storage, 'workout')).toEqual([{ id: 'w2', note: 'bench press', reps: 3, _extra: null }]);
   expect(storage.sql.exec('SELECT name, row FROM _syncline_unknown').toArray()).toEqual([
-    { name: 'workout', row: '{"id":"w1","note":"深蹲","reps":"abc"}' },
+    { name: 'workout', row: '{"id":"w1","note":"squat","reps":"abc"}' },
   ]);
   expect(reported).toHaveLength(1);
   expect(await device.private.verify()).toBe(true);
 });
 
-test('存着的放不进的行，云端之后改了或删了：一条条写与暂存后一次写都把存着的那份清掉，升级后不把旧值写回来', async () => {
-  const { space, storage, device } = seeded("INSERT INTO workout VALUES ('w1', '深蹲', 'abc'), ('w2', '卧推', 3), ('w3', '硬拉', 'xyz')");
+test('incompatible row modified or deleted by cloud later: single writes and batch apply both clear stored copy, upgrade does not restore stale value', async () => {
+  const { space, storage, device } = seeded(
+    "INSERT INTO workout VALUES ('w1', 'squat', 'abc'), ('w2', 'bench press', 3), ('w3', 'deadlift', 'xyz')",
+  );
   captureReported();
   await device.private.receive(pulled(space, device));
   expect(storage.sql.exec('SELECT count(*) AS n FROM _syncline_unknown').toArray()).toEqual([{ n: 2 }]);
-  // 一条条写：删掉 w1
+  // Sequential write: delete w1
   space.mutate((tx) => tx.delete(workoutWithReps, { id: 'w1' }));
   await device.private.receive(pulled(space, device));
-  // 暂存后一次写：改 w3、w2，分两块拉
+  // Staged batch apply: update w3 and w2, pulled in two chunks
   space.mutate((tx) => tx.update(workoutWithReps, { id: 'w3', reps: 7 }));
   space.mutate((tx) => tx.update(workoutWithReps, { id: 'w2', reps: 4 }));
   for (let pulled = space.pull(device.private.pullRequest(), 1); ; pulled = space.pull(device.private.pullRequest(), 1)) {
@@ -52,17 +55,17 @@ test('存着的放不进的行，云端之后改了或删了：一条条写与�
   }
   expect(storage.sql.exec('SELECT name, row FROM _syncline_unknown').toArray()).toEqual([]);
   expect(rows(storage, 'workout')).toEqual([
-    { id: 'w2', note: '卧推', reps: 4, _extra: null },
-    { id: 'w3', note: '硬拉', reps: 7, _extra: null },
+    { id: 'w2', note: 'bench press', reps: 4, _extra: null },
+    { id: 'w3', note: 'deadlift', reps: 7, _extra: null },
   ]);
 });
 
-test('已同步过的行，云端新值放不进设备的列：同一主键只在一处，校验和对得上、不触发重下', async () => {
-  const { cloud, space, storage, device } = seeded("INSERT INTO workout VALUES ('w1', '深蹲', 3), ('w2', '卧推', 4)");
+test('synced row receives incompatible cloud update: primary key exists in only one place, checksum matches without triggering redownload', async () => {
+  const { cloud, space, storage, device } = seeded("INSERT INTO workout VALUES ('w1', 'squat', 3), ('w2', 'bench press', 4)");
   captureReported();
   await device.private.receive(pulled(space, device));
-  // 云端把 w1 的 reps 改成设备的 INTEGER 列放不进的值（云端表不是 STRICT，放得进）
-  space.mutate((tx) => tx.update(workoutWithReps, { id: 'w1', note: '深蹲改' }));
+  // Cloud updates w1 reps to value incompatible with device INTEGER column (cloud is non-STRICT)
+  space.mutate((tx) => tx.update(workoutWithReps, { id: 'w1', note: 'squat updated' }));
   cloud.sql.exec("UPDATE workout SET reps = 'abc' WHERE id = 'w1'");
   await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000_000));
   const synced = storage.sql.exec("SELECT id FROM workout WHERE id = 'w1'").toArray().length;
@@ -71,13 +74,13 @@ test('已同步过的行，云端新值放不进设备的列：同一主键只�
   const { ranges } = device.private.pullRequest();
   expect(
     { copies: synced + unknown, matched, ranges },
-    `w1 在同步表 ${synced} 份、在 _syncline_unknown ${unknown} 份；校验和${matched ? '对上' : '对不上'}`,
+    `w1 has ${synced} in synced table, ${unknown} in _syncline_unknown; checksum ${matched ? 'matches' : 'mismatches'}`,
   ).toEqual({ copies: 1, matched: true, ranges: undefined });
 });
 
 /**
- * 设备的 workout 表还没有 reps（id 是 key 类型的主键）：从云端（rows 是插进去的值）同步一遍，reps 存进 _extra；
- * 再像 App 升级那样给表加上 reps INTEGER。返回云端的空间与设备的库
+ * Device workout table does not yet have reps (id is primary key of type key): syncs from cloud (rows inserted),
+ * storing reps in _extra; then alters table to add reps INTEGER as in app upgrade. Returns cloud space and device storage.
  */
 async function upgraded(key: 'TEXT' | 'INTEGER', rows: string) {
   const id = key === 'TEXT' ? text().primaryKey() : integer().primaryKey();
@@ -94,23 +97,23 @@ async function upgraded(key: 'TEXT' | 'INTEGER', rows: string) {
   return { space, storage, declared };
 }
 
-test('升级后声明了先前存在 _extra 里的列，有的值放不进（两端这一列的类型不一致）：放得进的照常还原，放不进的留在 _extra、报出来，库照常打开', async () => {
-  const { space, storage, declared } = await upgraded('TEXT', "('w1', '深蹲', 'abc'), ('w2', '卧推', 3)");
+test('upgrade declares column previously stored in _extra with incompatible values: compatible restored, incompatible stays in _extra and reported, database opens normally', async () => {
+  const { space, storage, declared } = await upgraded('TEXT', "('w1', 'squat', 'abc'), ('w2', 'bench press', 3)");
   const reported = captureReported();
   new Device(storage, [declared]);
   expect(rows(storage, 'workout')).toEqual([
-    { id: 'w1', note: '深蹲', reps: null, _extra: '{"reps":"abc"}' },
-    { id: 'w2', note: '卧推', reps: 3, _extra: null },
+    { id: 'w1', note: 'squat', reps: null, _extra: '{"reps":"abc"}' },
+    { id: 'w2', note: 'bench press', reps: 3, _extra: null },
   ]);
   expect(reported).toEqual([expect.stringContaining('reps')]);
-  // 再打开也照常（不再搬、不再报）；留在 _extra 里的值照样算进校验和，与云端对得上
+  // Reopening proceeds normally (no re-migration, no re-reporting); values in _extra still included in checksum, matching cloud
   const after = new Device(storage, [declared]);
   expect(reported).toHaveLength(1);
   await after.private.receive(space.pull({ ...after.private.pullRequest(), checksum: '' }, 1_000_000_000));
   expect(await after.private.verify()).toBe(true);
 });
 
-test('升级时一行行搬 _extra：整数主键的表 rowid 就是主键，0 与负数的行也搬（不从 rowid 0 之后搬起）', async () => {
+test('migrating _extra row by row during upgrade: integer primary key rowid includes 0 and negative numbers (does not start after rowid 0)', async () => {
   const { storage, declared } = await upgraded('INTEGER', "(-1, 'a', 5), (0, 'b', 6), (1, 'c', 'abc'), (2, 'd', 7)");
   const reported = captureReported();
   new Device(storage, [declared]);
@@ -120,10 +123,10 @@ test('升级时一行行搬 _extra：整数主键的表 rowid 就是主键，0 �
     { id: 1, reps: null, _extra: '{"reps":"abc"}' },
     { id: 2, reps: 7, _extra: null },
   ]);
-  expect(reported).toEqual([expect.stringContaining('有 1 行')]);
+  expect(reported).toEqual([expect.stringContaining('has 1 row(s)')]);
 });
 
-test('升级时一行行搬 _extra：整数主键恰为 Number.MIN_SAFE_INTEGER 的行也搬到列里', async () => {
+test('migrating _extra row by row during upgrade: row with integer primary key at Number.MIN_SAFE_INTEGER migrated to column', async () => {
   const min = Number.MIN_SAFE_INTEGER;
   const { storage, declared } = await upgraded('INTEGER', `(${min}, 'min', 5), (1, 'bad', 'abc')`);
   captureReported();
@@ -131,7 +134,7 @@ test('升级时一行行搬 _extra：整数主键恰为 Number.MIN_SAFE_INTEGER 
   expect(storage.sql.exec('SELECT reps, _extra FROM workout WHERE id = ?', min).toArray()).toEqual([{ reps: 5, _extra: null }]);
 });
 
-test('升级时一行行搬 _extra：超过一批（1000 行）时接着从上一批最后的 rowid 往后搬，不漏不重', async () => {
+test('migrating _extra row by row during upgrade: exceeding one batch (1000 rows) resumes from last rowid of previous batch without loss or duplication', async () => {
   const values = Array.from({ length: 2500 }, (_, index) => `(${index - 1200}, 'n', ${index === 7 ? "'abc'" : index})`).join(', ');
   const { storage, declared } = await upgraded('INTEGER', values);
   const reported = captureReported();
@@ -139,5 +142,5 @@ test('升级时一行行搬 _extra：超过一批（1000 行）时接着从上�
   expect(storage.sql.exec('SELECT count(*) AS moved FROM workout WHERE reps IS NOT NULL AND _extra IS NULL').toArray()).toEqual([
     { moved: 2499 },
   ]);
-  expect(reported).toEqual([expect.stringContaining('有 1 行')]);
+  expect(reported).toEqual([expect.stringContaining('has 1 row(s)')]);
 });

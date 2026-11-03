@@ -7,21 +7,22 @@ import { random } from './test-random.ts';
 import { write } from './test-schema.ts';
 import { cloudStorage, deviceStorage, failOnce, faultable, isInjected } from './test-storage.ts';
 
-// 设备在存储故障下（磁盘满、进程在两句之间被杀）：收下一块、一条通知或做一次本机写，要么整步生效、要么一点不留。
-// 一个种子决定云端的写、本机写、分块拉取、推送与在第几句出错；每一步之后查 P5（本机 = 游标那一版的云端 + 重放待上传），
-// 故障停止后拉完、推完，设备与云端一致
+// Devices under storage faults (disk full, process killed between statements): receiving a chunk, receiving a poke,
+// or executing a local write either takes effect in full or leaves no trace. A seed controls server writes, local writes,
+// chunked pulls, pushes, and failure statement index; P5 (local = cloud at cookie + replay pending) is checked after
+// every step; once faults stop, pulling and pushing converge the device with the cloud.
 
-/** 一块很小：整份与增量都分好几块 */
+/** Small chunk limit: both full and incremental pulls split across multiple chunks. */
 const chunkLimit = 120;
 
-/** 一个云端与一台存储会出错的设备，一个种子决定一切 */
+/** One cloud space and one device with simulated storage faults, fully determined by a random seed. */
 class Faulty {
   readonly cloud = cloudStorage(...schema);
   readonly space = new Space(this.cloud, tables);
   readonly #faults = faultable(deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema));
   readonly device = new Device(this.#faults.storage, tables);
   readonly #pick: () => number;
-  // 云端每个发出过的版本的快照，用来算设备应当看到什么
+  // Snapshots of every version emitted by the cloud, used to compute expected device state.
   readonly #history = new Map<string, Snapshot>([[formatCookie(head(this.cloud)), snapshot(this.cloud)]]);
   #labels = 0;
 
@@ -43,7 +44,7 @@ class Faulty {
     this.#record();
   }
 
-  /** 设备做一步，有时在第几句出错；出的错只许是注入的（Drizzle 把驱动的错包一层，原来的错在 cause 里） */
+  /** Executes a device step, occasionally injecting a fault at a statement index; only injected errors are caught. */
   async attempt(step: () => Promise<unknown>) {
     if (this.#pick() < 0.4) this.#faults.arm(1 + Math.floor(this.#pick() * 30));
     try {
@@ -65,15 +66,15 @@ class Faulty {
     if (poke && 'patch' in poke) await this.device.private.receive(poke);
   }
 
-  /** P5：本机 = 游标那一版的云端 + 重放待上传 */
+  /** P5: local = cloud at cookie + replay pending. */
   check() {
     const cookie = this.device.private.cookie();
     const base = cookie ? this.#history.get(formatCookie(cookie)) : { counter: [], tag: [] };
-    if (!base) throw new Error('设备的游标不是云端发出过的版本');
+    if (!base) throw new Error('device cookie is not an emitted cloud version');
     expect(snapshot(this.#faults.storage)).toEqual(replay(base, this.device.private.pending()));
   }
 
-  /** 拉到最新一版、推完了 */
+  /** Pulled up to head and all writes pushed. */
   settled() {
     return (
       !this.device.private.staging() &&
@@ -94,7 +95,7 @@ class Faulty {
 }
 
 test.for(Array.from({ length: 100 }, (_, seed) => seed))(
-  '种子 %i：存储随时出错，设备每一步要么整步生效、要么一点不留，之后照常收敛',
+  'seed %i: storage faults at any time; device steps take effect in full or leave no trace, converging once faults stop',
   async (seed) => {
     const run = new Faulty(seed);
     const { device } = run;
@@ -106,25 +107,25 @@ test.for(Array.from({ length: 100 }, (_, seed) => seed))(
       else await run.attempt(() => writes[action](device, run.choose(keys), run.label()));
       run.check();
     }
-    // 故障停止：拉到最新一版、推完
+    // Stop faults: pull up to head and push all pending writes.
     for (let round = 0; round < 200 && !run.settled(); round += 1) {
       if (device.private.staging() || device.private.cookie()?.version !== head(run.cloud).version) await run.pull();
       else await run.push();
       run.check();
     }
     expect(run.converged()).toBe(true);
-    // 对校验和：拉一次带 checksum 的（云端当场算），再一段段算本机的与它比
+    // Verify checksums: pull with checksum computed by cloud, then verify against local ranges.
     await device.private.receive(run.space.pull({ ...device.private.pullRequest(), checksum: '' }, chunkLimit));
     expect(await device.private.verify()).toBe(true);
   },
 );
 
 /**
- * 本机写提交那句（RELEASE）出错、事务还开着：这条写一点不留、不占序号，下一条照用这个序号，云端收到的序号连续、不跳不重。
- * 另一种结果（已被自动回滚：磁盘满、I/O 错）注入造不出，还没有测试守着
- * @see https://sqlite.org/lang_transaction.html（Response To Errors Within A Transaction）
+ * When RELEASE fails on committing a local write while the transaction remains open: leaves no trace and consumes no mutation ID;
+ * the next write uses that mutation ID so pushed IDs remain sequential without gaps or duplicates.
+ * @see https://sqlite.org/lang_transaction.html (Response To Errors Within A Transaction)
  */
-test('本机写提交那句出错（事务还开着）：这条写一点不留、不占序号，之后的写照常推上去', async () => {
+test('local write commit RELEASE fails with open transaction: leaves no trace, next write pushes cleanly', async () => {
   const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema);
   failOnce(storage, 'RELEASE syncline_write');
   const device = new Device(storage, tables);
@@ -140,7 +141,7 @@ test('本机写提交那句出错（事务还开着）：这条写一点不留�
   expect(snapshot(cloud).counter).toEqual([{ id: 'a', n: 2 }]);
 });
 
-test('Syncline 自己的事务（收下云端的改动）提交那句出错、事务还开着：这次收下一点不留、事务结束，之后的本机写照常提交，重收照常', async () => {
+test('internal sync transaction commit RELEASE fails with open transaction: leaves no trace, subsequent writes and pulls succeed', async () => {
   const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema);
   const device = new Device(storage, tables);
   const cloud = cloudStorage(...schema);
@@ -158,18 +159,18 @@ test('Syncline 自己的事务（收下云端的改动）提交那句出错、�
   expect(snapshot(storage)).toEqual(snapshot(cloud));
 });
 
-test('设备的磁盘满了（SQLITE_FULL，SQLite 自动回滚了整个事务）：本机写抛出的是磁盘满，不是回滚时找不到保存点；腾出地方后照常写', async () => {
+test('device disk full (SQLITE_FULL rolls back entire transaction): throws disk full error and succeeds once space is freed', async () => {
   const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema);
   const device = new Device(storage, tables);
   const used = storage.sql.exec('PRAGMA page_count').toArray()[0]?.page_count;
   storage.sql.exec(`PRAGMA max_page_count = ${used}`);
-  // 一次写约 200 KB：400 个标签，主键各约 500 字符（主键至多 512 字节，keyBytes）
+  // Single write of ~200 KB: 400 tags with ~500-char primary keys (keyBytes cap is 512 bytes).
   const big = () =>
     write(device, async (tx) => {
       await tx.insert(counter).values({ id: 'a', n: 1 }).onConflictDoNothing();
       for (let index = 0; index < 400; index += 1) await tx.insert(tag).values({ id: `t${index}`.padEnd(490, 'x'), counter_id: 'a' });
     });
-  // Drizzle 把驱动的错包一层，原来的错在 cause 里
+  // Drizzle wraps driver errors, original error in cause.
   await expect(big()).rejects.toMatchObject({ cause: { message: expect.stringMatching(/full/) } });
   storage.sql.exec('PRAGMA max_page_count = 1073741823');
   await big();

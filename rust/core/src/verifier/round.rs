@@ -1,6 +1,6 @@
-//! 对一段：开始时记下设备这一刻的样子，一批批读本机的这一段算校验和，中途库变了、连接停了就作罢；读完与云端的比，
-//! 对上了记下下一段从哪起，对不上报出、记下这一段的各部分等重下。
-//! 不该知道的：什么时候该对、拉取带什么。
+//! Verifying a range: captures device state at the start, reads local rows in this range in batches to compute checksum, aborting if database changes or connection stops; after reading, compares with cloud;
+//! on match, records next range starting point; on mismatch, reports and records parts of this range awaiting redownload.
+//! What it should not know: when verification is due, what pull requests carry.
 
 use super::{Moment, Progress, Verifier, state, update};
 use crate::checksum::{self, BATCH, Position};
@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use rusqlite::types::Value;
 use std::collections::HashMap;
 
-/// 正在对的一段：开头的状态（mark）、各张同步表的主键、云端给的、要读的各部分、读到哪、已算的和
+/// Range currently being verified: initial state mark, primary keys of synced tables, expected checksum from cloud, parts to read, current position, accumulated checksum.
 pub(super) struct Running {
     start: String,
     keys: HashMap<String, Vec<String>>,
@@ -23,22 +23,22 @@ pub(super) struct Running {
 }
 
 impl Verifier {
-    /// 正在对一段
+    /// Whether currently verifying a range.
     #[must_use]
     pub fn running(&self) -> bool {
         self.running.is_some()
     }
 
-    /// 开始对一段：能对（还能对、数据没在变、有云端给的这一版的）就记下开头，返回真；不能对返回假（作罢）
+    /// Begins verifying a range: records initial state and returns true if verification can proceed (still active, data unchanged, expected checksum available for version); returns false otherwise (aborted).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn begin(&mut self, db: &Connection, moment: &Moment) -> Result<bool, Error> {
         let mark = if moment.live { moment.mark.clone() } else { None };
         let (Some(start), Some(expected)) = (mark, self.expected_at(moment.cookie.as_ref()).cloned()) else {
             return Ok(false);
         };
-        // 最后一段：云端不同步、本机还存着的表的行也算进来（云端那边是 0），残留的对得出来
+        // Final range: includes rows in local tables not synced to cloud (cloud counts 0 for them), detecting orphaned rows.
         let mut parts = expected.parts.clone();
         if let Some(tables) = &expected.tables {
             parts.extend(checksum::others(db, moment.keys, tables)?);
@@ -55,10 +55,10 @@ impl Verifier {
         Ok(true)
     }
 
-    /// 对一步（一批，或读完之后比一比）：库变了（连接、库都还在）这一段减半、作罢；不能对了作罢；对完了按对上没有记下
+    /// Verifies one step (a batch, or compares after finishing read): if database changed (connection and database still active), halves range and aborts; aborts if cannot verify; records outcome once completed.
     ///
     /// # Errors
-    /// 读写库出错（调用方报出、作罢）。
+    /// Returns an error if reading or writing database fails (caller reports and aborts).
     pub fn step(&mut self, db: &Connection, moment: &Moment, effects: &mut Effects, now: f64) -> Result<Progress, Error> {
         let Some(mut running) = self.running.take() else {
             return Ok(Progress::Done(None));
@@ -92,24 +92,24 @@ impl Verifier {
             .collect();
         let refetch = self.mismatched(db, &ranges, expected.next, expected.rows.max(BATCH), now)?;
         effects.report(format!(
-            "Syncline：本机的数据与云端对不上（校验和 {}，云端 {}），{}",
+            "syncline: local data does not match cloud (checksum {}, cloud {}), {}",
             running.sum,
             expected.sum,
             if refetch {
-                "按范围重下这一段"
+                "redownloading range"
             } else {
-                "重下过仍对不上，跳过这一段"
+                "mismatch persisted after redownload, skipping range"
             }
         ));
         Ok(Progress::Done(Some(false)))
     }
 
-    /// 不对了（出错、库关了）：丢掉正在对的
+    /// Aborts verification (error, database closed): discards ongoing verification.
     pub fn stop(&mut self) {
         self.running = None;
     }
 
-    /// 还能接着对：库没变；变了（连接、库都还在）这一段减半
+    /// Can continue verifying: database unchanged; if changed (connection, database still active), halves range.
     fn unchanged(db: &Connection, running: &Running, moment: &Moment) -> Result<bool, Error> {
         if moment.mark.as_deref() == Some(running.start.as_str()) {
             return Ok(true);
@@ -121,7 +121,7 @@ impl Verifier {
         Ok(false)
     }
 
-    /// 对不上：重下过还对不上就只跳过这一段（返回假）；没重下过记下要按范围重下的几段，再对时要同样多的行（返回真）
+    /// Mismatch handling: skips range if mismatch persists after redownload (returns false); if not yet redownloaded, records ranges to redownload and requests same row count on next verification (returns true).
     fn mismatched(&mut self, db: &Connection, parts: &[PullRange], next: Option<String>, rows: i64, now: f64) -> Result<bool, Error> {
         if state(db)?.repaired {
             self.passed(db, next, now)?;
@@ -136,13 +136,13 @@ impl Verifier {
                 ("rows", Value::Integer(rows)),
             ],
         )?;
-        // 重下的拉取接着要这一段
+        // Subsequent pull with redownload requests this range again.
         self.asked_at = f64::NEG_INFINITY;
         self.expected = None;
         Ok(true)
     }
 
-    /// 这一段过了：最后一段是对完一轮，记下时刻、下一轮从头、从最长的段起；不是就记下下一段从哪起，接着就要
+    /// Range passed: final range completes round, recording timestamp; next round starts from beginning with maximum range size; otherwise records next range starting position and requests immediately.
     fn passed(&mut self, db: &Connection, next: Option<String>, now: f64) -> rusqlite::Result<()> {
         match next {
             None => update(
@@ -159,7 +159,7 @@ impl Verifier {
                 self.asked_at = f64::NEG_INFINITY;
             }
         }
-        // 这一版的这一段不再对
+        // This version of this range will not be verified again.
         self.expected = None;
         Ok(())
     }

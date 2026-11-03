@@ -6,14 +6,14 @@ import { socketLimit } from '../common/protocol.ts';
 import { RecordingSocket } from './test-sockets.ts';
 import { cloudStorage } from './test-storage.ts';
 
-// 慢网：WebSocket 上的一条消息要在心跳的期限内传完。补齐与通知按 UTF-8 字节封顶在 socketLimit，装不下就只发提示、连接不断，
-// 设备连着改走 HTTP（HTTP 按多久没收到数据计时）；
-// 推送一批封顶在它的一半
+// Slow network: each WebSocket message must transfer within heartbeat deadline. Catch-up and poke messages are capped at socketLimit
+// in UTF-8 bytes; messages exceeding it send only a hint while keeping connection open, falling back to HTTP pull (timed by idle data receipt);
+// push batches are capped at half that limit.
 
 const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)';
-/** 一个汉字在 UTF-8 里 3 字节：字符数在 socketLimit 之内、字节数超过它的正文 */
-const wide = '深'.repeat(Math.ceil(socketLimit / 2));
+/** 3 UTF-8 bytes per character: character count is within socketLimit while byte size exceeds it. */
+const wide = '€'.repeat(Math.ceil(socketLimit / 2));
 
 function served() {
   const space = new Space(cloudStorage(createNote), [note]);
@@ -27,10 +27,10 @@ function served() {
   return { space, server, connect };
 }
 
-/** 收到的消息：解析成对象 */
+/** Received messages decoded into objects. */
 const messages = (end: { sent: string[] }) => end.sent.map((text) => JSON.parse(text) as unknown);
 
-test('补齐按 UTF-8 字节算：字符数在上限之内、字节数超过的，只发提示、连接不断，设备连着改走 HTTP', () => {
+test('catch-up sized in UTF-8 bytes: character count within limit but byte size exceeding sends hint without disconnect', () => {
   const { space, server, connect } = served();
   const cookie = space.head();
   server.mutate((tx) => tx.insert(note, { id: 'n1', body: wide }));
@@ -41,7 +41,7 @@ test('补齐按 UTF-8 字节算：字符数在上限之内、字节数超过的�
   expect(messages(connect())).toEqual([expect.objectContaining({ base: space.head(), patch: [] })]);
 });
 
-test('通知按 UTF-8 字节算：字节数超过上限的，在线连接只收到提示、连接不断，连着改走 HTTP', () => {
+test('poke sized in UTF-8 bytes: byte size exceeding limit sends hint to online connection without disconnect', () => {
   const { space, server, connect } = served();
   const online = connect();
   online.sent.length = 0;
@@ -50,14 +50,14 @@ test('通知按 UTF-8 字节算：字节数超过上限的，在线连接只收�
   expect(messages(online)).toEqual([{ hint: space.head() }]);
 });
 
-test('通知的改动按 UTF-8 字节数封顶（私有与共用空间的通知都这样拼）：字符数在 limit 之内、字节数超过的，不带改动', () => {
+test('poke patch capped by UTF-8 bytes in private and shared spaces: char count within limit but bytes exceeding omits patch', () => {
   const space = new Space(cloudStorage(createNote), [note]);
   const mutation = { client: 'c1', id: 1, changes: [{ op: 'put' as const, table: 'note', row: { id: 'n1', body: wide } }] };
   expect(space.push([mutation], socketLimit)).not.toHaveProperty('patch');
 });
 
-test('整条通知按字节再核一次：改动很小、扣下的写很多（每条带原因），整条超过上限也只发提示', () => {
-  // 云端的 body 是 STRICT 的整数列（cloudStorage 再接上 WITHOUT ROWID），设备推来的是文本：每条都扣下
+test('poke rechecked by total bytes: small patch with many held writes exceeding limit sends hint instead', () => {
+  // Cloud body is a STRICT integer column (cloudStorage appends WITHOUT ROWID); device pushes text, so every mutation is held.
   const space = new Space(cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body INTEGER) STRICT,'), [note]);
   const sockets: Socket[] = [];
   const server = new Server({ acceptWebSocket: (end) => sockets.push(end), getWebSockets: () => sockets }, space);

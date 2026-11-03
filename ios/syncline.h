@@ -1,4 +1,4 @@
-// Rust 的设备一侧（rust/native）给 Swift 的 C 接口；句柄与字符串的归属见 rust/native/src/ffi.rs
+// C FFI interface between the native Rust sync engine (`rust/native`) and Swift.
 #pragma once
 
 typedef struct SynclineHandle SynclineHandle;

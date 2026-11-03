@@ -1,6 +1,9 @@
 /**
- * 等 work 做完，过了 ms 毫秒还没做完就以 message 失败：去处一直不回话（导出者、广播分片卡住）时照样结束、按退避重排，
- * 不卡到平台的墙钟上限被杀。没做完的 work 不能取消，只是不再等它
+ * Awaits work and rejects with message if it does not finish within ms milliseconds.
+ *
+ * When an external destination stops responding (such as a stalled exporter or broadcast shard),
+ * this finishes and allows rescheduling with backoff rather than stalling until terminated by
+ * platform wall-clock limits. Unfinished work cannot be cancelled, but is no longer awaited.
  */
 export function withTimeout<T>(work: Promise<T>, ms: number, message: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;

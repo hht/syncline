@@ -1,7 +1,7 @@
-//! 一个空间里本机存不进同步表的行怎么另存（`_syncline_unknown`）：本机还没有的表（云端比设备新）的行，与值放不进本机列的行，
-//! 按主键的规范写法存，写就覆盖、删除就删，云端清掉的照样清；之后再试着写回同步表的由 `SyncedTables` 取走。
-//! 删掉的表跨所有空间丢掉它存着的行（`clear_table`）。都在调用方开好的本机事务里执行。
-//! 不该知道的：什么时候写回、写回到哪张表。
+//! How rows that cannot fit into local synced tables for a space are retained in `_syncline_unknown`: rows of tables not yet existing locally (cloud newer than device), and rows whose values do not fit local columns,
+//! stored by canonical primary key string representation, overwritten on put, removed on delete, cleared when cloud clears; subsequently retrieved by `SyncedTables` to reattempt writing into synced tables.
+//! Dropped tables have their retained rows discarded across all spaces (`clear_table`). All executed within local transactions opened by callers.
+//! What it should not know: when to restore, which table to restore into.
 
 use crate::change::Row;
 use crate::error::Error;
@@ -15,7 +15,7 @@ pub struct UnknownRows {
     space: String,
 }
 
-/// 取走的一行：主键与整行
+/// A taken row: primary key and full row.
 pub struct Taken {
     pub key: Row,
     pub row: Row,
@@ -27,10 +27,10 @@ impl UnknownRows {
         UnknownRows { space: space.to_owned() }
     }
 
-    /// 这张表有没有存着的行
+    /// Returns whether this table has retained rows.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn has(&self, db: &Connection, table: &str) -> rusqlite::Result<bool> {
         exists(
             db,
@@ -39,10 +39,10 @@ impl UnknownRows {
         )
     }
 
-    /// 存一行
+    /// Stores a row.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn put(&self, db: &Connection, table: &str, key: &Row, row: &Row) -> rusqlite::Result<()> {
         db.prepare_cached(
             "INSERT INTO _syncline_unknown (name, row, space, key) VALUES (?, ?, ?, ?) ON CONFLICT (space, name, key) DO UPDATE SET row = excluded.row",
@@ -51,20 +51,20 @@ impl UnknownRows {
         Ok(())
     }
 
-    /// 删掉存着的这一行
+    /// Deletes a retained row.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn del(&self, db: &Connection, table: &str, key: &Row) -> rusqlite::Result<()> {
         db.prepare_cached("DELETE FROM _syncline_unknown WHERE space = ? AND name = ? AND key = ?")?
             .execute(params![self.space, table, key_text(key)])?;
         Ok(())
     }
 
-    /// 清掉存着的这张表的行（给了 range 是主键在这一段里的）；不给表是这个空间的全部
+    /// Clears retained rows for this table (matching primary key `range` if specified); clears all for this space if table is None.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn clear(&self, db: &Connection, table: Option<&str>, range: Option<&KeyRange>) -> rusqlite::Result<()> {
         let Some(table) = table else {
             db.execute("DELETE FROM _syncline_unknown WHERE space = ?", [&self.space])?;
@@ -83,19 +83,19 @@ impl UnknownRows {
         Ok(())
     }
 
-    /// 存着的这张表的行去掉这几列（paths 是各列的 JSON 路径）
+    /// Removes columns from retained rows of this table (`paths` are JSON paths for each column).
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn drop_columns(&self, db: &Connection, table: &str, paths: &[String]) -> rusqlite::Result<()> {
         remove_paths(db, "_syncline_unknown", "space = ? AND name = ?", paths, &self.space, table)?;
         Ok(())
     }
 
-    /// 取走存着的这张表的行（删掉、交给调用方写回，写不回的它再存）
+    /// Takes retained rows for this table (deletes them and returns to caller for writing back; caller re-stores any that fail).
     ///
     /// # Errors
-    /// 读写库出错；存着的行读不出。
+    /// Returns an error if reading/writing database fails or retained rows cannot be parsed.
     pub fn take(&self, db: &Connection, table: &str) -> Result<Vec<Taken>, Error> {
         let rows = db
             .prepare_cached("SELECT seq, row, key FROM _syncline_unknown WHERE space = ? AND name = ?")?
@@ -115,15 +115,15 @@ impl UnknownRows {
     }
 }
 
-/// 删掉的表：各空间存着的它的行都丢掉
+/// Dropped table: discards its retained rows across all spaces.
 ///
 /// # Errors
-/// 写库出错。
+/// Returns an error if writing to the database fails.
 pub fn clear_table(db: &Connection, table: &str) -> rusqlite::Result<()> {
     db.execute("DELETE FROM _syncline_unknown WHERE name = ?", [table])?;
     Ok(())
 }
 
 fn parsed(text: &str) -> Result<Row, Error> {
-    serde_json::from_str(text).map_err(|error| Error::Failed(format!("另存的行读不出：{error}")))
+    serde_json::from_str(text).map_err(|error| Error::Failed(format!("failed to parse retained row: {error}")))
 }

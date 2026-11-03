@@ -1,49 +1,52 @@
-//! 断了、出错之后过多久再试：第 n 次在 0 到 min(上限, 基数 × 2^n) 毫秒之间随机等（全抖动），
-//! 云端给了重连的窗口（spread，广播分片按连着的设备数给）就至少摊开到它；身份到期前 1 到 4 分钟之间随机挑一刻自己重连。
-//! 不该知道的：怎么连、连上之后做什么。
-//! @see <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/>（full jitter）
+//! Backoff delay calculation after disconnect or error: attempt n waits randomly between
+//! 0 and `min(MAX_DELAY, BASE_DELAY * 2^n)` milliseconds (full jitter); when cloud provides
+//! a reconnect window (spread, sent by broadcast shards based on active connection count),
+//! spreads out across at least that window; proactively reconnects between 1 and 4 minutes
+//! before token expiry.
+//! What it should not know: how to connect or what to do once connected.
+//! @see <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/> (full jitter)
 
 pub const BASE_DELAY: f64 = 1000.0;
 pub const MAX_DELAY: f64 = 30_000.0;
-/// 身份到期前至少这么久就自己重连，在这之前再随机提前至多这么久
+/// Proactively reconnects at least this long before token expiry, with random jitter up to `RENEW_SPREAD`
 const RENEW_BEFORE: f64 = 60_000.0;
 const RENEW_SPREAD: f64 = 180_000.0;
 
-/// 0 到 1 之间的随机数（外面给：手机上 Rust 自取，wasm 里是 JS 的 `Math.random`，测试里是替身）
+/// Random float in [0, 1) provided by caller: mobile uses Rust RNG, wasm uses JS `Math.random`, tests use stub
 pub type Random = Box<dyn FnMut() -> f64>;
 
 #[derive(Default)]
 pub struct Backoff {
-    /// 连着失败了几次
+    /// Consecutive failure count
     attempt: i32,
-    /// 云端给的重连窗口（毫秒）
+    /// Cloud-provided reconnect window in milliseconds
     spread: f64,
 }
 
 impl Backoff {
-    /// 第 attempt 次重试前等多久
+    /// Computes delay before attempt
     pub fn of(&self, attempt: i32, random: &mut Random) -> f64 {
         random() * self.spread.max(MAX_DELAY.min(BASE_DELAY * 2f64.powi(attempt)))
     }
 
-    /// 又失败了一次：这次等多久（之后再失败等得更久）
+    /// Computes next delay after another failure and increments attempt count
     pub fn next(&mut self, random: &mut Random) -> f64 {
         let delay = self.of(self.attempt, random);
         self.attempt = self.attempt.saturating_add(1);
         delay
     }
 
-    /// 有进展了：从头算
+    /// Resets backoff count upon progress
     pub fn reset(&mut self) {
         self.attempt = 0;
     }
 
-    /// 记下云端给的重连窗口
+    /// Records cloud-provided reconnect window
     pub fn spread(&mut self, spread: f64) {
         self.spread = spread;
     }
 
-    /// 身份还有 `expires_in` 毫秒到期：过多久自己换 token 重连；不到 1 分钟就不重连（取 token 的一方来不及给新的）
+    /// Computes delay before proactive token renewal reconnect given `expires_in` milliseconds remaining; returns None if under 1 minute (token provider may not have fresh token ready)
     pub fn renewal(expires_in: f64, random: &mut Random) -> Option<f64> {
         (expires_in > RENEW_BEFORE).then(|| (expires_in - RENEW_BEFORE - random() * RENEW_SPREAD).max(0.0))
     }

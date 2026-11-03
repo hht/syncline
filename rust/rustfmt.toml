@@ -1,2 +1,2 @@
-# 与 biome 的 lineWidth 一致
+# Matches biome lineWidth
 max_width = 140

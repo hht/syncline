@@ -7,7 +7,7 @@ import type { GateResult } from './run-gates.ts';
 
 const bin = (name: string) => resolve(import.meta.dirname, '../../node_modules/.bin', name);
 
-/** 给一次运行一个临时目录，用完删掉 */
+/** Runs a task with an isolated scratch directory that is removed upon completion. */
 export async function inScratchDir(run: (dir: string) => Promise<GateResult>) {
   const dir = mkdtempSync(join(tmpdir(), 'syncline-check-'));
   try {
@@ -17,7 +17,7 @@ export async function inScratchDir(run: (dir: string) => Promise<GateResult>) {
   }
 }
 
-/** 跑一个命令，输出交给 parse 转成问题；有的工具有问题也返回 0，所以两者都要看 */
+/** Runs a command and parses its output into problems; checks both process exit status and problem count. */
 export function runTool(
   cwd: string,
   file: string,
@@ -27,7 +27,7 @@ export function runTool(
 ): Promise<GateResult> {
   return new Promise((done) => {
     execFile(file, args, { cwd, maxBuffer: 1 << 28, env: { ...process.env, ...env } }, (error, stdout, stderr) => {
-      // 命令本身起不来（没装、不在路径上）时两路输出都是空的，日志里写上错误
+      // If the command cannot spawn (not installed or missing from PATH), stdout and stderr are empty; record error message in log output.
       const output = stdout + stderr || (error?.message ?? '');
       const problems = parse(output);
       done({ ok: !error && problems.length === 0, output, problems });
@@ -35,7 +35,7 @@ export function runTool(
   });
 }
 
-/** 几次运行合成一个门禁结果：都通过才通过 */
+/** Combines multiple gate runs into a single result; passes only if all runs pass. */
 export const together = (results: GateResult[]): GateResult => ({
   ok: results.every((result) => result.ok),
   output: results.map((result) => result.output).join('\n'),
@@ -46,20 +46,20 @@ type BiomeReport = { diagnostics: { category: string; message: string; location:
 
 export const biome = (cwd: string) => (files: string[] | undefined) =>
   runTool(cwd, bin('biome'), ['check', '--reporter=json', '--no-errors-on-unmatched', ...(files ?? ['.'])], (output) => {
-    // 配置出错时没有报告，交给调度器指向日志
+    // When configuration fails no report is emitted; leave problems empty so the runner points to the log.
     const start = output.indexOf('{"summary"');
     if (start === -1) return [];
     const report: BiomeReport = JSON.parse(output.slice(start, output.lastIndexOf('}') + 1));
     return report.diagnostics.map(({ category, message, location }) => ({
       file: location.path,
-      // 格式问题不落在某一行，报告里行号是 0
+      // Formatting diagnostics do not pinpoint a line; report lists line 0.
       line: Math.max(1, location.start.line),
       rule: category,
       message,
     }));
   });
 
-/** 各项目并行跑 tsc；files 不影响范围，类型错误可能出现在没改的文件里 */
+/** Runs tsc in parallel across projects; files do not narrow scope because type errors can appear in unchanged files. */
 export const typecheck = (cwd: string, projects: string[]) => async () => {
   const results = await Promise.all(
     projects.map((project) =>
@@ -76,10 +76,10 @@ export const typecheck = (cwd: string, projects: string[]) => async () => {
   return together(results);
 };
 
-// reachable 规则的违规是经几层间接引用到的，不对应源码里的一条 import，报告里没有 unresolvedTo
+// Reachable rule violations stem from transitive import chains and lack a single import statement or unresolvedTo in report.
 type CruiseReport = { summary: { violations: { from: string; to: string; unresolvedTo?: string; rule: { name: string } }[] } };
 
-/** 报告里没有行号，用源码里写的模块路径找回所在行；报告会去掉 node: 前缀 */
+/** Reports omit line numbers; resolves the line by matching the module specifier in source code, stripping node: prefix. */
 function lineOf(cwd: string, file: string, specifier: string) {
   const quoted = new RegExp(`['"](node:)?${specifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`);
   return (
@@ -98,7 +98,7 @@ export const layers = (cwd: string, paths: string[]) => () =>
       file: from,
       line: unresolvedTo === undefined ? 1 : lineOf(cwd, from, unresolvedTo),
       rule: rule.name,
-      message: `引用 ${to}`,
+      message: `imports ${to}`,
     }));
   });
 
@@ -120,18 +120,18 @@ type Clone = { name: string; start: number };
 type CpdReport = { duplicates: { format: string; firstFile: Clone; secondFile: Clone; lines: number }[] };
 
 /**
- * 报告只写文件不走标准输出；报到第二处，第一处写进说明。
- * import 语句不算：同一模块引入的名字相近时，折行后的长 import 会被当成重复，而它不是重复的逻辑。
- * 只认 import 语句的形状（具名、命名空间、默认导入，可带 type）：jscpd 拿它对整个文件匹配，宽了会从正文里的「import」一直吞到后面的 from；
- * jscpd 按逗号把 --ignore-pattern 拆成几个，模式里的逗号写成 \x2c
+ * Reports are written to disk rather than stdout; the second duplicate location is reported with the first recorded in the message.
+ * Import statements are excluded: when similar names are imported from the same module, wrapped multi-line imports appear as duplicates without being duplicated logic.
+ * Matches import statements strictly (named, namespace, and default imports, optionally with type): jscpd matches against the whole file and a loose pattern would consume text across multiple declarations;
+ * jscpd splits --ignore-pattern on commas, so commas in the pattern are escaped as \x2c.
  */
 const importStatement = "import (type )?(\\{[^};]*\\}|\\* as \\w+|\\w+(\\x2c \\{[^};]*\\})?) from '[^']+';";
 
-/** 查得更严的一块：重复从更少的 token 起就报；ignore 是这一遍不查的文件（glob） */
+/** Strict duplicate checking configuration: reports duplicates starting at lower token thresholds; ignore specifies file globs skipped in this pass. */
 type Strict = { path: string; minTokens: number; ignore?: string };
 
 /**
- * strict 是查得更严的几块：全部照配置查一遍（含它们与别处之间的），每块再单独按 minTokens 查一遍，几遍报的同一处只算一次
+ * Strict duplicate checks: runs all paths against default configuration (including cross-path duplicates), then checks each strict path individually with minTokens, deduplicating identical problem reports.
  */
 export const duplicates =
   (cwd: string, paths: string[], strict: Strict[] = []) =>
@@ -152,7 +152,7 @@ export const duplicates =
     return { ...result, problems };
   };
 
-/** 照 .jscpd.json 查一遍重复，extra 是另加的参数；报告里是绝对路径，报出时换成相对 cwd 的 */
+/** Runs jscpd according to .jscpd.json with extra CLI arguments; converts absolute report paths to cwd-relative paths. */
 const clones = (cwd: string, paths: string[], extra: string[]) =>
   inScratchDir((out) => {
     const report = join(out, 'jscpd-report.json');
@@ -176,17 +176,17 @@ const clones = (cwd: string, paths: string[], extra: string[]) =>
         ...paths,
       ],
       () => {
-        // 配置出错时没有报告，交给调度器指向日志
+        // When configuration fails no report is emitted; leave problems empty so the runner points to the log.
         if (!existsSync(report)) return [];
         const { duplicates }: CpdReport = JSON.parse(readFileSync(report, 'utf8'));
-        // markdown 按「正文 + 内嵌代码块」分开查，文件名带「:格式」后缀
-        // 绝对路径是解析过软链的（macOS 的临时目录在 /private 下）：cwd 也取真实路径
+        // Markdown files are split into prose and embedded code blocks, appending :<format> to file paths.
+        // Paths are realpath-resolved (macOS tempdir is symlinked under /private); resolve cwd to its realpath as well.
         const name = (clone: Clone, format: string) => relative(realpathSync(cwd), clone.name.replace(`:${format}`, ''));
         return duplicates.map(({ format, firstFile, secondFile, lines }) => ({
           file: name(secondFile, format),
           line: secondFile.start,
           rule: 'jscpd',
-          message: `与 ${name(firstFile, format)}:${firstFile.start} 重复 ${lines} 行`,
+          message: `duplicates ${lines} lines from ${name(firstFile, format)}:${firstFile.start}`,
         }));
       },
     );
@@ -202,7 +202,7 @@ type VitestReport = {
 
 const firstLine = (text: string) => text.split('\n')[0] ?? '';
 
-/** vitest 的 json 报告：解析出失败的用例；文件加载失败时没有用例结果，报在第 1 行 */
+/** Parses test failures from vitest JSON report; if a test file fails to load, reports failure at line 1. */
 function reportProblems(cwd: string, report: string, rule: string): Problem[] {
   if (!existsSync(report)) return [];
   const { testResults }: VitestReport = JSON.parse(readFileSync(report, 'utf8'));
@@ -216,14 +216,15 @@ function reportProblems(cwd: string, report: string, rule: string): Problem[] {
         file,
         line: location?.line ?? 1,
         rule,
-        message: `${fullName}：${firstLine(failureMessages[0] ?? '')}`,
+        message: `${fullName}: ${firstLine(failureMessages[0] ?? '')}`,
       }));
   });
 }
 
 /**
- * json 报告只写文件，用来解析出问题；default 报告把完整的失败详情（断言差异、调用栈、fast-check 的种子与反例）打到输出里，存进门禁日志，
- * 解析出的问题只有第一行，偶发的失败要靠日志复现。文件加载失败时没有用例结果，报在第 1 行。TMPDIR 指向本次临时目录，vitest 自己的临时文件随之删掉
+ * Writes JSON report to file for parsing problem list, while default reporter outputs full failure details (diffs, stack traces,
+ * fast-check counterexamples) to stdout saved in the gate log. Parsed problems retain only the first line; logs preserve reproduction details.
+ * File loading failures report at line 1. TMPDIR points to the scratch directory so vitest's temporary files are cleaned up on completion.
  */
 export const tests = (cwd: string, args: string[]) => () =>
   inScratchDir((dir) => {

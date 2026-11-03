@@ -5,7 +5,7 @@ import type { Storage } from '../common/storage.ts';
 import { install, upload, write } from '../test/test-schema.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 
-// 本机写与外键的测试共用的：训练、动作、组三张表（外键一层层往下）的云端与设备
+// Shared test helpers for local write and foreign key tests: workout, exercise, set tables with cascading references.
 
 export const workout = sqliteTable('workout', {
   id: text().primaryKey(),
@@ -24,9 +24,9 @@ export const statements = [
   'CREATE TABLE "set" (id TEXT PRIMARY KEY, exercise_id TEXT)',
 ];
 
-export const w1 = { id: 'w1', note: '深蹲', reps: 5, weight: 102.5, done: true, extra: { rpe: 8 } };
+export const w1 = { id: 'w1', note: 'squat', reps: 5, weight: 102.5, done: true, extra: { rpe: 8 } };
 
-/** 云端与两台已收到训练 w1（带动作 e1）的设备 */
+/** Cloud space and two devices pre-populated with workout w1 and exercise e1. */
 export async function withWorkout() {
   const cloud = cloudStorage(...statements);
   const space = new Space(cloud, tables);
@@ -35,7 +35,7 @@ export async function withWorkout() {
   const devices = [phone.device, tablet.device];
   await write(phone.device, async (tx) => {
     await tx.insert(workout).values(w1);
-    await tx.insert(exercise).values({ id: 'e1', workout_id: 'w1', name: '深蹲' });
+    await tx.insert(exercise).values({ id: 'e1', workout_id: 'w1', name: 'squat' });
   });
   await upload(space, phone.device, devices);
   return { cloud, space, phone, tablet, devices };

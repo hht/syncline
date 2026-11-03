@@ -1,6 +1,6 @@
-//! 连接看到的一个空间的本机镜像：私有空间是设备本身，共用空间是设备里占下的那个；
-//! 连接只经它读游标、落后没有、待上传，收下拉取的结果与连接上的消息，与拉取发到哪、带什么。
-//! 不该知道的：连接的状态机；空间里的数据怎么存、怎么落地。
+//! Local mirror of a space seen by a connection: the private space is the device itself, while a shared space is the one occupied inside the device.
+//! The connection only accesses cursors, checks if behind, reads pending mutations, receives pull responses and connection messages, and determines where/what to send for pulls through it.
+//! What it should not know: the connection state machine; how space data is stored or landed.
 
 use crate::device::Device;
 use crate::protocol::{Cookie, Heard, Pulled};
@@ -9,11 +9,11 @@ use crate::sync::error::Failure;
 use crate::upload_queue::Mutation;
 use std::fmt::Write;
 
-/// 哪个空间：私有空间是空串
+/// Which space: empty string indicates the private space.
 #[derive(Clone, Copy)]
 pub struct Mirror<'a>(pub &'a str);
 
-/// 一次 HTTP 拉取发到哪、带什么：私有空间 POST、请求放正文，共用空间 GET、请求在网址里（进缓存）
+/// Where and what an HTTP pull sends: private space uses POST with request in body; shared space uses GET with request in URL (for caching).
 pub struct Target {
     pub url: String,
     pub body: Option<String>,
@@ -26,7 +26,7 @@ impl Mirror<'_> {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn cookie(self, device: &mut Device) -> Result<Option<Cookie>, Failure> {
         Ok(if self.private() {
             device.cookie()?
@@ -37,7 +37,7 @@ impl Mirror<'_> {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn behind(self, device: &mut Device, now: f64) -> Result<bool, Failure> {
         Ok(if self.private() {
             device.behind(now)?
@@ -48,7 +48,7 @@ impl Mirror<'_> {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn staging(self, device: &mut Device) -> Result<bool, Failure> {
         Ok(if self.private() {
             device.staging()?
@@ -58,7 +58,7 @@ impl Mirror<'_> {
         })
     }
 
-    /// 拉取落地的订阅与这条连接上听到的不同（只有共用空间有）
+    /// Subscription landed by pull differs from what was heard on this connection (only applies to shared spaces).
     #[must_use]
     pub fn stale(self, device: &mut Device) -> bool {
         !self.private() && device.shared(self.0).is_ok_and(|(space, _, _)| space.stale())
@@ -73,23 +73,23 @@ impl Mirror<'_> {
     }
 
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn pending_count(self, device: &Device) -> Result<i64, Failure> {
         Ok(if self.private() { device.pending_count()? } else { 0 })
     }
 
-    /// 待上传的前面约 limit 字节（共用空间没有）
+    /// First ~limit bytes of pending mutations (not applicable to shared spaces).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn pending(self, device: &Device, limit: f64) -> Result<Vec<Mutation>, Failure> {
         Ok(if self.private() { device.pending(Some(limit))? } else { Vec::new() })
     }
 
-    /// 这次拉取发到哪、带什么（url 是空间的同步地址）
+    /// Where and what this pull sends (`url` is the sync endpoint of the space).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn target(self, device: &mut Device, url: &str, now: f64) -> Result<Target, Failure> {
         if self.private() {
             let request = device.pull_request(now)?;
@@ -115,10 +115,10 @@ impl Mirror<'_> {
         })
     }
 
-    /// 收下拉取的结果，返回接没接上
+    /// Receives pull response and returns whether it connected to the local state.
     ///
     /// # Errors
-    /// 换了账号；读写库出错。
+    /// Returns an error if the account changed or reading/writing the database fails.
     pub fn receive(self, device: &mut Device, pulled: &Pulled, now: f64) -> Result<bool, Failure> {
         Ok(if self.private() {
             device.receive(pulled, now)?
@@ -128,10 +128,10 @@ impl Mirror<'_> {
         })
     }
 
-    /// 收下连接上的消息，返回接没接上；pulling 是拉取在路上
+    /// Receives a message from the connection and returns whether it connected; `pulling` indicates an in-flight pull.
     ///
     /// # Errors
-    /// 换了账号；读写库出错。
+    /// Returns an error if the account changed or reading/writing the database fails.
     pub fn heard(self, device: &mut Device, message: Heard, pulling: bool, now: f64) -> Result<bool, Failure> {
         Ok(if self.private() {
             device.heard(message, pulling, now)?
@@ -141,10 +141,10 @@ impl Mirror<'_> {
         })
     }
 
-    /// 整份重下；`discard_pending` 只对私有空间有意义
+    /// Full resync; `discard_pending` only applies to the private space.
     ///
     /// # Errors
-    /// 读写库出错。
+    /// Returns an error if reading or writing the database fails.
     pub fn resync(self, device: &mut Device, discard_pending: bool) -> Result<(), Failure> {
         if self.private() {
             device.resync(discard_pending)?;
@@ -156,14 +156,14 @@ impl Mirror<'_> {
     }
 }
 
-/// 游标在网址里的写法：版本.随机数
+/// Cookie representation in URLs: version.nonce.
 #[must_use]
 pub fn format_cookie(cookie: Cookie) -> String {
     format!("{}.{}", cookie.version, cookie.nonce)
 }
 
-/// 拉取或连接的网址：同步地址带上协议版本与给的参数，与云端认的同一套。
-/// 同步地址开头已查过不带查询串与 #；只有主机没有路径的补上 /（照 URL 的规范化）
+/// URL for pull or connection: sync address with protocol version and given parameters, matching what cloud accepts.
+/// The sync address is pre-validated to have no query string or fragment; appends `/` if host-only without path (matching URL normalization).
 #[must_use]
 pub fn pull_url(url: &str, params: &[(&str, String)]) -> String {
     let host_only = url.split_once("://").is_some_and(|(_, rest)| !rest.contains('/'));
@@ -177,7 +177,7 @@ pub fn pull_url(url: &str, params: &[(&str, String)]) -> String {
     target
 }
 
-/// 查询串里的值照 application/x-www-form-urlencoded 编（与 `URLSearchParams` 相同：空格是 +，字母、数字与 *-._ 以外的按 UTF-8 字节编成 %XX）
+/// Query string values encoded according to application/x-www-form-urlencoded (matches `URLSearchParams`: space is `+`, chars other than alphanumeric and `*-._` encoded as `%XX` UTF-8 bytes).
 /// @see <https://url.spec.whatwg.org/#concept-urlencoded-serializer>
 fn form_encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());

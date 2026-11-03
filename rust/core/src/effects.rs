@@ -1,7 +1,7 @@
-//! 一次操作要交给外面的副作用：改到的表（提交后报给订阅者，回滚的不报）、要报出的问题（接入方的出错回调，不中断同步）、
-//! 被扣下的本机写、有了新的本机写、要收缩库文件。
-//! 核心只记下，外层在提交后取走、报出。
-//! 不该知道的：报给谁、怎么报。
+//! Side effects yielded by device operations: touched tables (notified to subscribers on commit, omitted on rollback),
+//! errors to report (integrator error callbacks without interrupting sync), held local writes, new local writes, and database shrinking triggers.
+//! The core only records effects; outer layers drain and deliver them after transactions commit.
+//! What it should not know: recipients or delivery mechanisms.
 
 use crate::change::Change;
 use serde::Serialize;
@@ -11,15 +11,15 @@ use std::collections::BTreeSet;
 pub struct Effects {
     pub touched: BTreeSet<String>,
     pub reports: Vec<String>,
-    /// 被云端扣下的本机写
+    /// Local writes held by the cloud.
     pub held: Vec<Held>,
-    /// 有了新的本机写（连接据此推送）
+    /// Indicates a new local write has committed (triggers push on connections).
     pub wrote: bool,
-    /// 暂存的块刚清掉：外层分几步收缩库文件
+    /// Staged pull chunks were cleared: schedules multi-step database shrinking.
     pub shrink: bool,
 }
 
-/// 被云端扣下的本机写：原因与原样的改动
+/// Local write held by cloud: rejection reason and original row changes.
 #[derive(Debug, Serialize)]
 pub struct Held {
     pub reason: String,

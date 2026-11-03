@@ -1,21 +1,27 @@
 import type { SerializedError, SerializedStatus } from './errors.ts';
 
 /**
- * Rust 核心外面的那一层（web 的 Worker 里与测试里用，手机上同样的事在原生的 Rust 里做）：把事件交给核心（control），照它回的指令开关 WebSocket、
- * 发 HTTP 请求、排计时器，其余的（回复、改到的表、扣下的写、同步状态、报出的问题、要 token、要校验本机写）交给上面，上面要回的（token、校验结果）照常 send 进来。
- * 核心不做网络与计时，这里不懂同步：socket、请求、计时器都按核心给的编号，到时、到了、断了就带着编号告诉它。
- * 事件在处理一批指令的途中又来了（建 socket 当场出错这类）就排着，这一批做完再交：核心收到的事件与它发出指令的先后一致。
- * HTTP 请求按多久没收到数据计时（属于传输层，核心不管）：请求前就开始计，每收到一段数据重新计，到了就当失败（理由见 {@link stallWatch}）。
- * 不该知道的：同步的规则、页面怎么用。
+ * Drives network I/O, timers, and message dispatch around the Rust core.
+ *
+ * Used in the web Worker and tests (the same responsibilities are handled by native Rust threads on mobile). Dispatches inputs to the core
+ * via `control`, translates emitted instructions into WebSocket operations, HTTP requests, and timers, and forwards notifications (replies,
+ * changed tables, held writes, sync status, reported errors, token requests, and write validations) upward. Incoming token and validation
+ * responses are passed back in via `send`.
+ * The core performs no network I/O or timing; this layer does not know sync rules. WebSockets, HTTP requests, and timers use numeric IDs
+ * assigned by the core.
+ * Events arriving while executing instructions are queued in `#inbox` and processed after the current batch finishes, preserving
+ * instruction ordering.
+ * HTTP requests time out after inactivity (transport-level timeout handled here; see {@link stallWatch}).
+ * What this module must not know: Sync protocol rules or page usage patterns.
  * @see https://github.com/powersync-ja/powersync-sqlite-core/blob/v0.5.4/crates/core/src/sync/interface.rs
  */
 
-/** 交给核心的事件（核心的 `Input`） */
+/** Event passed to the core (`Input`). */
 export type Input = { type: string } & Record<string, unknown>;
 
 type Headers = Record<string, string>;
 
-/** 核心回的指令（核心的 `Instruction`） */
+/** Instruction emitted by the core (`Instruction`). */
 type Instruction =
   | Delivered
   | { type: 'connect'; socket: number; url: string; protocols: string[] }
@@ -26,7 +32,7 @@ type Instruction =
   | { type: 'schedule'; timer: number; delay: number }
   | { type: 'cancel'; timer: number };
 
-/** 交给上面的指令：要 token 的回 `token`，要校验的回 `validated` */
+/** Instructions forwarded to the upper layer: token requests reply with `token`, validation requests reply with `validated`. */
 export type Delivered =
   | { type: 'reply'; id: number; value?: unknown; error?: SerializedError }
   | { type: 'token'; request: number; channel: string }
@@ -39,7 +45,7 @@ export type Delivered =
 
 export type Fetch = (url: string, init: { method?: 'POST'; headers: Headers; body?: string; signal: AbortSignal }) => Promise<Response>;
 
-/** 网络与计时：不给就用全局的（测试里换成替身） */
+/** Network and timer implementations, defaulting to global APIs (replaced with mocks in tests). */
 export type Network = {
   socket?: (url: string, protocols: string[]) => WebSocket;
   fetch?: Fetch;
@@ -48,24 +54,26 @@ export type Network = {
 
 const messageOf = (thrown: unknown) => (thrown instanceof Error ? thrown.message : String(thrown));
 
-/** 多久没收到数据就当失败（毫秒） */
+/** Timeout duration in milliseconds without received data before an HTTP pull fails. */
 export const receiveTimeout = 30_000;
 
-/** 安排一次计时，返回取消 */
+/** Schedules a timer callback and returns a cancellation function. */
 export type Schedule = (run: () => void, delay: number) => () => void;
 
-/** setTimeout 的延迟是 32 位有符号整数，超过就当 0、立刻触发（云端给的到期时刻、重连窗口可以很长）：截到上限 */
+/** Caps setTimeout delay to the signed 32-bit integer maximum to avoid immediate expiration on large values. */
 const maxTimeout = 2 ** 31 - 1;
 
-/** 用 setTimeout 安排一次计时（网络与计时不另给时用它） */
+/** Schedules a timer callback using setTimeout. */
 export function timeout(run: () => void, delay: number) {
   const timer = setTimeout(run, Math.min(delay, maxTimeout));
   return () => clearTimeout(timer);
 }
 
 /**
- * 按多久没收到数据计时：heard() 重新计时，到时中止请求、stalled 以超时失败；abort(error) 立即中止（fetch 不一定理会中止，由 stalled 抛出）；
- * done() 之后不再计时（超时之后 fetch 还可能回来）
+ * Monitors HTTP receive activity and aborts on stall.
+ *
+ * `heard()` resets the inactivity timer; on timeout, aborts the request controller and rejects `stalled`.
+ * `abort(error)` aborts immediately. `done()` deactivates the watch upon completion.
  */
 function stallWatch(schedule: Schedule, controller: AbortController) {
   let cancel: (() => void) | undefined;
@@ -84,7 +92,7 @@ function stallWatch(schedule: Schedule, controller: AbortController) {
     heard: () => {
       if (settled) return;
       cancel?.();
-      cancel = schedule(() => abort(new Error(`拉取超时（${receiveTimeout / 1000} 秒没收到数据）`)), receiveTimeout);
+      cancel = schedule(() => abort(new Error(`Pull timed out (no data received for ${receiveTimeout / 1000}s)`)), receiveTimeout);
     },
     done: () => {
       settled = true;
@@ -93,7 +101,7 @@ function stallWatch(schedule: Schedule, controller: AbortController) {
   };
 }
 
-/** 边收边解码读完正文，每收到一段调 heard；没有正文（204 这类）时 body 是 null */
+/** Reads response body to completion, invoking heard on each received chunk; handles null body for status 204. */
 async function readText(response: Response, heard: () => void): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return await response.text();
@@ -115,25 +123,25 @@ export class Shell {
   readonly #sockets = new Map<number, WebSocket>();
   readonly #requests = new Map<number, AbortController>();
   readonly #timers = new Map<number, () => void>();
-  /** 处理一批指令的途中又来的事件 */
+  /** Events queued while processing an instruction batch. */
   readonly #inbox: Input[] = [];
   #busy = false;
 
   constructor(core: { control(input: string, now: number): string }, network: Network, deliver: (instruction: Delivered) => void) {
     this.#core = core;
     this.#socket = network.socket ?? ((url, protocols) => new WebSocket(url, protocols));
-    // 包一层：直接存全局的 fetch，经对象的属性调用时 this 不对，浏览器的 fetch 会抛 Illegal invocation
+    // Wraps fetch to preserve global context and avoid "Illegal invocation" in browsers.
     this.#fetch = network.fetch ?? ((url, init) => fetch(url, init));
     this.#schedule = network.schedule ?? timeout;
     this.#deliver = deliver;
   }
 
-  /** 打开设备时核心攒下的指令（打开时报出的问题这类）：照常做 */
+  /** Dispatches initial instructions buffered when opening the core device. */
   begin(instructions: string) {
     this.#drain(instructions);
   }
 
-  /** 交来一个事件，照核心回的指令做；途中又来的排着，这一批做完再交 */
+  /** Dispatches an input event to the core and executes resulting instructions, queueing nested events until the batch completes. */
   send(input: Input) {
     this.#inbox.push(input);
     this.#drain();
@@ -156,7 +164,9 @@ export class Shell {
     for (const instruction of JSON.parse(instructions) as Instruction[]) this.#execute(instruction);
   }
 
-  /** 关库之后：撤掉计时、关掉 socket、中止请求，之后它们的事不再交给核心（App 再来的调用照常交，核心回「本机库已关闭」） */
+  /**
+   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls return "Local database is closed".
+   */
   close() {
     for (const cancel of this.#timers.values()) cancel();
     for (const socket of this.#sockets.values()) socket.close();
@@ -199,7 +209,7 @@ export class Shell {
     }
   }
 
-  /** 开一条 WebSocket：关掉了的（disconnect 之后）上面的事不再交，close() 之后照样会派发 close */
+  /** Opens a WebSocket connection and wires lifecycle events back to the core. */
   #connect(id: number, url: string, protocols: string[]) {
     let socket: WebSocket;
     try {
@@ -218,16 +228,16 @@ export class Shell {
     };
   }
 
-  /** 发出一条消息；连接已坏时 send 抛错，不理（心跳会发现） */
+  /** Sends data over a WebSocket connection, ignoring write errors on broken sockets since heartbeats detect disconnection. */
   #sendOn(id: number, data: string) {
     try {
       this.#sockets.get(id)?.send(data);
     } catch {
-      // 连接已坏：核心的心跳等不到回音就当断了
+      // Connection broken: heartbeat timeout will detect disconnection.
     }
   }
 
-  /** 发一个请求、边收边解码读完正文：多久没收到数据就中止、当失败；被撤掉的（abort）不再交 */
+  /** Executes an HTTP request and reads response text, aborting on receive stall and dropping aborted requests. */
   async #request({ request, url, method, headers, body }: Extract<Instruction, { type: 'fetch' }>) {
     const controller = new AbortController();
     this.#requests.set(request, controller);

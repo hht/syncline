@@ -2,18 +2,17 @@ import { DurableObject } from 'cloudflare:workers';
 import { report } from '../common/listeners.ts';
 
 /**
- * 一个 Durable Object 只有一个 alarm（setAlarm 盖掉之前排的）：各方要在什么时刻做什么登记在 _syncline_schedule（导出、共用空间的重发与定时醒、
- * 接入方自己的定时），alarm 总排在最早的那一件。登记是一行 SQL，与这次的写一起提交；排 alarm 在登记之后，排之前对象重启了，
- * 下次醒来（构造时）照登记的重排。Syncline 自己的事（Chore）每次做一步：没做完就马上再排一次，出错按退避重排、一直重试到成功，
- * 连着失败了几次记在登记的那一行（平台对抛错的 alarm 重试有次数上限，要一直重试就在 alarm 里接住、自己排下一次）。
- * 不该知道的：每件事是什么、怎么做。
+ * Multiplexes chores and integrator callbacks onto a single Durable Object alarm:
+ * rows in _syncline_schedule track execution times and failure counts; the alarm is always set for the earliest due time.
+ * Chores execute one step per alarm: incomplete chores reschedule immediately, while errors trigger exponential backoff until success.
+ * Integrator callbacks run via scheduled, with errors logged without blocking other tasks.
  * @see https://developers.cloudflare.com/durable-objects/api/alarms/
  */
 
-/** 出错后的退避：第 n 次连着失败后等 min(max, base × 2^(n-1)) 毫秒 */
+/** Backoff configuration after failure: wait min(max, base * 2^(n-1)) milliseconds after consecutive failure n. */
 type Backoff = { base: number; max: number };
 
-/** Syncline 自己的一件事：run 做一步，返回 true 是还没做完（马上再排一次）；抛错交给 failed（报给接入方）、按 retry 退避重排 */
+/** Background chore definition: run performs one step (returning true if unfinished); errors report to failed and back off. */
 export type Chore = { run: () => Promise<boolean>; retry: Backoff; failed: (error: unknown) => void };
 
 type Storage = Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm' | 'deleteAlarm'> & { sql: Pick<SqlStorage, 'exec'> };
@@ -25,17 +24,17 @@ export class Schedule {
     this.#storage = storage;
   }
 
-  /** 名为 name 的事最迟在 at 做：已经排得更早、或在出错后的退避中（不提前）就不动 */
+  /** Schedules chore name to run no later than at epoch ms, preserving earlier scheduled times or active backoff. */
   by(name: string, at: number) {
     this.#storage.sql.exec(
-      // 不动的不改写：每次打开对象、每次写都会登记，行写按行计费
+      // Avoid updating unchanged rows to minimize billed SQLite row writes on opens and writes.
       'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at WHERE failures = 0 AND excluded.at < at',
       name,
       at,
     );
   }
 
-  /** 名为 name 的事改在 at 做（可以推后），不再算在退避中 */
+  /** Reschedules chore name unconditionally to at epoch ms, resetting any active failure backoff. */
   at(name: string, at: number) {
     this.#storage.sql.exec('INSERT OR REPLACE INTO _syncline_schedule (name, at) VALUES (?, ?)', name, at);
   }
@@ -44,20 +43,20 @@ export class Schedule {
     this.#storage.sql.exec('DELETE FROM _syncline_schedule WHERE name = ?', name);
   }
 
-  /** 名为 name 的事排在什么时刻；没排是 undefined */
+  /** Returns the scheduled epoch ms for chore name, or undefined if not scheduled. */
   when(name: string) {
     const [row] = this.#storage.sql.exec('SELECT at FROM _syncline_schedule WHERE name = ?', name).toArray();
     return row ? Number(row.at) : undefined;
   }
 
-  /** 接入方自己的定时（名字不能以 syncline: 开头）：最迟在 at 做，同名的再登记就改成更早的那个；登记完重排 alarm */
+  /** Schedules an integrator chore due no later than at epoch ms, re-arming the alarm. */
   own(name: string, at: number) {
     this.#check(name);
     this.by(name, at);
     void this.arm();
   }
 
-  /** 撤掉接入方自己的一件定时，重排 alarm */
+  /** Cancels an integrator chore by name and re-arms the alarm. */
   disown(name: string) {
     this.#check(name);
     this.cancel(name);
@@ -65,14 +64,13 @@ export class Schedule {
   }
 
   #check(name: string) {
-    if (name.startsWith(reserved)) throw new Error(`定时的名字不能以 ${reserved} 开头：${name}`);
+    if (name.startsWith(reserved)) throw new Error(`Schedule name must not start with ${reserved}: ${name}`);
   }
 
   /**
-   * alarm 到了：到时候了的各件同时做、各管各的（一件卡住或在退避，不占别的时间）。Syncline 自己登记的交给 chores 认出是哪件事（不认得的跳过），
-   * 做一步：没做完马上再排，出错交给它的 failed、按它的退避重排（期间登记的更早的时刻不算）；接入方的交给 scheduled，出错照常报出、不挡别的。
-   * 做完把 alarm 排到下一件。先删后做（做的时候可以重新登记下一次，有了新的写也照常登记）：做到一半对象被重置（部署、超出平台的上限），
-   * 这次就丢了、连着失败的次数也一起丢了，由下一次登记补上
+   * Executes all due chores and scheduled tasks concurrently when an alarm fires:
+   * Syncline chores run via chores (stepping, rescheduling, or backing off on error); integrator tasks run via scheduled.
+   * Clears due entries before running so new writes can reschedule, then arms the alarm for the next earliest due time.
    */
   async run(chores: (name: string) => Chore | undefined, scheduled: (name: string) => void | Promise<void>) {
     const due = this.#storage.sql
@@ -110,7 +108,7 @@ export class Schedule {
     }
   }
 
-  /** alarm 排到登记里最早的那件；没有了就删掉 alarm */
+  /** Arms the alarm for the earliest entry in _syncline_schedule, or deletes the alarm if none remain. */
   async arm() {
     const [row] = this.#storage.sql.exec('SELECT min(at) AS at FROM _syncline_schedule').toArray();
     const at = row?.at === null || row?.at === undefined ? undefined : Number(row.at);
@@ -121,15 +119,12 @@ export class Schedule {
   }
 }
 
-/** 接入方自己的定时不能以它开头：留给 Syncline 自己登记的 */
+/** Reserved prefix for internal Syncline chores in _syncline_schedule. */
 export const reserved = 'syncline:';
 
-/**
- * 用定时表管 alarm 的 Durable Object（私有空间与共用空间都是）：接入方自己的定时（schedule、unschedule、scheduled）在这里，
- * Syncline 自己的事由子类登记在 timetable 上、在 alarm 里交给它的 run
- */
+/** Base Durable Object managing alarms via a schedule table for internal chores and integrator callbacks. */
 export abstract class ScheduledObject<Env> extends DurableObject<Env> {
-  /** 定时表：Syncline 自己登记的事（子类用）；接入方用 schedule、unschedule */
+  /** Schedule table manager for internal chores; integrators use schedule and unschedule. */
   protected readonly timetable: Schedule;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -137,12 +132,12 @@ export abstract class ScheduledObject<Env> extends DurableObject<Env> {
     this.timetable = new Schedule(ctx.storage);
   }
 
-  /** 接入方自己的定时：最迟在 at（毫秒）调 scheduled(name)；同名的再登记就改成更早的那个。name 不能以 syncline: 开头 */
+  /** Schedules an integrator callback to run no later than at epoch ms; name must not start with syncline:. */
   protected readonly schedule = (name: string, at: number) => this.timetable.own(name, at);
 
   protected readonly unschedule = (name: string) => this.timetable.disown(name);
 
-  /** 接入方登记的定时到了：子类覆盖它（写成实例上的函数）；出错照常报出，不挡别的 */
+  /** Invoked when an integrator scheduled task is due; subclasses may override. */
   protected scheduled: (name: string) => void | Promise<void> = () => undefined;
 }
 

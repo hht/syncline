@@ -4,11 +4,12 @@ import { pullBody, pullURL } from '../../src/common/pull-url.ts';
 import { untilJson, wranglerBin } from './deploy.ts';
 
 /**
- * 探针当一台设备：HTTP 整份拉、连上 WebSocket、等下一条消息；另用 wrangler tail 报出平台记下的每次调用的 CPU。
- * 不该知道的：量什么、Worker 怎么部署
+ * Simulates a client device for probes: performs full HTTP pulls, connects via WebSocket,
+ * and waits for incoming messages, using wrangler tail to report invocation CPU times logged by the platform.
+ * Out of scope: what is probed or how the Worker is deployed.
  */
 
-/** HTTP 整份拉一次（分块的接着拉到末块）：私有空间的拉取是 POST，请求在正文里（与设备的 pulling.ts 一样）；给出末块，改动是各块的合起来 */
+/** Performs a full HTTP pull, chaining chunks to the final chunk with combined patches, using POST with request body for private spaces. */
 export async function pull(url: string, token: string): Promise<Poke> {
   const patch: Op[] = [];
   let cursor: string | undefined;
@@ -24,10 +25,10 @@ export async function pull(url: string, token: string): Promise<Poke> {
   }
 }
 
-/** 连接上的下一件事：消息（给出内容）、关闭或超时（给出原因），先到的算 */
+/** Awaits the next WebSocket event (message, close, or timeout), resolving with whichever arrives first. */
 export function next(socket: WebSocket, ms: number) {
   return new Promise<{ message: string } | { failure: string }>((resolve) => {
-    const timer = setTimeout(() => done({ failure: `${ms / 1000} 秒没有回音` }), ms);
+    const timer = setTimeout(() => done({ failure: `no response after ${ms / 1000} seconds` }), ms);
     const done = (result: { message: string } | { failure: string }) => {
       clearTimeout(timer);
       socket.removeEventListener('message', onMessage);
@@ -35,27 +36,27 @@ export function next(socket: WebSocket, ms: number) {
       resolve(result);
     };
     const onMessage = ({ data }: MessageEvent) => done({ message: String(data) });
-    const onClose = ({ code, reason }: CloseEvent) => done({ failure: `连接被关 ${code} ${reason}` });
+    const onClose = ({ code, reason }: CloseEvent) => done({ failure: `connection closed ${code} ${reason}` });
     socket.addEventListener('message', onMessage);
     socket.addEventListener('close', onClose);
   });
 }
 
-/** 整份拉一次拿游标、连上、收下补齐：给出连接，补齐没来抛错 */
+/** Performs a full pull to obtain a cookie, establishes a WebSocket connection, and awaits catch-up, throwing if catch-up fails. */
 export async function connect(url: string, token: string) {
   const pulled = await pull(url, token);
   const socket = new WebSocket(pullURL(url.replace(/^http/, 'ws'), { cookie: pulled.cookie }), [subprotocol, `${bearer}${token}`]);
   const caughtUp = await next(socket, 30_000);
   if ('failure' in caughtUp) {
     socket.close();
-    throw new Error(`连上之后没有补齐：${caughtUp.failure}`);
+    throw new Error(`No catch-up received after connect: ${caughtUp.failure}`);
   }
   return socket;
 }
 
 /**
- * 跟着 Worker 的实时日志，平台记下的调用里 CPU 超过 100 毫秒或结果不是 ok 的（如 exceededCpu）打出来；onCleanUp 登记删 Worker 前停掉它。
- * tail 连上时什么也不打：等 5 秒再返回，之后的调用才不漏；事件晚一阵才到，量完要再等一会
+ * Tails live Worker logs, reporting invocations with CPU time over 100 ms or non-ok outcomes such as exceededCpu, registering process cleanup with onCleanUp.
+ * Waits 5 seconds before returning to avoid missing subsequent invocations while tail connects; events arrive with a delay, so callers wait briefly after probing finishes.
  */
 export async function tailCalls(name: string, onCleanUp: (stop: () => void) => void) {
   const tail = spawn(wranglerBin, ['tail', name, '--format', 'json'], { cwd: import.meta.dirname, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -67,7 +68,7 @@ export async function tailCalls(name: string, onCleanUp: (stop: () => void) => v
     let last = 0;
     for (const match of logged.matchAll(event)) {
       const [text, wall, cpu, outcome] = match;
-      if (Number(cpu) > 100 || outcome !== 'ok') console.log(`平台记下：${outcome}，CPU ${cpu} ms，墙钟 ${wall} ms`);
+      if (Number(cpu) > 100 || outcome !== 'ok') console.log(`platform logged: ${outcome}, CPU ${cpu} ms, wall ${wall} ms`);
       last = match.index + text.length;
     }
     logged = logged.slice(last);

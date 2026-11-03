@@ -9,9 +9,9 @@ import type { TableDefinition } from '../tables/table-definitions.ts';
 import { type Issue, ValidationError } from '../tables/validation.ts';
 import { cursor, savepoint } from './test-driver.ts';
 
-// Rust 的设备一侧（编成 wasm，测试前生成）：加载、设备库、经 Shell 调它的入口
+// Rust device engine compiled to WASM: loading, device database, and invoking entrypoints via Shell.
 
-/** wasm 导出的设备库：先当作普通的库，open 之后是设备，经 control 交来事件；语句的参数与结果是 JSON 文本（编法见 wasm 模块开头的说明），改动集直接传字节 */
+/** WASM-exported device database: standard SQL storage before open; after open acts as sync device engine communicating via control. */
 export type Database = {
   exec(sql: string, bindings: string): string;
   batch(sql: string): void;
@@ -25,7 +25,7 @@ export type Database = {
   inject(rule: string): void;
 };
 
-/** 调 wasm：拒收、不合声明、开库时的错（消息是 JSON）换成 JS 的对应的错 */
+/** Invokes WASM functions: transforms JSON error payloads into corresponding JavaScript error instances. */
 export function call<T>(body: () => T): T {
   try {
     return body();
@@ -36,23 +36,23 @@ export function call<T>(body: () => T): T {
       const { table, issues } = (JSON.parse(message) as { invalid: { table: string; issues: Issue[] } }).invalid;
       throw new ValidationError(table, issues);
     }
-    // 开库时的错是核心的 Failure（与 control 回的同一个样子）
+    // Open database errors map to Failure objects matching control responses.
     if (message.startsWith('{"message":')) throw deserializeError(JSON.parse(message));
     throw error;
   }
 }
 
-/** wasm 的导出：设备库（可从整库导出恢复）与核心用的上限 */
+/** WASM module exports: Database constructor, restoration method, and documented limits. */
 type Exports = { Database: { new (): Database; restored(image: Uint8Array): Database }; limits(): string };
 
-/** 用到时才加载：只有 vitest 的 fast 组先编了 wasm */
+/** Lazy-loaded WASM module: compiled prior to running test suite. */
 let loaded: Exports | undefined;
 const load = () => {
   loaded ??= createRequire(import.meta.url)(join(wasmOutput, 'syncline_wasm.js')) as Exports;
   return loaded;
 };
 
-/** 核心交出的上限与时长（Rust 的 `limits::documented`）：少了哪个，用它的文档核对就对不上 */
+/** Limits and durations exported by core (limits::documented in Rust): checked against documentation. */
 type Limits = Record<
   | 'valueBytes'
   | 'valueChars'
@@ -76,8 +76,8 @@ type Limits = Record<
 export const rustLimits = () => JSON.parse(load().limits()) as Limits;
 
 /**
- * Rust 的内存设备库，与 test-storage 的 deviceStorage 一样用：先执行给的语句；prepare 由 Rust 建 Syncline 自己的表，define 照编出的声明建表；
- * 交给测试的 Device 打开成设备（database）；image() 导出整库，当作系统备份
+ * In-memory Rust device database, drop-in replacement for deviceStorage: executes initial schema statements;
+ * prepare initializes internal tables, define creates tables from declaration; image exports full database backup.
  */
 export function rustStorage(...schema: string[]) {
   const storage = asStorage(new (load().Database)());
@@ -85,7 +85,7 @@ export function rustStorage(...schema: string[]) {
   return storage;
 }
 
-/** 从整库导出恢复出的 Rust 设备库 */
+/** Restores Rust device database from backup image. */
 export const restoredRustStorage = (image: Uint8Array) => asStorage(load().Database.restored(image));
 
 function asStorage(db: Database) {
@@ -118,7 +118,7 @@ function asStorage(db: Database) {
 type Reply = Extract<Delivered, { type: 'reply' }>;
 type Call = { type: string } & Record<string, unknown>;
 
-/** 经 Shell 调 Rust 的入口：每次调用一个编号，回复按编号交回；回复在同一次 control 里就到的（执行语句、查读哪些表、占下共用空间）可以同步取 */
+/** Dispatches invocations to Rust via Shell: assigns sequential IDs to pair asynchronous replies; returns immediate synchronous replies. */
 export class Calls {
   readonly #waiting = new Map<number, (reply: Reply) => void>();
   #next = 0;
@@ -129,7 +129,7 @@ export class Calls {
     return this.#next;
   }
 
-  /** 交来一个调用，等它的回复（出错照 JS 的错还原） */
+  /** Submits an invocation to Shell, returning a promise resolved upon reply. */
   call(input: Call, id = this.id()): Promise<unknown> {
     return new Promise((resolve, reject) => {
       this.#waiting.set(id, ({ value, error }) => (error ? reject(deserializeError(error)) : resolve(value)));
@@ -137,7 +137,7 @@ export class Calls {
     });
   }
 
-  /** 回复同步就到的调用 */
+  /** Submits synchronous invocation expecting immediate reply. */
   now(input: Call): unknown {
     let reply: Reply | undefined;
     const id = this.id();
@@ -145,12 +145,12 @@ export class Calls {
       reply = delivered;
     });
     this.shell.send({ ...input, id } as Input);
-    if (!reply) throw new Error(`${input.type} 的回复没有同步回来`);
+    if (!reply) throw new Error(`${input.type} did not reply synchronously`);
     if (reply.error) throw deserializeError(reply.error);
     return reply.value;
   }
 
-  /** 测试直接喂的（核心的 `Probe`） */
+  /** Direct test probe invocations (Probe in core). */
   probe(probe: Call) {
     return this.call({ type: 'test', probe });
   }

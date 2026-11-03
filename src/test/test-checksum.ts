@@ -5,9 +5,9 @@ import { spaceChecksum } from '../features/checksum/cloud/checksums.ts';
 import { Device as CoreDevice } from './test-device.ts';
 import type { rustStorage } from './test-rust.ts';
 
-// 接上在线校验和的设备与空间（产品里由各入口接上）：要对校验和的测试从这里取 Device、Space
+// Device and Space wired with online checksum verification (configured at runtime in production): tests requiring checksum verification import here.
 
-/** checksumRowsPerDay：校验和每天至多要多少行 */
+/** checksumRowsPerDay: daily row budget for checksum verification. */
 type DeviceOptions = NonNullable<ConstructorParameters<typeof CoreDevice>[2]> & { checksumRowsPerDay?: number };
 
 export class Device extends CoreDevice {

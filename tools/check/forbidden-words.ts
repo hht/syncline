@@ -2,9 +2,9 @@ import ts from 'typescript';
 import type { Problem, SourceText } from './problem.ts';
 import { rustNames, rustSource } from './rust-source.ts';
 
-// 名字说清做什么；这些词说不出做什么，出现在名字的任何位置都拦。框架强制的写法不含这些词（hook 的 use 前缀、React 的 Provider），不需要例外。
-// 写来历（旧、临时、迁移）或含糊动作（apply、split）的词同样拦；同步（sync）是同步库的通用叫法，照常用。
-// page 说不清是哪一段：同步一次给出的一段叫 chunk（ElectricSQL），分批读写叫 batch。log 说不清记的是什么：云端的叫提交记录（commit）
+// Names state clearly what they do; these words fail to state what they do and are rejected in any position within a name. Framework-mandated conventions (hook use prefix, React Provider) do not contain these words and need no exceptions.
+// Words indicating provenance (old, temp, migrate) or ambiguous actions (apply, split) are rejected as well; sync is standard terminology for sync libraries and is allowed.
+// Page is ambiguous about chunk vs UI: chunks in a single sync are called chunk (ElectricSQL), batched reads/writes are called batch. Log is ambiguous about what is recorded: cloud records are called commits.
 const anywhere = new Set([
   ...['Manager', 'Helper', 'Util', 'Utils', 'Impl', 'Factory', 'Wrapper', 'Adapter', 'Service', 'Repository', 'DTO'],
   ...['Legacy', 'Old', 'Temp', 'Tmp', 'Temporary', 'Migrate', 'Migrated', 'Migration', 'Migrations'],
@@ -12,15 +12,15 @@ const anywhere = new Set([
   ...['Page', 'Pages', 'Paged', 'Paging'],
   ...['Log', 'Logs', 'Logger'],
 ]);
-// 版本号不进名字：finishedV2At、coach_v2；p95 不是
+// Version numbers do not belong in names: finishedV2At, coach_v2; p95 is not a version number.
 const version = /(?:^|_)v\d+(?:_|$)|V\d+(?=[A-Z_]|$)/;
-// 空泛的后缀：userData 说不出是什么数据
+// Vague suffixes: userData does not state what kind of data.
 const suffixes = new Set(['Data', 'Info']);
-// 说不出具体动作的动词：只看小写开头名字的首词，PascalCase 名字首词是名词
+// Verbs that do not state a specific action: only check the first word of lowercase-starting names; PascalCase first words are nouns.
 const verbs = new Set(['handle', 'process', 'do']);
-// 外部规定的名字，不是本仓起的，与 import 进来的名字一样不查：对象键要与对方的参数、字段同名
-const exceptions = new Map([['ErrorUtils', 'React Native 的全局对象：reportError 把错交给 App 的全局错误处理']]);
-/** 按驼峰拆词并首字母大写：userDTOList → User DTO List */
+// Externally mandated names not invented in this repo, skipped like imports: object keys must match third-party parameters and fields.
+const exceptions = new Map([['ErrorUtils', 'React Native global object: reportError forwards errors to App global error handler']]);
+/** Splits words by camelCase and capitalizes first letters: userDTOList -> User DTO List. */
 const words = (name: string) =>
   (name.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+/g) ?? []).map((word) => word.charAt(0).toUpperCase() + word.slice(1));
 
@@ -28,7 +28,7 @@ function forbiddenWord(name: string) {
   if (exceptions.has(name)) return undefined;
   const parts = words(name);
   const found = parts.find((part) => anywhere.has(part));
-  // 单个词的 data、info 不是后缀
+  // A single word "data" or "info" is not a suffix.
   if (found || parts.length === 1) return found;
   const last = parts.at(-1) ?? '';
   const head = name.match(/^[a-z]+/)?.[0] ?? '';
@@ -37,11 +37,11 @@ function forbiddenWord(name: string) {
 
 type Name = { text: string; label: string; line: number };
 
-// Syncline 独立于接入方：产品代码、探针与配置不提接入方的项目，名字、注释、字符串一样；门禁的代码要拿它们当例子，不查。
-// 按词找，驼峰里的 NeoLog 算，oneof、neon 这类形近词不算
+// Syncline is standalone from integrators: product code, probes, and configs do not mention integrator projects in names, comments, or strings; gate code uses them as test examples and is skipped.
+// Matches whole words: NeoLog in camelCase matches; oneof, neon and similar words do not.
 const product = /^(?!tools\/|\.claude\/)/;
 const consumerName = /(?<![A-Za-z])([Nn]eo(?![a-z])|[Bb]oostcamp)/;
-/** 产品代码与配置里逐行找，命中的行报出 message */
+/** Searches line by line in product code and config; matching lines emit a problem with message. */
 const lineRule = (path: string, text: string, pattern: RegExp, message: string) =>
   product.test(path)
     ? text
@@ -51,20 +51,20 @@ const lineRule = (path: string, text: string, pattern: RegExp, message: string) 
 
 const camel = (segment: string) => segment.replace(/[-_](.)/g, (_, letter: string) => letter.toUpperCase());
 
-/** 文件名按标识符查：date-utils.web.ts → dateUtils */
+/** Filenames are checked as identifiers: date-utils.web.ts -> dateUtils. */
 function fileName(path: string): Name {
   const base = path.split('/').at(-1) ?? '';
   return { text: camel(base.split('.')[0] ?? ''), label: base, line: 1 };
 }
 
-/** 路径里的每一层目录按标识符查 */
+/** Each directory segment in the path is checked as an identifier. */
 const directories = (path: string): Name[] =>
   path
     .split('/')
     .slice(0, -1)
-    .map((segment, index, all) => ({ text: camel(segment), label: `目录 ${all.slice(0, index + 1).join('/')}`, line: 1 }));
+    .map((segment, index, all) => ({ text: camel(segment), label: `directory ${all.slice(0, index + 1).join('/')}`, line: 1 }));
 
-// 会起新名字的声明；import 进来的名字是别人起的，不查
+// Declarations that introduce new names; imported names are defined externally and not checked.
 const declarations = [
   ts.isVariableDeclaration,
   ts.isFunctionDeclaration,
@@ -105,7 +105,7 @@ function declaredNames(file: ts.SourceFile) {
 
 const isScript = (path: string) => /\.([cm]js|tsx?)$/.test(path);
 
-/** Rust 的名字（table_info、MAX_ROWS）先转成驼峰再拆词，报出时照写原名 */
+/** Rust names (table_info, MAX_ROWS) are converted to camelCase before splitting words, but reported under their original name. */
 const rustDeclaredNames = (text: string): Name[] =>
   rustNames(rustSource(text).code).map(({ text: name, line }) => ({
     text: camel(/^[A-Z\d_]+$/.test(name) ? name.toLowerCase() : name),
@@ -113,7 +113,7 @@ const rustDeclaredNames = (text: string): Name[] =>
     line: line + 1,
   }));
 
-/** 配置文件只查接入方的项目名，不按标识符查 */
+/** Config files only check integrator project names, not identifiers. */
 export function checkForbiddenWords(files: SourceText[]): Problem[] {
   const seen = new Set<string>();
   return files.flatMap(({ path, text }) => {
@@ -129,11 +129,22 @@ export function checkForbiddenWords(files: SourceText[]): Problem[] {
         const word = forbiddenWord(text);
         const versioned = text.match(version)?.[0].replaceAll('_', '');
         return [
-          ...(word ? [{ file: path, line, rule: 'forbidden-word', message: `${label} 含禁用词 ${word}，改用说得出做什么的词` }] : []),
-          ...(versioned ? [{ file: path, line, rule: 'forbidden-word', message: `${label} 含版本号 ${versioned}，按意义起名` }] : []),
+          ...(word
+            ? [
+                {
+                  file: path,
+                  line,
+                  rule: 'forbidden-word',
+                  message: `${label} contains forbidden word ${word}; use a word that states what it does`,
+                },
+              ]
+            : []),
+          ...(versioned
+            ? [{ file: path, line, rule: 'forbidden-word', message: `${label} contains version ${versioned}; name by meaning` }]
+            : []),
         ];
       }),
-      ...lineRule(path, text, consumerName, '不提接入方的项目：Syncline 独立于接入方，写通用的规则与例子'),
+      ...lineRule(path, text, consumerName, 'do not mention integrator projects: Syncline is standalone; write general rules and examples'),
     ];
   });
 }

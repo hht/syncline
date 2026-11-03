@@ -10,14 +10,14 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 import { heartbeat } from './test-connection.ts';
 
-// 连接的生命周期：stop 之后回来的不再算数，同步地址与连接网址的约束，取 token、建连接、拉取出错时按退避重来
+// Connection lifecycle: post-stop responses ignored, sync/connection URL constraints, token/connect/pull errors retry with backoff.
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY)';
 const tables = [note];
 const url = 'https://sync.test/space';
 
-/** 一台设备连着一个空间：token 由测试决定何时给出，WebSocket 留一份好在关闭之后再触发它的回调 */
+/** Connects a device to a space: test controls when token resolves, preserving WebSocket references for post-close events. */
 function connected() {
   const { network } = serving(new Space(cloudStorage(createNote), tables));
   const device = new Device(deviceStorage(createNote), tables);
@@ -36,7 +36,7 @@ function connected() {
       return socket;
     },
   });
-  /** 开始同步：给 token，HTTP 拉取的回应送到 */
+  /** Starts sync: provides token, waits for HTTP pull response delivery. */
   const startAndPull = async () => {
     connection.start();
     tokens[0]?.('valid');
@@ -48,7 +48,7 @@ function connected() {
   return { network, device, tokens, sockets, addresses, connection, startAndPull };
 }
 
-test('stop 之后回来的不再算数：等 token 时停的不再发拉取，拉取在路上时停的，应答到了也不落进本机库', async () => {
+test('ignores responses after stop: aborts pull while awaiting token, ignores in-flight pull response after stop', async () => {
   const waiting = connected();
   waiting.connection.start();
   waiting.connection.stop();
@@ -68,7 +68,7 @@ test('stop 之后回来的不再算数：等 token 时停的不再发拉取，�
   expect(pulling.device.private.cookie()).toBeNull();
 });
 
-test('连 WebSocket 的地址只带协议版本与游标，不列客户端：不随启动次数涨（补齐按游标确认）', async () => {
+test('WebSocket URL carries only protocol version and cookie, omitting client list: does not grow with launch count', async () => {
   const { device, addresses, connection, startAndPull } = connected();
   await write(device, (tx) => tx.insert(note).values({ id: 'n1' }));
   await startAndPull();
@@ -77,7 +77,7 @@ test('连 WebSocket 的地址只带协议版本与游标，不列客户端：不
   connection.stop();
 });
 
-test('stop 之后回来的不再算数：关掉的连接上之后还派发 open 与消息，接得上的通知也不应用', async () => {
+test('ignores events on closed connection: discards late open and message events, does not apply matching pokes', async () => {
   const { network, device, sockets, connection, startAndPull } = connected();
   await startAndPull();
   network.handshake();
@@ -94,13 +94,13 @@ test('stop 之后回来的不再算数：关掉的连接上之后还派发 open 
   expect(device.private.cookie()).toEqual(cookie);
 });
 
-test('同步地址带查询串或 #：打开时就抛错（云端认不出拉取里别的参数，每次都会被拒）', () => {
+test('throws on sync URL containing query string or hash: rejected by cloud pull endpoint', () => {
   const device = new Device(deviceStorage(createNote), tables);
   for (const address of [`${url}?region=eu`, `${url}#x`])
-    expect(() => new Connection(device.private, { url: address, token: async () => 't' })).toThrow('不能带查询串');
+    expect(() => new Connection(device.private, { url: address, token: async () => 't' })).toThrow('must not contain query string');
 });
 
-test('默认按全局的 fetch 拉取，不带 this 调用：浏览器的 fetch 在 this 不是全局对象时抛 Illegal invocation', async () => {
+test('defaults to global fetch without this binding: prevents Illegal invocation in browsers', async () => {
   const calls: unknown[] = [];
   vi.stubGlobal('fetch', function (this: unknown) {
     calls.push(this);
@@ -120,8 +120,8 @@ test('默认按全局的 fetch 拉取，不带 this 调用：浏览器的 fetch 
 });
 
 /**
- * 开始一个只走 HTTP 拉取的连接（WebSocket 一直连不上），等第一次拉取走完：拉取的应答与计时由测试给，
- * 测试只记重连的计时（拉取的超时计时 receiveTimeout 不算）
+ * Starts a connection that falls back to HTTP pull (WebSocket connection fails), awaiting initial pull completion.
+ * Timers record reconnect backoff only, ignoring receiveTimeout.
  */
 async function pulled(fetch: NonNullable<ConnectionOptions['fetch']>, schedule: NonNullable<ConnectionOptions['schedule']>) {
   const device = new Device(deviceStorage(createNote), tables);
@@ -131,7 +131,7 @@ async function pulled(fetch: NonNullable<ConnectionOptions['fetch']>, schedule: 
   return connection;
 }
 
-test('HTTP 拉到接不上本机游标的结果：记成下载出错、按退避再拉，不立刻重拉', async () => {
+test('mismatched cookie from HTTP pull records download error and retries with backoff instead of immediately', async () => {
   const fetched: string[] = [];
   const timers: (() => void)[] = [];
   const unrelated = JSON.stringify({ base: { version: 9, nonce: 9 }, cookie: { version: 10, nonce: 1 }, lmids: {}, patch: [] });
@@ -146,7 +146,7 @@ test('HTTP 拉到接不上本机游标的结果：记成下载出错、按退避
     },
   );
   expect(fetched).toHaveLength(1);
-  expect(connection.status().downloadError).toEqual(new Error('拉取的结果接不上本机游标'));
+  expect(connection.status().downloadError).toEqual(new Error('pull response does not match local cookie'));
   expect(timers).toHaveLength(1);
   timers[0]?.();
   for (let step = 0; step < 10; step += 1) await flush();
@@ -154,10 +154,10 @@ test('HTTP 拉到接不上本机游标的结果：记成下载出错、按退避
   connection.stop();
 });
 
-test('拉取出错、正按退避等着时停下：撤掉这个计时，不留着睡完再拉', async () => {
+test('cancels backoff timer on stop during pull failure retry wait', async () => {
   const timers: { delay: number; cancelled: boolean }[] = [];
   const connection = await pulled(
-    async () => new Response('云端出错', { status: 500 }),
+    async () => new Response('cloud error', { status: 500 }),
     (_, delay) => {
       if (delay === receiveTimeout) return () => undefined;
       const timer = { delay, cancelled: false };
@@ -174,7 +174,7 @@ test('拉取出错、正按退避等着时停下：撤掉这个计时，不留�
   expect(timers.filter(({ cancelled }) => !cancelled)).toEqual([]);
 });
 
-test('接入方的 token() 一直不返回：30 秒后当作取不到，按退避重来，不一直等', async () => {
+test('times out token() after 30 seconds and retries with backoff instead of waiting indefinitely', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     let calls = 0;
@@ -187,7 +187,7 @@ test('接入方的 token() 一直不返回：30 秒后当作取不到，按退�
     expect(calls).toBe(1);
     vi.advanceTimersByTime(receiveTimeout);
     await flush();
-    expect(connection.status().downloadError?.message).toContain('取 token 超时');
+    expect(connection.status().downloadError?.message).toContain('token request timed out');
     vi.runOnlyPendingTimers();
     await flush();
     expect(calls).toBe(2);
@@ -197,39 +197,39 @@ test('接入方的 token() 一直不返回：30 秒后当作取不到，按退�
   }
 });
 
-test('token() 同步抛错、建 WebSocket 时抛错：都记成出错、按退避重来，不留下没人接的拒绝、不就此停住；建不出连接照常报出', async () => {
+test('retries with backoff on synchronous token() or WebSocket constructor throw without unhandled rejections', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const reported = captureReported();
   try {
     const thrown = await heartbeat({
       token: () => {
-        throw new Error('取不到登录态');
+        throw new Error('failed to get auth token');
       },
     });
     await flush();
-    expect(thrown.connection.status().downloadError?.message).toBe('取不到登录态');
+    expect(thrown.connection.status().downloadError?.message).toBe('failed to get auth token');
     thrown.connection.stop();
 
     let attempts = 0;
     const broken = await heartbeat({
       beforeSocket: () => {
         attempts += 1;
-        if (attempts === 1) throw new Error('网址不对');
+        if (attempts === 1) throw new Error('invalid url');
       },
     });
     await flush();
-    expect(broken.connection.status().downloadError?.message).toBe('网址不对');
+    expect(broken.connection.status().downloadError?.message).toBe('invalid url');
     vi.runOnlyPendingTimers();
     await flush();
     expect(broken.sockets).toHaveLength(1);
-    expect(reported).toEqual(['网址不对']);
+    expect(reported).toEqual(['invalid url']);
     broken.connection.stop();
   } finally {
     vi.useRealTimers();
   }
 });
 
-test('拉取的结果排在开着的本机写后面时停了、库随即关掉：不当作出错报出', async () => {
+test('does not report error when stopped while pull result is queued behind active local write and database closes', async () => {
   const reported = captureReported();
   const { network, device, tokens, connection } = connected();
   connection.start();
@@ -243,7 +243,7 @@ test('拉取的结果排在开着的本机写后面时停了、库随即关掉�
   connection.stop();
   device.close();
   resolve();
-  await expect(open).rejects.toThrow('本机库已关闭');
+  await expect(open).rejects.toThrow('local database is closed');
   await flush();
   expect(reported).toEqual([]);
 });

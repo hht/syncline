@@ -1,9 +1,17 @@
-//! 整份与整张表重给的行怎么不经暂存、边下边写进影子表，末块一次换上（SQLite 改表的做法：建新表、写进去、删旧表、改名）：本机库的峰值是旧表加新表，
-//! 不是旧表加暂存加末块一个大事务里的新表。影子表 `_syncline_shadow_<表>` 照同步表在库里的样子建：列的先后、类型、默认值、主键与 STRICT 都一样
-//! （本机写的改动集按列的位置记），索引按列照建、名字带一代的编号（改名不改显式索引的名字，下一代同名会撞）。
-//! 换表时删旧表（连同它的索引与它上面的触发器）、改名；出错时调用方整个落地回滚。
-//! 都在调用方开好的本机事务里执行；换表时没有开着的录制会话（本机写的会话只在一次写里，与落地排在同一个队列）。
-//! 不该知道的：块从哪来、暂存的改动怎么落地、放不进本机列的行之后怎么存。
+//! Writing full-pull and whole-table rows directly to shadow tables during streaming download,
+//! swapping them in upon final chunk (SQLite table alter pattern: create new table, populate, drop old, rename):
+//! local database peak storage is old table plus new table, rather than old table plus staged changes
+//! plus new table in a single transaction.
+//! Shadow table `_syncline_shadow_<table>` mirrors the schema of the synced table in the database:
+//! column order, types, default values, primary key, and STRICT all match (local write changesets
+//! identify columns by ordinal index), and indexes are recreated by column with a generation suffix
+//! (table rename does not rename explicit indexes, and identical names across generations would collide).
+//! During swap, drops old table (along with its indexes and triggers) and renames shadow table; caller
+//! rolls back entire landing on error.
+//! All executed within caller's local transaction; no active recording session during table swap (local
+//! write sessions exist only within a write and serialize in the same queue as landings).
+//! What it should not know: where chunks come from, how staged changes land, or how rows that do not fit
+//! local columns are stored afterward.
 //! @see <https://sqlite.org/lang_altertable.html#otheralter>
 //! @see <https://github.com/powersync-ja/powersync-sqlite-core/blob/9f729f9e95817d2b232bdd43b14a94ddb919a624/crates/core/src/migrations.rs#L97-L99>
 
@@ -21,19 +29,19 @@ fn shadow_of(table: &str) -> String {
     format!("_syncline_shadow_{table}")
 }
 
-/// tables 里有影子表的
+/// Returns tables from tables that have an existing shadow table.
 ///
 /// # Errors
-/// 读库出错。
+/// Database read error.
 ///
 /// # Panics
-/// 不会：名字总编得成 JSON。
+/// Never: table names are always valid JSON.
 pub fn shadowed<'a>(db: &Connection, tables: impl IntoIterator<Item = &'a String>) -> rusqlite::Result<HashSet<String>> {
     let names: Vec<String> = tables.into_iter().map(|table| shadow_of(table)).collect();
     db.prepare_cached(
         "SELECT substr(name, length('_syncline_shadow_') + 1) FROM sqlite_schema WHERE type = 'table' AND name IN (SELECT value FROM json_each(?))",
     )?
-    .query_map([serde_json::to_string(&names).expect("名字编得成 JSON")], |row| row.get(0))?
+    .query_map([serde_json::to_string(&names).expect("table names serialize to JSON")], |row| row.get(0))?
     .collect()
 }
 
@@ -41,16 +49,18 @@ mod shape;
 
 use shape::{open_shadow, shape_of};
 
-/// 影子表还与它的同步表一个样子（这次发布没给同步表加列、删列、加索引）
+/// Returns whether the shadow table matches the current shape of its synced table (current release did not add/remove columns or add indexes).
 ///
 /// # Errors
-/// 读库出错。
+/// Database read error.
 pub fn same_shape(db: &Connection, table: &str) -> rusqlite::Result<bool> {
     Ok(shape_of(db, &shadow_of(table))? == shape_of(db, table)?)
 }
 
-/// 一串改动写进这张表的影子表（同一行只留最后一条）：put 的一条语句插入或覆盖，del 的一条语句删掉。有值放不进本机的列时一行行写，
-/// 放不进的从影子表删掉（一个主键只在一处）、返回给调用方
+/// Writes a sequence of changes into the shadow table for table (keeping only the latest op per row):
+/// put inserts or overwrites in a single statement; del deletes in a single statement.
+/// When column values fail local constraints, falls back to row-by-row writes; failing rows are deleted
+/// from the shadow table (a primary key only exists in one location) and returned to caller.
 fn write_shadow(db: &Connection, table: &SyncedTable, ops: Vec<Op>) -> Result<Vec<Op>, Error> {
     let shadow = shadow_of(&table.name);
     let latest = latest_per_row(ops);
@@ -83,7 +93,7 @@ fn write_shadow(db: &Connection, table: &SyncedTable, ops: Vec<Op>) -> Result<Ve
     }
 }
 
-/// 同一行（主键）只留最后一条 put 或 del，按各行第一次出现的先后
+/// Keeps only latest put or del per row (primary key), in order of first appearance
 fn latest_per_row(ops: Vec<Op>) -> Vec<Op> {
     let mut latest: Vec<Op> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
@@ -102,7 +112,7 @@ fn latest_per_row(ops: Vec<Op>) -> Vec<Op> {
     latest
 }
 
-/// 一起写放不进时一行行写：放不进本机列的从影子表删掉（一个主键只在一处）、返回给调用方
+/// Row-by-row fallback when batch insert fails: deletes rows failing local column constraints from shadow table (a primary key only exists in one location) and returns them to caller
 fn insert_each(db: &Connection, table: &SyncedTable, shadow: &str, insert: &str, puts: Vec<Op>) -> Result<Vec<Op>, Error> {
     let mut kept = Vec::new();
     for op in puts {
@@ -126,11 +136,13 @@ fn rows_json(rows: &[&Row]) -> String {
     format!("[{}]", rows.iter().map(|row| row.json()).collect::<Vec<_>>().join(","))
 }
 
-/// 暂存一块的改动（末块也先暂存、再落地）：整份（清空之后）的各张同步表与整张表重给（删表之后）的那张，之后到的行直接写进影子表，
-/// 连着的一串一条语句；放不进本机列的行与其余的改动按到达的先后进暂存。之前暂存过的行写进影子表时丢掉暂存的那份：一个主键只在一处
+/// Stages changes from a chunk (final chunk is also staged before landing): rows arriving after full clear
+/// or whole-table drop write directly into shadow tables in contiguous single-statement batches;
+/// rows failing local constraints and all remaining ops enter stage in arrival order.
+/// When previously staged rows write to shadow table, staged copies are forgotten: a primary key only exists in one location.
 ///
 /// # Errors
-/// 读写库出错。
+/// Database read or write error.
 pub fn stash<S: std::hash::BuildHasher>(
     db: &Connection,
     tables: &HashMap<String, SyncedTable, S>,
@@ -139,7 +151,7 @@ pub fn stash<S: std::hash::BuildHasher>(
 ) -> Result<(), Error> {
     let mut shadows = shadowed(db, tables.keys())?;
     let mut run: Vec<Op> = Vec::new();
-    // 这一串写进哪张表的影子表；没有是进暂存
+    // Which table's shadow table this batch writes to; None means stage
     let mut into: Option<String> = None;
     let flush = |run: &mut Vec<Op>, into: &Option<String>| -> Result<(), Error> {
         let ops = std::mem::take(run);
@@ -172,7 +184,7 @@ pub fn stash<S: std::hash::BuildHasher>(
             open_shadow(db, &name)?;
             shadows.insert(name);
         }
-        // 影子表的行在这里去掉这几列、丢掉这一段；暂存里的由 Stage::add 去掉
+        // Drop specified columns or key range in shadow table; staged ops are trimmed by Stage::add
         if let Op::Drop { table, columns, range } = op
             && shadows.contains(table)
         {
@@ -182,7 +194,7 @@ pub fn stash<S: std::hash::BuildHasher>(
     flush(&mut run, &into)
 }
 
-/// 影子表的行去掉这几列（synced 是这张同步表）、丢掉这一段
+/// Drops specified columns (synced is this table) or drops key range in shadow table
 fn drop_in_shadow(
     db: &Connection,
     synced: Option<&SyncedTable>,
@@ -204,7 +216,7 @@ fn drop_in_shadow(
     Ok(())
 }
 
-/// 这条改动之后的行要写进影子表的同步表：清空是全部，删整张表是这一张（清一段的不是）
+/// Returns synced tables whose subsequent rows should write directly into shadow tables: clear opens all tables, drop opens that table (dropping a key range does not)
 fn opened<S: std::hash::BuildHasher>(op: &Op, tables: &HashMap<String, SyncedTable, S>) -> Vec<String> {
     match op {
         Op::Clear => tables.keys().cloned().collect(),
@@ -217,12 +229,12 @@ fn opened<S: std::hash::BuildHasher>(op: &Op, tables: &HashMap<String, SyncedTab
     }
 }
 
-/// 换上影子表：删掉旧表、影子表改名。改名时临时开 `legacy_alter_table`：不改写、不重查引用这张表的视图与触发器，它们按表名照常用上新表
-/// （关着时引用旧表的视图在删表后查不到表，改名报错）
+/// Swaps in shadow table: drops old table and renames shadow table.
+/// Temporarily enables `legacy_alter_table` during rename: does not rewrite or re-parse views and triggers referencing this table, allowing them to bind to the new table by name (when disabled, views referencing old table fail to resolve after DROP TABLE, causing RENAME to error).
 /// @see <https://sqlite.org/pragma.html#pragma_legacy_alter_table>
 ///
 /// # Errors
-/// 写库出错。
+/// Database write error.
 pub fn swap_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> {
     db.execute(&format!("DROP TABLE {}", quote(table)), [])?;
     let before: i64 = db.query_row("PRAGMA legacy_alter_table", [], |row| row.get(0))?;
@@ -233,7 +245,7 @@ pub fn swap_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> {
 }
 
 /// # Errors
-/// 写库出错。
+/// Database write error.
 pub fn drop_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> {
     db.execute(&format!("DROP TABLE IF EXISTS {}", quote(&shadow_of(table))), [])?;
     Ok(())

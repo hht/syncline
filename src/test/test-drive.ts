@@ -1,14 +1,15 @@
 import { vi } from 'vitest';
 import type { Network } from './test-network.ts';
 
-// 测试共用：把测试网络上的事一件件做完
+// Test harness utilities: drains pending network actions sequentially.
 
-/** 让出一轮事件循环，把已排队的微任务与回调做完 */
+/** Yields a microtask tick to process queued promises and immediate callbacks. */
 export const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 /**
- * 做到网络上没事可做：送达、握手、回应。advance 时没有别的事就让时间走 1 秒（4000 之后的重连按抖动排在 1 秒内，心跳要 25 秒）；
- * 要看出错当下的状态时不走（第一次失败的退避重连也在 1 秒内）。做一件事抛的错交给 onError，不给就抛出；steps 件做不完抛错
+ * Drains network actions until idle: delivery, handshakes, responses.
+ * When advance is enabled, steps time forward by 1s when otherwise idle (reconnect jitter schedules within 1s, heartbeat takes 25s);
+ * disable advance to observe immediate state on failure. Errors pass to onError if provided; throws if exceeding steps.
  */
 export async function drain(
   network: Network,
@@ -26,10 +27,10 @@ export async function drain(
       onError(error);
     }
   }
-  throw new Error('网络上的事做不完');
+  throw new Error('network actions did not drain');
 }
 
-/** 用 toFake 里的假时钟跑 body（默认换 setTimeout 与 clearTimeout），跑完（含出错）换回真的 */
+/** Executes body with specified fake timers (defaults to setTimeout/clearTimeout), restoring real timers on completion. */
 export async function withFakeTimers(
   body: () => Promise<void>,
   toFake: ('setTimeout' | 'clearTimeout' | 'Date')[] = ['setTimeout', 'clearTimeout'],

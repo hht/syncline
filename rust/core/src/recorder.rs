@@ -1,7 +1,13 @@
-//! 一次本机写（普通的 SQL）怎么记下：两个 session 记下改到的行。同步表的读成要上传的改动（改到只由云端写的表就报错）、按声明查，
-//! 再照「行怎么写」重做一遍（与重放、云端同一套）；本机专用的表只记改到了哪些表、按声明查，不上传、不重做。
-//! 接入方的 Standard Schema 要在 JS 里查：结束记录时给出改到的、有 schema 的表的行，查过了再重做。都在调用方开好的本机事务里执行。
-//! 不该知道的：写什么时候执行、待上传怎么存、怎么撤回与重放。
+//! Records a local write (standard SQL): two sessions record modified rows. Rows from synced
+//! tables are read into changes to upload (errors if modifying a read-only table), validated
+//! against declarations, and re-applied via [`Rows`] (sharing logic with replay and cloud).
+//! Local-only tables only record which tables were touched and are validated against declarations,
+//! without uploading or replaying.
+//! Integrator Standard Schema checks run in JS: when recording finishes, touched rows from
+//! tables with schemas are returned, and re-applied only after passing validation. All executed
+//! within the caller's local transaction.
+//! What it should not know: when writes execute, how pending writes are stored, or how revert
+//! and replay work.
 //! @see <https://docs.powersync.com/architecture/client-architecture>
 //! @see <https://docs.powersync.com/client-sdks/advanced/local-only-usage>
 
@@ -17,11 +23,11 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-/// 本机写的事务被 SQLite 回滚了（OR ROLLBACK 冲突、磁盘满或 I/O 出错时自动回滚）：这次写整条作废
-pub const ROLLED_BACK: &str = "这次本机写的事务已被 SQLite 回滚（OR ROLLBACK、磁盘满这类），整条作废";
+/// Local write transaction was rolled back by SQLite (OR ROLLBACK conflict, disk full, etc.): write is aborted
+pub const ROLLED_BACK: &str = "SQLite rolled back the transaction (such as OR ROLLBACK or full disk); write aborted";
 
-/// 记下本机写要知道的表：私有空间的同步表、本机专用的表（都已建好）、只由云端写的表与删掉的表与列（「表.列」）的名字，
-/// 与接入方给了 Standard Schema 的表的名字
+/// Tables needed to record a local write: synced tables in private space, local-only tables (both already created),
+/// names of read-only tables and retired tables and columns ("table.column"), and names of tables with integrator Standard Schema declarations
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -32,16 +38,17 @@ pub struct Config {
     pub schemas: Vec<String>,
 }
 
-/// 一次记录的两份改动集：同步表的、所有表的
+/// Two changesets from one recording: synced tables and all tables
 pub type Changesets = (Vec<u8>, Vec<u8>);
 
-/// 开着的一次记录：同步表的与所有表的两个 session
+/// Active recording session: two sessions for synced tables and all tables
 pub struct Recording {
     synced: u32,
     all: u32,
 }
 
-/// 记下的一次本机写：同步表要上传的改动与记下的改动集（什么也没改是空的），改到的本机专用的表，要交给 Standard Schema 查的行
+/// Recorded local write: changes to upload for synced tables and recorded changesets (empty if nothing changed),
+/// touched local-only tables, rows to validate against Standard Schema
 #[derive(Serialize)]
 pub struct Finished {
     pub changes: Vec<Change>,
@@ -51,7 +58,7 @@ pub struct Finished {
     pub rows: Vec<Stored>,
 }
 
-/// 改到的一行写完之后存着的声明里的各列
+/// Columns in declaration stored after a touched row is written
 #[derive(Serialize)]
 pub struct Stored {
     pub table: String,
@@ -63,7 +70,7 @@ pub struct Recorder {
     local_only: Vec<Table>,
     read_only: HashSet<String>,
     schemas: HashSet<String>,
-    /// 每张同步表本机的列：声明的，加上库里已有、没删掉的（App 回滚到少一列的发布时，后来加的列还在库里）；_extra 只在本机、不上传
+    /// Local columns for each synced table: declared, plus existing non-retired columns in database (if app rolled back to a release with fewer columns, later added columns remain in db); _extra is local-only and not uploaded
     known: HashMap<String, Vec<String>>,
     rows: Rows,
 }
@@ -72,7 +79,7 @@ mod reading;
 
 impl Recorder {
     /// # Errors
-    /// 外键引用的表不是同步表；读库出错。
+    /// Foreign key references a table that is not synced; database read error.
     pub fn new(db: &Connection, config: Config) -> Result<Self, Error> {
         let retired: HashSet<String> = config.retired.into_iter().collect();
         let mut known = HashMap::new();
@@ -96,10 +103,10 @@ impl Recorder {
         })
     }
 
-    /// 开始记一次本机写；开不了第二个 session 就结束第一个、报错
+    /// Starts recording a local write; if the second session cannot be opened, closes the first and returns an error.
     ///
     /// # Errors
-    /// SQLite 开不了 session。
+    /// SQLite fails to open session.
     pub fn start(&self, database: &mut Database) -> Result<Recording, Error> {
         let names: Vec<String> = self.synced.iter().map(|table| table.name.clone()).collect();
         let synced = database.record(Some(&names))?;
@@ -112,10 +119,10 @@ impl Recorder {
         }
     }
 
-    /// 结束记录、读出两份改动集（同步表的、所有表的）；读第一份出错也结束第二份。已经结束过是 None
+    /// Stops recording and reads both changesets (synced tables and all tables); closes the second even if reading the first fails. Returns None if already stopped.
     ///
     /// # Errors
-    /// SQLite 读不出改动集。
+    /// SQLite fails to read changeset.
     pub fn stop(database: &mut Database, recording: &mut Option<Recording>) -> Result<Option<Changesets>, Error> {
         let Some(Recording { synced, all }) = recording.take() else {
             return Ok(None);
@@ -128,26 +135,27 @@ impl Recorder {
             }
         };
         let all = database.stop(all)?;
-        let ended = || Error::Failed("这次本机写的记录已经结束".to_owned());
+        let ended = || Error::Failed("recording of this local write has already ended".to_owned());
         Ok(Some((synced.ok_or_else(ended)?, all.ok_or_else(ended)?)))
     }
 
-    /// 结束记录并读出结果：改到的行不合声明是 `Invalid`、写了别的表或只由云端写的表是 `Failed`；出错时调用方回滚。
-    /// 事务已被 SQLite 回滚了也报错（记录不结束，由调用方回滚时结束），不记下事务外的改动
+    /// Stops recording and reads results: invalid rows against declaration produce `Invalid`, writing other tables or read-only tables produces `Failed`; caller rolls back on error.
+    /// Also errors if transaction was already rolled back by SQLite (recording does not stop, stops when caller rolls back), preventing changes outside transaction from being recorded.
     ///
     /// # Errors
-    /// 见上；读库出错是 `Sql`。
+    /// See above; database read errors produce `Sql`.
     pub fn finish(&self, database: &mut Database, recording: &mut Option<Recording>) -> Result<Finished, Error> {
         if !database.in_transaction() {
             return Err(Error::Failed(ROLLED_BACK.to_owned()));
         }
-        let (synced, all) = Self::stop(database, recording)?.ok_or_else(|| Error::Failed("这次本机写的记录已经结束".to_owned()))?;
+        let (synced, all) =
+            Self::stop(database, recording)?.ok_or_else(|| Error::Failed("recording of this local write has already ended".to_owned()))?;
         let db = database.connection();
         let mut rows = Vec::new();
         let local = self.check_local(db, &all, &mut rows)?;
         let changes = self.changes_of(db, &synced)?;
         if let Some(table) = changes.iter().map(Change::table).find(|table| self.read_only.contains(*table)) {
-            return Err(Error::Failed(format!("{table} 只由云端写，本机写不能改它")));
+            return Err(Error::Failed(format!("table {table} is read-only; local writes cannot modify it")));
         }
         for change in &changes {
             let (Change::Put { table, row } | Change::Patch { table, row }) = change else {
@@ -157,14 +165,14 @@ impl Recorder {
                 .synced
                 .iter()
                 .find(|declared| declared.name == *table)
-                .ok_or_else(|| Error::Failed(format!("本机写只能写同步表：{table}")))?;
+                .ok_or_else(|| Error::Failed(format!("local write can only modify synced tables: {table}")))?;
             self.keep(table, validation::check(db, declared, true, row)?, &mut rows);
             if self.row_bytes(db, declared, row)? > MAX_ROW_BYTES {
                 return Err(Error::Invalid {
                     table: table.clone(),
                     issues: vec![Issue {
                         path: Vec::new(),
-                        message: format!("这一行超过 {MAX_ROW_BYTES} 字节，云端存不下：拆成几行"),
+                        message: format!("row exceeds {MAX_ROW_BYTES} bytes and cannot be stored on cloud; split into smaller rows"),
                     }],
                 });
             }
@@ -177,10 +185,10 @@ impl Recorder {
         })
     }
 
-    /// 照「行怎么写」执行改动（本机写与重放同一个），给了 recorded 先撤回它；给出记下的改动集
+    /// Writes changes according to row write rules (same for local write and replay); if recorded is provided, reverts it first; returns recorded changeset.
     ///
     /// # Errors
-    /// 引用的行不在、超出一次写的上限是 `Reject`；撤回对不上、库出错是 `Sql`。
+    /// Missing referenced row or exceeding write limits produces `Reject`; revert mismatch or database error produces `Sql`.
     pub fn run(&self, database: &mut Database, changes: &[Change], recorded: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         if let Some(recorded) = recorded {
             database.revert(recorded)?;
@@ -190,10 +198,12 @@ impl Recorder {
             database.stop(id)?;
             return Err(error);
         }
-        database.stop(id)?.ok_or_else(|| Error::Failed("这次重做的记录已经结束".to_owned()))
+        database
+            .stop(id)?
+            .ok_or_else(|| Error::Failed("recording of this replay has already ended".to_owned()))
     }
 
-    /// 本机专用的表的名字
+    /// Names of local-only tables
     #[must_use]
     pub fn local_only(&self) -> Vec<String> {
         self.local_only.iter().map(|table| table.name.clone()).collect()
@@ -226,7 +236,7 @@ mod tests {
         (Database::new(connection).unwrap(), recorder)
     }
 
-    /// 开着一次本机写（保存点）并开始记录
+    /// Opens a local write (savepoint) and starts recording
     fn writing() -> (Database, Recorder, Option<Recording>) {
         let (mut device, recorder) = opened();
         device.connection().execute_batch("SAVEPOINT write").unwrap();
@@ -235,16 +245,16 @@ mod tests {
     }
 
     #[test]
-    fn 同步表的改动读成要上传的行_本机专用的表只记表名_查过之后重做() {
+    fn synced_changes_read_for_upload_local_only_names_recorded_and_redone() {
         let (mut device, recorder, mut recording) = writing();
         device
             .connection()
-            .execute_batch("INSERT INTO workout VALUES ('w1', '深蹲'); INSERT INTO draft VALUES ('d1');")
+            .execute_batch("INSERT INTO workout VALUES ('w1', 'squat'); INSERT INTO draft VALUES ('d1');")
             .unwrap();
         let finished = recorder.finish(&mut device, &mut recording).unwrap();
         assert_eq!(
             serde_json::to_value(&finished.changes).unwrap(),
-            json!([{ "op": "put", "table": "workout", "row": { "id": "w1", "note": "深蹲" } }])
+            json!([{ "op": "put", "table": "workout", "row": { "id": "w1", "note": "squat" } }])
         );
         assert_eq!(finished.local, ["draft"]);
         assert_eq!(finished.rows.len(), 1);
@@ -253,26 +263,26 @@ mod tests {
     }
 
     #[test]
-    fn 写了别的表就报错() {
+    fn writing_unregistered_table_fails() {
         let (mut device, recorder, mut recording) = writing();
         device.connection().execute_batch("INSERT INTO scratch VALUES ('s1')").unwrap();
         let Err(Error::Failed(message)) = recorder.finish(&mut device, &mut recording) else {
-            panic!("应当报错")
+            panic!("expected error")
         };
-        assert_eq!(message, "本机写只能写同步表与本机专用的表：scratch");
+        assert_eq!(message, "local write can only modify synced or local-only tables: scratch");
     }
 
     #[test]
-    fn 事务已被回滚时报错_记录留到调用方中止时结束_每个只结束一次() {
+    fn rolled_back_transaction_fails_and_stops_once_on_abort() {
         let (mut device, recorder) = opened();
         let mut recording = Some(recorder.start(&mut device).unwrap());
         let Err(Error::Failed(message)) = recorder.finish(&mut device, &mut recording) else {
-            panic!("应当报错")
+            panic!("expected error")
         };
         assert_eq!(message, ROLLED_BACK);
         assert!(Recorder::stop(&mut device, &mut recording).unwrap().is_some());
         assert!(Recorder::stop(&mut device, &mut recording).unwrap().is_none());
-        // 两个 session 都已结束：之后的写照常记下
+        // Both sessions ended: subsequent writes record normally
         let mut next = Some(recorder.start(&mut device).unwrap());
         device
             .connection()

@@ -9,7 +9,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** 临时目录里写下这些文件 */
+/** Writes files to a temporary directory. */
 function scratch(files: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), 'model-cache-'));
   dirs.push(dir);
@@ -20,17 +20,17 @@ function scratch(files: Record<string, string>) {
   return dir;
 }
 
-test('EXTENDS 后换行、逗号在行首，INSTANCE 后换行，都认得出', () => {
+test('parses EXTENDS across newlines, leading commas, and INSTANCE across newlines', () => {
   expect([...usedModules('EXTENDS\n  A, B\n')]).toEqual(['A', 'B']);
   expect([...usedModules('EXTENDS A\n      , B\n')]).toEqual(['A', 'B']);
   expect([...usedModules('M == INSTANCE\n  C\n')]).toEqual(['C']);
 });
 
-test('不闭合的块注释原样留着，与闭合了的不同', () => {
+test('preserves unclosed block comments so they differ from closed comments', () => {
   expect(withoutComments('INIT Init\n(* x')).not.toBe(withoutComments('INIT Init\n(* x *)'));
 });
 
-test('EXTENDS 可以写到下一行，INSTANCE 也算', () => {
+test('parses multi-line EXTENDS and INSTANCE statements', () => {
   expect([...usedModules('---- MODULE A ----\nEXTENDS Integers, B,\n    C\nVARIABLE x\nD == INSTANCE E WITH x <- x\n')]).toEqual([
     'Integers',
     'B',
@@ -39,7 +39,7 @@ test('EXTENDS 可以写到下一行，INSTANCE 也算', () => {
   ]);
 });
 
-test('只有用到的模块改了，哈希才变', () => {
+test('changes hash only when referenced modules change', () => {
   const dir = scratch({
     'A.tla': '---- MODULE A ----\nEXTENDS Integers, B\n====\n',
     'B.tla': '---- MODULE B ----\nX == 1\n====\n',
@@ -54,7 +54,7 @@ test('只有用到的模块改了，哈希才变', () => {
   expect(hash()).not.toBe(before);
 });
 
-test('配置、TLC 的参数、后面目录里的模块（轨迹）改了，哈希都变', () => {
+test('changes hash when configuration, TLC arguments, or trace modules change', () => {
   const dir = scratch({
     'Trace.tla': '---- MODULE Trace ----\nEXTENDS Log\n====\n',
     'Trace.cfg': 'INIT Init\n',
@@ -70,13 +70,13 @@ test('配置、TLC 的参数、后面目录里的模块（轨迹）改了，哈�
   expect(hash()).not.toBe(traced);
 });
 
-test('去掉行注释与可以嵌套的块注释，块注释的位置补空格、后面的字不挪；字符串里的留着；空行去掉', () => {
-  const text = 'A == 1 \\* 行注释\n\n(* 外 (* 内 *) *)\nB == (*x*) /\\ "\\* 不是注释"\n';
-  expect(withoutComments(text)).toBe('A == 1\nB ==       /\\ "\\* 不是注释"');
+test('strips line comments and nested block comments, padding block comments with spaces to preserve column alignment and retaining string contents', () => {
+  const text = 'A == 1 \\* line comment\n\n(* outer (* inner *) *)\nB == (*x*) /\\ "\\* not a comment"\n';
+  expect(withoutComments(text)).toBe('A == 1\nB ==       /\\ "\\* not a comment"');
   expect(withoutComments('S == "a\\"(*b" (* c *)\n')).toBe('S == "a\\"(*b"');
 });
 
-test('缩进不同的两份，哈希不同（列表靠列对齐分组）', () => {
+test('produces different hashes for different indentation (column alignment defines list groupings)', () => {
   const dir = scratch({ 'A.tla': 'X == /\\ a\n     /\\ b\n', 'MCA.cfg': 'INIT Init\n' });
   const hash = () => inputsHash([dir], 'A', join(dir, 'MCA.cfg'), 'tlc');
   const before = hash();
@@ -84,16 +84,16 @@ test('缩进不同的两份，哈希不同（列表靠列对齐分组）', () =>
   expect(hash()).not.toBe(before);
 });
 
-test('只改注释，哈希不变', () => {
-  const dir = scratch({ 'A.tla': '---- MODULE A ----\nX == 1 \\* 一\n====\n', 'MCA.cfg': '\\* 说明\nINIT Init\n' });
+test('preserves hash when only comments change', () => {
+  const dir = scratch({ 'A.tla': '---- MODULE A ----\nX == 1 \\* one\n====\n', 'MCA.cfg': '\\* comment\nINIT Init\n' });
   const hash = () => inputsHash([dir], 'A', join(dir, 'MCA.cfg'), 'tlc');
   const before = hash();
-  writeFileSync(join(dir, 'A.tla'), '---- MODULE A ----\n(* 新的说明 *)\nX == 1 \\* 二\n====\n');
-  writeFileSync(join(dir, 'MCA.cfg'), '\\* 改了说明\nINIT Init\n');
+  writeFileSync(join(dir, 'A.tla'), '---- MODULE A ----\n(* new comment *)\nX == 1 \\* two\n====\n');
+  writeFileSync(join(dir, 'MCA.cfg'), '\\* modified comment\nINIT Init\n');
   expect(hash()).toBe(before);
 });
 
-test('只复用通过的；没通过就忘掉上次的', () => {
+test('reuses only passing runs and clears cached hash on failure', () => {
   const file = join(scratch({}), 'cache.json');
   passedCache(file).record('MCA.cfg', 'h1', true);
   expect(passedCache(file).reusable('MCA.cfg', 'h1')).toBe(true);

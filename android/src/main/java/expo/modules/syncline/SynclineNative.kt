@@ -1,6 +1,6 @@
 package expo.modules.syncline
 
-/** Rust 的设备一侧（rust/native/src/android.rs）的 JNI 接口；句柄的归属见那里 */
+/** JNI interface for the native Rust sync engine (`rust/native`). */
 internal object SynclineNative {
   init {
     System.loadLibrary("syncline_native")
@@ -16,6 +16,6 @@ internal object SynclineNative {
 
   @JvmStatic external fun free(handle: Long)
 
-  /** 删掉库文件：成功回空，出错回错误消息 */
+  /** Removes database file, returning null on success or error message on failure. */
   @JvmStatic external fun remove(path: String): String?
 }

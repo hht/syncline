@@ -28,67 +28,69 @@ import { rangeRows } from '../features/checksum/common/checksum.ts';
 import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../features/exports/cloud/exports.ts';
 import { rustLimits } from './test-rust.ts';
 
-// 写给接入方的上限文档与代码里的常数一致：每一句由常数现算，改了常数没改文档就失败。设备一侧的数取自 Rust 的核心
+// Documentation limits for integrators match code constants: each statement is computed dynamically from constants; modifying constants without updating documentation fails. Device-side values are read from the Rust core.
 
 const { pushLimit, receiveTimeout, pingAfter, pongWithin, baseDelay, maxDelay, maxRowBytes, batch, rowsPerDay, interval, askAgainAfter } =
   rustLimits();
 
 const limits = readFileSync(new URL('../../docs/reference/limits.md', import.meta.url), 'utf8');
 
-/** 按「万」写：2.4 万、1,600 万 */
-const wan = (value: number) => `${(value / 10_000).toLocaleString('en')} 万`;
-const seconds = (ms: number) => `${ms / 1000} 秒`;
+const count = (value: number) => value.toLocaleString('en-US');
+const seconds = (ms: number) => `${ms / 1000} ${ms === 1000 ? 'second' : 'seconds'}`;
+const minutes = (ms: number) => `${ms / 60_000} ${ms === 60_000 ? 'minute' : 'minutes'}`;
+const hours = (ms: number) => `${ms / 3_600_000} ${ms === 3_600_000 ? 'hour' : 'hours'}`;
 const mib = (bytes: number) => `${bytes / 2 ** 20} MiB`;
 const mb = (bytes: number) => `${bytes / 1_000_000} MB`;
+const kb = (bytes: number) => `${bytes / 1000} KB`;
 
 test.each([
-  // 大小
-  `${mib(writeBytes)}（UTF-8）`,
-  `超过 ${mib(pushBytes)}（UTF-8）`,
-  `拉取的正文超过 ${mb(pullBytes)}（UTF-8）`,
-  `改动约 ${wan(pushLimit)}字节`,
-  `至多 ${pushMutations} 条写`,
-  `同时 ${defaultConnections} 条`,
-  `整条消息 ${wan(socketLimit)}字节`,
-  `最慢按每秒 ${slowestRate / 1000} KB 算`,
-  `不超过 ${wan(noticeBudget)}`,
-  `私有空间约 ${wan(chunkLimit)}字符`,
-  `至多读库里 ${wan(readRows)}行`,
-  `默认 ${defaultRows} 行（\`chunkRows\`）`,
-  `编成 JSON 共 ${keyBytes} 字节`,
-  `编成 JSON 至多 ${subscriptionBytes} 字节`,
-  `一个桶至多 ${bucketBytes} 字节`,
-  `同步的列共 ${maxRowBytes.toLocaleString('en')} 字节（DO 一行最多 ${mb(valueBytes)}`,
-  `约 ${mib(commitFloor)} 与数据`,
-  `每版约 ${rowOverhead} 字节`,
-  `至多删 ${wan(truncateRows)}版、主键共 ${mib(truncateBytes)}`,
-  `默认 ${defaultShards} 片`,
-  `${wan(writeRows)}行（共用空间只有服务端写，至多 ${wan(sharedWriteRows)}行：每行还要维护它在的桶），主键编成 JSON 共 ${mb(writeKeyBytes)}`,
-  `至多 ${wan(rangeRows)}行、约 ${wan(rangeChars)}字符、${rangeParts} 张表`,
-  `至多减到 ${batch} 行`,
-  `每天至多要 ${wan(rowsPerDay)}行`,
-  // 时长
-  `${seconds(receiveTimeout)}没收到任何数据`,
-  `空闲 ${seconds(pingAfter)}发一次 ping，${seconds(pongWithin)}内没有任何消息`,
-  `min(${seconds(maxDelay)}, ${seconds(baseDelay)} × 2ⁿ)`,
-  `每秒 ${reconnectRate} 台`,
-  `写了之后 ${seconds(defaultExportDelay)}（\`exportDelay\`）`,
-  `最多 ${maxExportDelay / 3_600_000} 小时`,
-  `最多导 ${defaultExportBudget / 60_000} 分钟（\`exportBudget\`）`,
-])('limits.md 写着：%s', (sentence) => {
+  // Sizes
+  `${mib(writeBytes)} (UTF-8)`,
+  `exceeding ${mib(pushBytes)} (UTF-8)`,
+  `pull request body exceeds ${mb(pullBytes)} (UTF-8)`,
+  `Roughly ${count(pushLimit)} bytes of changes`,
+  `up to ${count(pushMutations)} mutations`,
+  `${count(defaultConnections)} concurrent connections`,
+  `${count(socketLimit)} bytes per entire message`,
+  `minimum transfer rate of ${kb(slowestRate)}/s`,
+  `does not exceed ${count(noticeBudget)}`,
+  `Roughly ${count(chunkLimit)} characters for private spaces`,
+  `reads at most ${count(readRows)} rows from the database`,
+  `every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
+  `${count(keyBytes)} bytes encoded as JSON`,
+  `at most ${count(subscriptionBytes)} bytes encoded as JSON`,
+  `at most ${count(bucketBytes)} bytes per bucket`,
+  `Synced columns total ${count(maxRowBytes)} bytes (DO rows cap at ${mb(valueBytes)}`,
+  `greater of roughly ${mib(commitFloor)} and`,
+  `roughly ${count(rowOverhead)} bytes per version`,
+  `deleting at most ${count(truncateRows)} commits and ${mib(truncateBytes)} of primary keys`,
+  `default ${count(defaultShards)} shards`,
+  `${count(writeRows)} rows (shared spaces support only server writes, up to ${count(sharedWriteRows)} rows: each row must also maintain its buckets), and primary keys total ${mb(writeKeyBytes)}`,
+  `at most ${count(rangeRows)} rows, roughly ${count(rangeChars)} characters, and ${count(rangeParts)} tables`,
+  `halves down to ${count(batch)} rows`,
+  `requests at most ${count(rowsPerDay)} rows per day`,
+  // Durations
+  `no data is received for ${seconds(receiveTimeout)}`,
+  `idle for ${seconds(pingAfter)}, and if no message arrives within ${seconds(pongWithin)}`,
+  `min(${seconds(maxDelay)}, ${seconds(baseDelay)} * 2ⁿ)`,
+  `${count(reconnectRate)} devices per second`,
+  `${seconds(defaultExportDelay)} after a write (\`exportDelay\`)`,
+  `up to ${hours(maxExportDelay)}`,
+  `exports for at most ${minutes(defaultExportBudget)} per alarm (\`exportBudget\`)`,
+])('limits.md states: %s', (sentence) => {
   expect(limits).toContain(sentence);
 });
 
-test('写成汉字的：校验和对完一轮满一天再对、要了没对成至多每分钟再要一次', () => {
+test('checksum verification waits a full day after completing a round, and retries failed sections at most once per minute', () => {
   expect([interval, askAgainAfter]).toEqual([24 * 3_600_000, 60_000]);
-  expect(limits).toContain('上次对完一轮满一天');
-  expect(limits).toContain('至多每分钟再要一次');
+  expect(limits).toContain('a full day after the previous round completed');
+  expect(limits).toContain('at most once per minute');
 });
 
-test('Rust 的设备一侧与云端共用的上限一样', () => {
+test('Rust device-side limits match cloud limits', () => {
   expect(rustLimits()).toMatchObject({ valueBytes, valueChars, keyBytes, writeRows, writeKeyBytes });
 });
 
-test('web 的外壳按核心的时长判 HTTP 拉取停住（原生的外壳直接取核心的常数）', () => {
+test('web shell determines HTTP pull stall from core duration (native shell imports core constants directly)', () => {
   expect(shellReceiveTimeout).toBe(receiveTimeout);
 });

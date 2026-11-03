@@ -1,10 +1,11 @@
-//! 设备一侧的入口（照 `PowerSync` 的 `powersync_control`）：一个本机库与它各空间的同步，外面每来一个事件（App 的调用、token、socket、HTTP 应答、
-//! 到时的计时器）调一次 `control`，回一组指令（`sync::instructions`）。
-//! 本机库的读写在这里排队：读、本机写、收下云端的改动、建共用空间、整份重下一个接一个；本机写跨好几次调用（begin、execute、end），
-//! 开着时别的都排在它后面，等满 5 秒提醒接入方（多半是 write 的 body 里用了 query 或另一次 write，排在这次写后面、永远等不到）。
-//! 本机写提交前把改到的行交 JS 按接入方的 Standard Schema 查（`validate`），查过再提交。分几步的后台的事（对校验和、收缩库文件）
-//! 步与步之间排一个 0 毫秒的计时器让出线程，App 的读写插得进来。
-//! 不该知道的：指令由谁、怎么做；网络与计时；页面与 Worker、原生线程怎么传话。
+//! Device-side coordinator (modeled after `PowerSync` `powersync_control`): manages a local database and synchronization across its spaces.
+//! Each external event (app call, token, socket event, HTTP response, or expired timer) invokes `control`, returning a batch of [`Instruction`]s.
+//! Local database reads and writes queue here: queries, local writes, applying cloud changes, creating shared spaces, and full resyncs run sequentially.
+//! A local write spans multiple calls (`begin`, `execute`, `end`); while open, all other operations queue behind it. If a queued operation waits for 5s,
+//! an error warns the integrator (typically because a `query`, `useQuery`, or nested `write` was called inside the write body, deadlocking behind the open write).
+//! Before committing a local write, modified rows are sent to JS for validation against the integrator's Standard Schema (`validate`).
+//! Multi-step background work (verifying checksums, shrinking the database) yields the thread between steps via a 0ms timer so app queries and writes can interleave.
+//! What it should not know: who executes instructions or how; networking and timers; thread/worker communication mechanisms.
 //! @see <https://github.com/powersync-ja/powersync-sqlite-core/blob/v0.5.4/crates/core/src/sync/interface.rs>
 
 use crate::database::Database;
@@ -37,23 +38,24 @@ use verification::{Verification, Waiter};
 
 pub struct Client {
     device: Device,
-    /// 各空间的同步：私有空间是空串
+    /// Synchronization connections per space: private space is the empty string.
     connections: BTreeMap<String, Connection>,
     out: Out,
     random: Random,
     queue: VecDeque<Queued>,
     write: Option<Write>,
     verification: Option<Verification>,
-    /// 各共用空间建表、升级做完了没有
+    /// Tracks whether table creation and upgrades have completed for each shared space.
     opened: HashMap<String, Opened>,
     closed: bool,
 }
 
 impl Client {
-    /// 照 opening 建表、打开设备（还不同步：私有空间的同步由 `connect` 开始），连同打开时攒下的指令（报出的问题这类）
+    /// Prepares tables per `opening` and opens the device (without syncing: private space sync begins on `connect`), returning instructions queued during open.
     ///
     /// # Errors
-    /// 建表出错（`Opening::prepare`），见 `Device::open`。出错时交还库
+    ///
+    /// Returns an error if table creation fails (`Opening::prepare`), see `Device::open`. The database is returned on error.
     pub fn open(
         db: Database,
         opening: Opening,
@@ -81,7 +83,7 @@ impl Client {
         Ok((client, instructions))
     }
 
-    /// 交还库（关掉之后）
+    /// Returns the underlying database (after closing).
     #[must_use]
     pub fn into_database(self) -> Database {
         self.device.close().0
@@ -92,17 +94,17 @@ impl Client {
         &self.device
     }
 
-    /// 一个空间的同步
+    /// Returns the sync connection for a channel.
     #[must_use]
     pub fn connection(&self, channel: &str) -> Option<&Connection> {
         self.connections.get(channel)
     }
 
-    /// 交来一个事件（now 是当前时刻，毫秒），回这期间攒下的指令
+    /// Dispatches an input event at `now` (in milliseconds), returning accumulated instructions.
     pub fn control(&mut self, input: Input, now: f64) -> Vec<Instruction> {
         let mut jobs = Vec::new();
         self.dispatch(input, &mut jobs, now);
-        // 不经队列的（本机写的提交这类）留下的副作用
+        // Side effects not passing through the queue (such as local write commits)
         self.settle(now);
         self.enqueue_jobs(jobs);
         self.drain(now);
@@ -131,7 +133,7 @@ impl Client {
     fn dispatch(&mut self, input: Input, jobs: &mut Vec<Job>, now: f64) {
         if self.closed {
             if let Some(id) = call_id(&input) {
-                self.reply(id, Err(Failure::new("本机库已关闭")));
+                self.reply(id, Err(Failure::new("local database is closed")));
             }
             return;
         }
@@ -166,11 +168,11 @@ impl Client {
         }
     }
 
-    /// 关库：停下各空间的同步，开着的本机写回滚，排着的与在等的都以「本机库已关闭」失败
+    /// Closes the database: stops space synchronization, rolls back open local writes, and fails queued/waiting calls with "local database is closed".
     fn close(&mut self, jobs: &mut Vec<Job>, now: f64) {
         self.each(jobs, now, Connection::stop);
         self.closed = true;
-        let closed = || Err(Failure::new("本机库已关闭"));
+        let closed = || Err(Failure::new("local database is closed"));
         if let Some(Write { validating: Some(id), .. }) = self.write {
             self.reply(id, closed());
         }
@@ -187,7 +189,7 @@ impl Client {
                 Task::OpenShared { .. } | Task::Job(_) | Task::Verify | Task::Shrink => {}
             }
         }
-        // 测试直接要的校验和作罢（私有空间的连接已停下，不用告诉）
+        // Cancel direct test checksum requests (private space connection is stopped)
         for waiter in self
             .verification
             .take()
@@ -201,7 +203,7 @@ impl Client {
         self.settle(now);
     }
 
-    /// 取走设备攒下的副作用变成指令：改到的表、照常报出的问题、被扣下的写；有了新的本机写告诉私有空间的同步，要收缩就排上
+    /// Converts device side effects into instructions: touched tables, reported errors, held writes; notifies private space of new local writes, and schedules vacuuming.
     fn settle(&mut self, now: f64) {
         let effects = self.device.take_effects();
         if !effects.touched.is_empty() {

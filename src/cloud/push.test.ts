@@ -8,8 +8,9 @@ import type { Event } from './events.ts';
 import { Server } from './server.ts';
 import { Space } from './space.ts';
 
-// 云端处理一批推送（模型 HandlePush）：逐条执行；写本身的问题扣下、推进序号；存储出错不推进、已提交的留着，以 1011 关推送方的连接，已有提交时给别的连接发提示；
-// 序号空洞跳过
+// Cloud push batch processing (HandlePush in TLA+ models): executes sequentially; holds flawed writes and advances lmid;
+// storage errors do not advance lmid, preserve committed writes, close pusher socket with 1011, and send hints to other connections if commits occurred;
+// sequence gaps are skipped.
 
 const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)';
@@ -26,7 +27,7 @@ const notes = (cloud: ReturnType<typeof cloudStorage>) =>
     .toArray()
     .map(({ id }) => id);
 
-/** 之后第 nth 条写 note 的语句抛一次 I/O 错（不是写本身的问题，重试会好） */
+/** Causes the nth upcoming write to note to throw an I/O error (transient error, recoverable on retry). */
 function failNoteWrite(cloud: ReturnType<typeof cloudStorage>, nth = 1) {
   const exec = cloud.sql.exec;
   let countdown = nth;
@@ -39,7 +40,7 @@ function failNoteWrite(cloud: ReturnType<typeof cloudStorage>, nth = 1) {
   };
 }
 
-test('存储出错（不是写本身的问题），出错之前已有写提交：已提交的留着、序号推进，出错那条起不处理、不扣下；重推照常执行', () => {
+test('storage error (not mutation flaw) after earlier writes committed: committed writes persist and advance lmid, failing mutation onward is uncommitted and unheld; retry executes normally', () => {
   const cloud = cloudStorage(createNote);
   const space = new Space(cloud, [note]);
   failNoteWrite(cloud, 2);
@@ -50,8 +51,8 @@ test('存储出错（不是写本身的问题），出错之前已有写提交�
   expect(space.push([put('c1', 2), put('c1', 3)])?.lmids).toEqual({ c1: 3 });
 });
 
-test('值放不进云端的表（两端的类型不一致、单个值超过 2 MB）：是写本身的问题，扣下、推进序号，之后的写照常执行', () => {
-  // 云端的 body 是 STRICT 的整数列（cloudStorage 再接上 WITHOUT ROWID），设备的表定义里是文本
+test('value cannot fit cloud table (type mismatch across ends, single value exceeding 2 MB): mutation flaw holds write, advances lmid, subsequent writes execute normally', () => {
+  // Cloud body is STRICT integer column (cloudStorage adds WITHOUT ROWID), while device schema defines it as text.
   const cloud = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body INTEGER) STRICT,');
   const events: Event[] = [];
   const space = new Space(cloud, [note], { events: (event) => events.push(event) });
@@ -61,7 +62,7 @@ test('值放不进云端的表（两端的类型不一致、单个值超过 2 MB
     changes: [{ op: 'put', table: 'note', row: { id: client, body: value } }],
   });
 
-  const poke = space.push([body('c1', '深蹲'), body('c2', '1'.repeat(3_000_000)), put('c3', 1)]);
+  const poke = space.push([body('c1', 'squat'), body('c2', '1'.repeat(3_000_000)), put('c3', 1)]);
   expect(poke?.lmids).toEqual({ c1: 1, c2: 1, c3: 1 });
   expect(space.held().map(({ client, reason }) => [client, reason])).toEqual([
     ['c1', expect.stringContaining('cannot store TEXT value in INTEGER column')],
@@ -71,7 +72,7 @@ test('值放不进云端的表（两端的类型不一致、单个值超过 2 MB
   expect(events.filter(({ type }) => type === 'write.held')).toHaveLength(2);
 });
 
-test('认不出的错（不是存储出错，每次执行都可能再出，如代码缺陷）：扣下、推进序号，不让这个客户端之后的写都推不上去', () => {
+test('unexpected non-storage error (e.g. code bug occurring repeatedly on execution): holds write and advances lmid to avoid blocking subsequent writes from client', () => {
   const cloud = cloudStorage(createNote);
   const space = new Space(cloud, [note]);
   const exec = cloud.sql.exec;
@@ -84,7 +85,7 @@ test('认不出的错（不是存储出错，每次执行都可能再出，如�
   expect(notes(cloud)).toEqual(['c1-2']);
 });
 
-test('改动与同步表对不上（表或列不是同步的、缺主键、删除给了主键之外的列）：扣下、推进序号', () => {
+test('mutation schema mismatch (unsynced table/column, missing primary key, delete specifies non-key column): holds write and advances lmid', () => {
   const space = new Space(cloudStorage(createNote), [note]);
   const poke = space.push([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'draft', row: { id: 'd1' } }] },
@@ -96,17 +97,17 @@ test('改动与同步表对不上（表或列不是同步的、缺主键、删�
   expect(space.held().map(({ id }) => id)).toEqual([1, 2, 3, 4]);
 });
 
-test('拒收的原因里恰有存储暂时出错的字样（列名、校验器的报错带着推来的值）：照样扣下、推进序号，不当作存储出错让这个客户端一直重推', () => {
+test('reject reason containing storage error substring (column name or validator error quoting input): holds write and advances lmid without treating as transient storage error', () => {
   const space = new Space(cloudStorage(createNote), [note]);
   const poke = space.push([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'note', row: { id: 'n1', SQLITE_FULL: 'x' } }] },
     put('c1', 2),
   ]);
   expect(poke?.lmids).toEqual({ c1: 2 });
-  expect(space.held().map(({ id, reason }) => [id, reason])).toEqual([[1, '改动的列不在 note 上：SQLITE_FULL']]);
+  expect(space.held().map(({ id, reason }) => [id, reason])).toEqual([[1, 'Modified column is not declared on table note: SQLITE_FULL']]);
 });
 
-/** 空间里 a 已推过第 1 条；events 收下之后报出的事件 */
+/** Sets up space where client a has pushed mutation 1; events collects subsequent events. */
 function pushedOnce() {
   const cloud = cloudStorage(createNote);
   const events: Event[] = [];
@@ -115,20 +116,20 @@ function pushedOnce() {
   return { cloud, events, space };
 }
 
-test('标着是这个客户端最早的待上传（first）、序号比处理到的大（时间点恢复回滚掉了前面已确认的）：跳号执行，之后的接着收；只往上跳', () => {
+test('mutation marked first with ID greater than lmid (cloud PITR rolled back previously confirmed writes): jumps lmid, executes, and continues receiving subsequent writes; never jumps backward', () => {
   const { cloud, events, space } = pushedOnce();
 
   const poke = space.push([{ ...put('a', 4), first: true }, put('a', 5)]);
   expect(poke?.lmids).toEqual({ a: 5 });
   expect(notes(cloud)).toEqual(['a-1', 'a-4', 'a-5']);
   expect(events.filter(({ type }) => type === 'write.skipped')).toEqual([]);
-  // 标着的序号已处理过（重复送达、旧备份里的）：照常当重复跳过，不往回拉
+  // Marked ID already processed (duplicate delivery or stale backup): skipped as duplicate without rewinding lmid.
   expect(space.push([{ ...put('a', 2), first: true }])).toBeUndefined();
   expect(space.push([put('a', 6)])?.lmids).toEqual({ a: 6 });
   expect(() => parseMutations(JSON.stringify([{ ...put('a', 7), first: 1 }]))).toThrow();
 });
 
-test('序号空洞（前面还缺）：跳过、报出 write.skipped，别的客户端照常执行', () => {
+test('sequence gap (earlier mutation missing): skips mutation, emits write.skipped, other clients execute normally', () => {
   const { cloud, events, space } = pushedOnce();
 
   const poke = space.push([put('a', 3), put('b', 1), put('a', 4), put('b', 2)]);
@@ -141,7 +142,7 @@ test('序号空洞（前面还缺）：跳过、报出 write.skipped，别的客
   expect(space.push([put('a', 3)])).toBeUndefined();
 });
 
-/** 一个空间的 Server，手机与平板各一条打开着的连接；events 收云端的事件 */
+/** Server instance with open connections for phone and tablet; events collects cloud events. */
 function online() {
   const cloud = cloudStorage(createNote);
   const events: Event[] = [];
@@ -152,7 +153,7 @@ function online() {
   return { cloud, events, phone, tablet, server };
 }
 
-test('推送处理不了、出错之前已有写提交：推送方以 1011 关掉，别的在线设备也没收到这些写的通知，给它们发提示、连着拉取补齐（不断开、不算出错）', () => {
+test('push processing fails after earlier writes committed: closes pusher with 1011, sends hint to other online devices without poke to catch up via pull', () => {
   const { cloud, phone, tablet, server } = online();
   failNoteWrite(cloud, 2);
   tablet.sent.length = 0;
@@ -163,7 +164,7 @@ test('推送处理不了、出错之前已有写提交：推送方以 1011 关�
   expect(tablet.sent.map((text) => JSON.parse(text))).toEqual([{ hint: { version: 1, nonce: expect.any(Number) } }]);
 });
 
-test('推送处理不了、什么也没提交：只关推送方的连接，别的设备不受影响', () => {
+test('push processing fails before any write commits: closes pusher socket only, other devices unaffected', () => {
   const { cloud, phone, tablet, server } = online();
   failNoteWrite(cloud);
 
@@ -172,7 +173,7 @@ test('推送处理不了、什么也没提交：只关推送方的连接，别�
   expect(tablet.closed).toEqual([]);
 });
 
-test('存储坏到读不出最新一版：照样以 1011 关推送方的连接、报 push.failed', () => {
+test('storage failure reading head version: closes pusher with 1011 and emits push.failed', () => {
   const { cloud, events, phone, server } = online();
   cloud.sql.exec = () => {
     throw new Error('SQLITE_IOERR: disk I/O error');
@@ -183,7 +184,7 @@ test('存储坏到读不出最新一版：照样以 1011 关推送方的连接�
   expect(events).toContainEqual({ type: 'push.failed', reason: 'SQLITE_IOERR: disk I/O error' });
 });
 
-test('推来的主键与表里存的写法不同（整数主键写成 "1"）：按表里存的记，一次写里先后用 1 与 "1" 改的是同一行，下发一条、主键是存的值', () => {
+test('pushed primary key differs in formatting from stored value (integer primary key as string "1"): stores canonically, combines 1 and "1" in single write, emits stored key', () => {
   const item = sqliteTable('item', { id: integer().primaryKey(), n: integer() });
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, n INTEGER)'), [item]);
   const poke = space.push([
@@ -199,7 +200,7 @@ test('推来的主键与表里存的写法不同（整数主键写成 "1"）：�
   expect(poke?.patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, n: 2 } }]);
 });
 
-test('写入额度：一批超过手上的不执行、以 1013 关这条连接（设备按退避重推），过一阵补上了照常执行；比攒满还大的一批攒满就放行，不会永远推不上去', () => {
+test('write quota: batch exceeding available tokens closes connection with 1013 without executing (client retries with backoff), succeeds after refill; batch exceeding burst succeeds once full', () => {
   vi.useFakeTimers();
   try {
     const cloud = cloudStorage(createNote);
@@ -210,7 +211,7 @@ test('写入额度：一批超过手上的不执行、以 1013 关这条连接�
     server.receive(phone, JSON.stringify([put('c1', 3)]));
     expect(phone.closed).toEqual([1013]);
     expect(notes(cloud)).toEqual(['c1-1', 'c1-2']);
-    // 设备重连
+    // Device reconnects.
     phone.readyState = WebSocket.OPEN;
     vi.advanceTimersByTime(1000);
     server.receive(phone, JSON.stringify([put('c1', 3)]));
@@ -223,14 +224,14 @@ test('写入额度：一批超过手上的不执行、以 1013 关这条连接�
   }
 });
 
-test('设备推来的写当天（UTC）计费的行写：服务端的写不算，已处理过的不算；对象重启（休眠醒来）后从提交记录接着算，第二天从 0 起', () => {
+test('device push billed row writes today (UTC): server writes and duplicates excluded; resumes from commit log across object restart, resets to 0 next day', () => {
   vi.useFakeTimers({ now: Date.UTC(2026, 9, 22, 23) });
   try {
     const cloud = cloudStorage(createNote);
     let space = new Space(cloud, [note]);
     space.mutate((tx) => tx.insert(note, { id: 's1' }));
     expect(space.pushedToday()).toBe(0);
-    // 每条写一行 note、一行客户端表、一行提交记录（测试的存储按 SQLite 改到的行数算，不含索引）
+    // Each write writes one note row, one client row, and one commit log row (test storage counts SQLite touched rows, excluding indexes).
     space.push([put('c1', 1), put('c1', 2)]);
     expect(space.pushedToday()).toBe(6);
     space.push([put('c1', 2)]);
@@ -238,11 +239,11 @@ test('设备推来的写当天（UTC）计费的行写：服务端的写不算�
     space = new Space(cloud, [note]);
     expect(space.pushedToday()).toBe(6);
     space.mutate((tx) => tx.insert(note, { id: 's2' }));
-    // 服务端的写不算，照抄上一版记的：醒来后读最新一版就接着算，不往回找最近一条设备的写
+    // Server writes are excluded, copying previous commit record: restart resumes from latest commit without scanning backward for device writes.
     expect(cloud.sql.exec('SELECT used FROM _syncline_commit ORDER BY version DESC LIMIT 1').toArray()).toEqual([{ used: 6 }]);
     space = new Space(cloud, [note]);
     expect(space.pushedToday()).toBe(6);
-    // 扣下的：执行时写了又回滚的照算，扣下时写的也算
+    // Held writes count: statements executed prior to rollback count, and held write commit row counts.
     space.push([{ client: 'c1', id: 3, changes: [{ op: 'put', table: 'note', row: { id: 'h1', nope: 1 } }] }]);
     const held = space.pushedToday();
     expect(held).toBeGreaterThan(5);

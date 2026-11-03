@@ -10,7 +10,7 @@ import { head, lmids } from './test-commits.ts';
 import type { Device } from './test-device.ts';
 import { write } from './test-schema.ts';
 
-// 确定性模拟的接入方：计数表与引用它的标签表、设备与服务端的几种写，和按同一规则算设备应当看到什么的参考实现
+// Deterministic simulation application domain: counter table referenced by tag table, writes on device and server, and reference replayer.
 
 export const counter = sqliteTable('counter', { id: text().primaryKey(), n: integer().notNull() });
 export const tag = sqliteTable('tag', {
@@ -20,10 +20,10 @@ export const tag = sqliteTable('tag', {
     .references(() => counter.id),
 });
 export const tables = [counter, tag];
-/** 备注：模拟里先只在云端、之后进入同步、再删掉（Releases）；参考实现不算它 */
+/** Memo table: initially cloud-only, enters sync on second release, retired on third (Releases); ignored by reference replayer. */
 const memo = sqliteTable('memo', { id: text().primaryKey(), body: text() });
 export const createMemo = 'CREATE TABLE memo (id TEXT PRIMARY KEY, body TEXT)';
-/** 每次发布的同步表与删掉的名字：备注只在云端、进入同步、删掉 */
+/** Releases declaring synced tables and retired names: memo is cloud-only, enters sync, then retired. */
 const releases = [
   { tables, retired: [] },
   { tables: [...tables, memo], retired: [] },
@@ -35,9 +35,9 @@ export const schema = [
 ];
 export const keys = ['a', 'b', 'c'];
 
-/** 设备上的写：先读再写；计数不在时打标签与删除什么也不改，返回改没改 */
+/** Device writes: read-then-write; marking or removing absent counters is a no-op; returns boolean indicating modification. */
 export const writes = {
-  /** 计数加 1（不在就从 1 开始），并给它打一个标签：并发时后到的整行覆盖先到的。给了 open 就写完之后等它再结束（这次写一直开着） */
+  /** Increments counter (defaults to 1 if absent) and attaches tag: concurrent writes overwrite on upsert. When open promise provided, awaits it. */
   inc: (device: Device, id: string, label: string, open?: Promise<void>) =>
     write(device, async (tx) => {
       const [found] = await tx.select().from(counter).where(eq(counter.id, id));
@@ -47,14 +47,14 @@ export const writes = {
       await open;
       return true;
     }),
-  /** 给计数打标签：计数同时被别的设备删掉时云端拒收 */
+  /** Attaches tag to counter: held on cloud if counter was deleted concurrently. */
   mark: (device: Device, id: string, label: string) =>
     write(device, async (tx) => {
       const [found] = await tx.select().from(counter).where(eq(counter.id, id));
       if (found) await tx.insert(tag).values({ id: label, counter_id: id });
       return found !== undefined;
     }),
-  /** 删掉计数与它的标签：别的设备同时打的标签由云端连带删 */
+  /** Deletes counter and cascading tags: concurrent tags from other devices are cascaded by cloud. */
   remove: (device: Device, id: string) =>
     write(device, async (tx) => {
       const [found] = await tx.select().from(counter).where(eq(counter.id, id));
@@ -64,7 +64,7 @@ export const writes = {
       }
       return found !== undefined;
     }),
-  /** 写一条备注（设备声明了 memo 时） */
+  /** Writes a memo (when device declared memo). */
   note: (device: Device, id: string, label: string) =>
     write(device, async (tx) => {
       await tx
@@ -75,7 +75,7 @@ export const writes = {
     }),
 };
 
-/** 服务端的写：计数加 1 并打标签 */
+/** Server write: increments counter and attaches tag. */
 export function serverInc(tx: Transaction, id: string, label: string) {
   const n = (tx.select().from(counter).where(eq(counter.id, id)).all()[0]?.n ?? 0) + 1;
   tx.upsert(counter, { id, n });
@@ -94,7 +94,7 @@ type State = { counter: Map<string, Row>; tag: Map<string, Row> };
 const byId = (rows: Row[]) => new Map(rows.map((row) => [String(row.id), row]));
 const sorted = (rows: Map<string, Row>) => [...rows.values()].sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
-/** 写了标签、写完标签还在而它的计数不在：拒收 */
+/** Attaching tag when counter is absent: rejected as orphan. */
 const isOrphan = (state: State, change: Change) =>
   change.op !== 'del' &&
   change.table === 'tag' &&
@@ -102,7 +102,7 @@ const isOrphan = (state: State, change: Change) =>
   state.tag.has(String(change.row.id)) &&
   !state.counter.has(change.row.counter_id);
 
-/** put 合并或插入，patch 只改还在的行 */
+/** put merges or inserts; patch modifies existing rows only. */
 function upsert(state: State, change: Exclude<Change, { op: 'del' }>) {
   const rows = state[change.table as keyof State];
   if (!rows) return;
@@ -110,13 +110,13 @@ function upsert(state: State, change: Exclude<Change, { op: 'del' }>) {
   if (change.op === 'put' || found) rows.set(String(change.row.id), { ...found, ...change.row });
 }
 
-/** 删一行；删计数连带删它的标签 */
+/** Deletes row; deleting counter cascades to referencing tags. */
 function remove(state: State, table: string, id: string) {
   state[table as keyof State].delete(id);
   if (table === 'counter') for (const [label, row] of state.tag) if (row.counter_id === id) state.tag.delete(label);
 }
 
-/** 一条写之后的状态：先合并 put 与 patch，再删；拒收时返回 undefined */
+/** State following write: applies put/patch then del; returns undefined on rejection. */
 function afterWrite(state: State, changes: Change[]): State | undefined {
   const next = { counter: new Map(state.counter), tag: new Map(state.tag) };
   for (const change of changes) if (change.op !== 'del') upsert(next, change);
@@ -124,7 +124,7 @@ function afterWrite(state: State, changes: Change[]): State | undefined {
   return changes.some((change) => isOrphan(next, change)) ? undefined : next;
 }
 
-/** 参考实现：在云端某一版的快照上按顺序重放待上传（规则同 afterWrite），不经 SQL 与 Device 的撤回与重放 */
+/** Reference implementation: replays pending mutations in order on cloud snapshot without SQLite session inversion. */
 export function replay(base: Snapshot, pending: Mutation[]): Snapshot {
   let state: State = { counter: byId(base.counter), tag: byId(base.tag) };
   for (const { changes } of pending) state = afterWrite(state, changes) ?? state;
@@ -132,14 +132,14 @@ export function replay(base: Snapshot, pending: Mutation[]): Snapshot {
 }
 
 /**
- * 云端每个发出过的版本（版本.随机数）的快照与各客户端裁决到的写，用来算设备应当看到什么；
- * 与当前时间线上每个版本的整库，时间点恢复从这里挑
+ * Snapshots of each emitted cloud version (version.nonce) and lmids per client, used to compute expected device state;
+ * alongside full database images along the current timeline for PITR.
  */
 export class CloudHistory {
   readonly #versions = new Map<string, { snapshot: Snapshot; lmids: Map<string, number> }>();
   readonly #images = new Map<number, Uint8Array>();
 
-  /** 记下云端的最新一版 */
+  /** Records latest cloud version snapshot. */
   record(cloud: Storage & { image(): Uint8Array }) {
     const cookie = head(cloud);
     const key = formatCookie(cookie);
@@ -148,69 +148,70 @@ export class CloudHistory {
     this.#images.set(cookie.version, cloud.image());
   }
 
-  /** 同一版里截了日志：这一版的整库换成截完的，时间点恢复回到这一版时的下限是它最后一次截到的（模型的 Restore 可以取那段时间里任一个下限，轨迹核对钉在这一个） */
+  /** Log truncation occurred at current version: updates image so PITR restore lands on post-truncation state. */
   reimage(cloud: Storage & { image(): Uint8Array }) {
     this.#images.set(head(cloud).version, cloud.image());
   }
 
-  /** 当前时间线上早于 latest 的版本 */
+  /** Versions on current timeline earlier than latest. */
   earlier(latest: number) {
     return [...this.#images.keys()].filter((version) => version < latest);
   }
 
-  /** 时间点恢复到 version：之后的版本不再在当前时间线上，给出那一版的整库 */
+  /** Rewinds timeline to version: removes subsequent versions and returns database image at version. */
   rewind(version: number) {
     for (const later of this.#images.keys()) if (later > version) this.#images.delete(later);
     return this.#images.get(version) as Uint8Array;
   }
 
-  /** P5、P7：设备看到的 = 游标那一版的云端 + 按参考实现重放待上传；待上传都还没被游标那一版裁决 */
+  /** P5, P7: local database = cloud at cookie + replay pending writes; pending writes must not be confirmed by cookie version. */
   check(cookie: Cookie | null, pending: Mutation[], device: Storage) {
     const base = cookie
       ? this.#versions.get(formatCookie(cookie))
       : { snapshot: { counter: [], tag: [] }, lmids: new Map<string, number>() };
-    if (!base) throw new Error('设备的游标不是云端发出过的版本');
+    if (!base) throw new Error('device cookie is not an emitted cloud version');
     for (const { client, id } of pending)
-      if (id <= (base.lmids.get(client) ?? 0)) throw new Error(`已确认的写 ${client}/${id} 还在待上传里`);
+      if (id <= (base.lmids.get(client) ?? 0)) throw new Error(`confirmed write ${client}/${id} remains in pending queue`);
     expect(snapshot(device)).toEqual(replay(base.snapshot, pending));
   }
 }
 
-/** 云端有的标签（打了标签的写都提交在这里，被删计数连带删掉的除外） */
+/** Tags present on cloud (all committed tagged writes, except cascaded deletes). */
 export const labelsIn = (cloud: Storage) => new Set(snapshot(cloud).tag.map(({ id }) => id));
 
 /**
- * P8r（回滚掉的不复活）：时间点恢复回滚掉的写，只有恢复那一刻还留在某台设备（或备份）待上传里的才会由设备重放、再推上来；
- * 其余的不许再出现在云端。按写打的标签认
+ * P8r (rolled-back writes do not revive): writes rolled back by PITR only replay if surviving in some device upload queue
+ * at the moment of restore; all others must never reappear on cloud. Identified by unique tag labels.
  */
 export class RevivalCheck {
   readonly #forbidden = new Set<string>();
 
-  /** 云端恢复：before、after 是恢复前后云端有的标签，pending 是各设备与备份里待上传的标签 */
+  /** Cloud restore: before/after are cloud tag sets, pending is union of tag labels across devices and backups. */
   rewound(before: Set<string>, after: Set<string>, pending: Set<string>) {
     for (const label of before) if (!after.has(label) && !pending.has(label)) this.#forbidden.add(label);
   }
 
   check(cloud: Storage) {
-    for (const label of labelsIn(cloud)) if (this.#forbidden.has(label)) throw new Error(`恢复回滚掉、没有设备还留着的写 ${label} 复活了`);
+    for (const label of labelsIn(cloud))
+      if (this.#forbidden.has(label)) throw new Error(`rolled back write ${label} without surviving replicas revived`);
   }
 }
 
 /**
- * 接入方的发布（模型的 Enter、Leave）：备注表先只在云端（云端直接写它），一次部署进入同步，再一次删掉。
- * 记着云端部署到了第几次、每台设备启动时装的是第几次（没更新的照常同步或停下等更新）
+ * Schema releases (Enter/Leave in model): memo table begins cloud-only, enters sync on deploy, and is retired on next deploy.
+ * Tracks deployed cloud release index and installed app version per device.
  */
 export class Releases {
   #deployed = 0;
   readonly #installed: number[] = [];
 
-  /** 云端这次部署的：建 Space 的同步表与选项 */
+  /** Synced tables and options for current cloud deployment. */
   deployed() {
     const { tables, retired } = releases[this.#deployed] as (typeof releases)[number];
     return [tables, { retired }] as const;
   }
 
-  /** 还有下一次发布 */
+  /** Whether additional releases remain. */
   more() {
     return this.#deployed < releases.length - 1;
   }
@@ -219,45 +220,45 @@ export class Releases {
     this.#deployed += 1;
   }
 
-  /** 第 index 台设备启动：装上当时发布的 App，给出建 Device 的同步表与选项 */
+  /** Device launch at index: installs active release, returning table declaration and options. */
   install(index: number) {
     this.#installed[index] = this.#deployed;
     return this.deployed();
   }
 
-  /** 第 index 台设备装的 App 用到了删掉的备注：停下等更新（没用到的照常同步，不更新） */
+  /** Whether device app references retired memo table (stops to await update; unaffected apps sync normally). */
   outdated(index: number) {
     return this.#installed[index] === 1 && this.#deployed === 2;
   }
 
-  /** 第 index 台设备装的 App 写备注 */
+  /** Whether device app writes memo rows. */
   notes(index: number) {
     return this.#installed[index] === 1;
   }
 
-  /** 备注还只在云端 */
+  /** Memo is cloud-only in initial release. */
   cloudOnly() {
     return this.#deployed === 0;
   }
 
-  /** 云端直接写一条备注（只在云端用的表不经 Space） */
+  /** Direct cloud write to memo (cloud-only table bypassing Space). */
   cloudNote(cloud: Storage, id: string, label: string) {
     cloud.sql.exec('INSERT OR REPLACE INTO memo VALUES (?, ?)', id, label);
   }
 
-  /** 第 index 台设备与云端最后要一致的：计数与标签，云端同步着备注、设备装的 App 也认识它时备注也算 */
+  /** Expected convergent state for device: counter and tag, plus memo if both cloud and device include it. */
   view(storage: Storage, index: number) {
     const notes = () => drizzle(storage).select().from(memo).orderBy(memo.id).all();
     return this.#deployed === 1 && this.notes(index) ? { ...snapshot(storage), memo: notes() } : snapshot(storage);
   }
 
-  /** 第 index 台设备看到的与云端一致 */
+  /** Checks convergence between device and cloud for given index. */
   same(index: number, device: Storage, cloud: Storage) {
     return isDeepStrictEqual(this.view(device, index), this.view(cloud, index));
   }
 }
 
-/** 待上传里打的标签 */
+/** Extracts tag labels from pending mutations. */
 export const labelsOf = (pending: Mutation[]) =>
   pending.flatMap(({ changes }) =>
     changes.flatMap((change) => (change.op === 'put' && change.table === 'tag' ? [String(change.row.id)] : [])),

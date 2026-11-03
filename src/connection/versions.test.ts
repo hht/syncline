@@ -10,8 +10,9 @@ import { captureReported } from '../test/test-errors.ts';
 import { type CloudEnd, connectWithoutJitter, Network } from '../test/test-network.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
-// 云端回的消息设备认不出：协议版本对不上时，云端新就停下、报要更新 App，云端旧（部署回滚中）就照常重试；
-// 版本对得上却解析不了（云端的缺陷）照常报出、按退避重连，不留没接住的拒绝
+// Unrecognized cloud messages: when protocol version mismatches, stops and reports updateNeeded if cloud is newer;
+// retries with backoff if cloud is older (e.g. during rollback).
+// Protocol version matches but unparseable payload (cloud defect) reports error and retries with backoff.
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY)';
@@ -21,7 +22,7 @@ beforeEach(() => {
   reported = captureReported();
 });
 
-/** 云端有一条笔记、一台还没同步过的设备；garbled 时云端回解析不了的补齐与块 */
+/** Cloud with one note and an unsynced device; garbled causes server to return unparseable catch-up and chunks. */
 function setup() {
   const space = new Space(cloudStorage(createNote), [note]);
   space.mutate((tx) => tx.insert(note, { id: 'n1' }));
@@ -38,22 +39,22 @@ function setup() {
   const server: Server<CloudEnd> = new Server(network.sockets(), space);
   const device = new Device(deviceStorage(createNote), [note]);
   const connection = connectWithoutJitter(network, device);
-  /** 做完网络上的事；advance 为假时不让时间往前走（不重连），看出错当下的状态 */
+  /** Executes network tasks; advance=false pauses virtual time (no reconnect) to inspect error state immediately. */
   const run = (advance = true) => drain(network, { advance });
   return { network, connection, cloud, run };
 }
 
-test.for(['HTTP 拉到的块', 'WebSocket 上的补齐'])(
-  '%s解析不了：照常报出一次（不是没接住的拒绝），记成下载出错、按退避重试；云端好了之后照常同步',
+test.for(['HTTP chunk', 'WebSocket catch-up'])(
+  'unparseable %s reports error once, records downloadError, retries with backoff, and syncs once cloud recovers',
   async (where) => {
     const { network, connection, cloud, run } = setup();
-    if (where === 'WebSocket 上的补齐') {
+    if (where === 'WebSocket catch-up') {
       connection.start();
       await run();
       network.breakOne();
     }
     cloud.garbled = true;
-    if (where === 'WebSocket 上的补齐') network.fire();
+    if (where === 'WebSocket catch-up') network.fire();
     else connection.start();
     await run(false);
     expect(reported).toHaveLength(1);
@@ -65,7 +66,7 @@ test.for(['HTTP 拉到的块', 'WebSocket 上的补齐'])(
   },
 );
 
-test('云端的协议版本比设备新（HTTP 拉取回 409）：停下、不再重试，状态报要更新 App；sync() 立即失败', async () => {
+test('cloud protocol version newer than device (HTTP pull returns 409): stops retrying, reports updateNeeded, sync() fails', async () => {
   const { network, connection, run } = setup();
   network.cloudVersion = protocolVersion + 1;
   connection.start();
@@ -76,7 +77,7 @@ test('云端的协议版本比设备新（HTTP 拉取回 409）：停下、不�
   expect(reported).toEqual([]);
 });
 
-test('连着时云端部署了新的协议版本（WebSocket 以 4002 关闭）：同样停下、报要更新 App', async () => {
+test('cloud deploys newer protocol version while connected (WebSocket closes with 4002): stops and reports updateNeeded', async () => {
   const { network, connection, run } = setup();
   connection.start();
   await run();
@@ -88,7 +89,7 @@ test('连着时云端部署了新的协议版本（WebSocket 以 4002 关闭）�
   expect(network.fire()).toBe(false);
 });
 
-test('云端的协议版本比设备旧（部署回滚中）：不报要更新，照常按退避重试，云端回到这一版后连上', async () => {
+test('cloud protocol version older than device (during rollback): retries with backoff without updateNeeded, syncs when updated', async () => {
   const { network, connection, run } = setup();
   network.cloudVersion = protocolVersion - 1;
   connection.start();

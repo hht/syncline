@@ -1,7 +1,7 @@
-//! 一台设备怎么和它的各个空间保持同步：每个空间一条连接的状态机，连 WebSocket、HTTP 拉到追平、推待上传、
-//! 心跳、退避重连、同步状态。不做网络与计时：要开 socket、发请求、要 token、排计时器都是指令（`instructions`），外面回事件。
-//! 要动库的事（收下拉取的结果与连接上的消息、整份重下、对校验和）交给排队的一方（`Job`），轮到了再回到连接。
-//! 不该知道的：本机写怎么排队、App 的调用、token 从哪来。
+//! How a device stays in sync with each of its spaces: a state machine per space connection, connecting WebSocket, HTTP pulling until caught up, pushing pending mutations,
+//! heartbeat, backoff reconnect, and sync status. Performs no networking or timing: opening sockets, sending requests, requesting tokens, and scheduling timers are instructions (`instructions`), with events returned from outside.
+//! Database mutations (receiving pull responses and connection messages, resyncing, verifying checksums) are dispatched as queued jobs (`Job`), which return to the connection when processed.
+//! What it should not know: how local writes are queued, app calls, where tokens come from.
 //! @see <https://doc.replicache.dev/concepts/how-it-works>
 
 pub mod backoff;
@@ -21,37 +21,37 @@ use crate::protocol::{Cookie, Heard, Pulled};
 use backoff::Random;
 use instructions::Out;
 
-/// 协议的版本（与云端的是同一个数）：设备在拉取与连接的网址上带 v=版本
+/// Protocol version (same number as cloud): device includes `v=version` on pull and connection URLs.
 pub const PROTOCOL_VERSION: i64 = 5;
-/// 云端以它关连接：协议版本对不上，原因是云端的版本
+/// Cloud closes connection with this: protocol version mismatch, reason is cloud version.
 pub const VERSION_MISMATCH: u16 = 4002;
-/// HTTP 拉取回它：协议版本对不上，正文是云端的版本
+/// HTTP pull returns this: protocol version mismatch, body is cloud version.
 pub const VERSION_CONFLICT: u16 = 409;
-/// 云端以它关连接：要先 HTTP 拉一次再连（游标不在历史上、换了账号）
+/// Cloud closes connection with this: must do an HTTP pull before connecting (cookie not in history, account changed).
 pub const PULL_NEEDED: u16 = 4000;
-/// 云端以它关连接：表结构的指纹对不上，HTTP 拉取时由设备判断
+/// Cloud closes connection with this: schema fingerprint mismatch, evaluated by device during HTTP pull.
 pub const SCHEMA_MISMATCH: u16 = 4003;
-/// HTTP 拉取回它：表结构的指纹对不上，正文是云端的表结构
+/// HTTP pull returns this: schema fingerprint mismatch, body is cloud schema.
 pub const SCHEMA_CONFLICT: u16 = 412;
-/// 云端处理推送出错（存储出错这类）时的关闭码：退避后重连、重发
+/// Close code when cloud fails to handle push (e.g. storage error): reconnect and retry push after backoff.
 pub const PUSH_FAILED: u16 = 1011;
-/// 云端认不出推上去的这批时的关闭码：设备的缺陷，这次 start 之内不再推
+/// Close code when cloud does not recognize push batch: device defect, ceases pushing for this run.
 pub const INVALID_PUSH: u16 = 1007;
-/// 推得太多（超过写入额度）时的关闭码：退避后重连、重推
+/// Close code when pushing too much (write quota exceeded): reconnect and retry push after backoff.
 pub const OVER_QUOTA: u16 = 1013;
-/// WebSocket 上一条消息至多多少字节（UTF-8）
+/// Maximum bytes per WebSocket message (UTF-8).
 pub const SOCKET_LIMIT: f64 = 24_000.0;
-/// 网最慢按每秒多少字节算
+/// Slowest assumed network speed in bytes per second.
 pub const SLOWEST_RATE: f64 = 1_000.0;
 pub const PING: &str = "ping";
 pub const PONG: &str = "pong";
-/// WebSocket 的子协议：协议名，token 与表结构的指纹各加前缀跟在后面
+/// WebSocket subprotocol: protocol name, followed by token and schema fingerprint with respective prefixes.
 pub const SUBPROTOCOL: &str = "syncline";
 pub const BEARER: &str = "bearer.";
 pub const SCHEMA_PREFIX: &str = "schema.";
 pub const SCHEMA_HEADER: &str = "Syncline-Schema";
 
-/// 连接做一件事时用到的：设备、攒指令的、抖动用的随机数、交给队列的事、当前时刻（毫秒）
+/// Context used when a connection performs an action: device, instruction collector, random generator for jitter, queued jobs, and current time in milliseconds.
 pub struct Context<'a> {
     pub device: &'a mut Device,
     pub out: &'a mut Out,
@@ -60,25 +60,25 @@ pub struct Context<'a> {
     pub now: f64,
 }
 
-/// 连接交给队列的、要动库的事：都带着哪个空间、哪一次连接（作废了的轮到时不做）
-#[expect(clippy::large_enum_variant, reason = "排着的事很少，取走就用")]
+/// Database jobs dispatched from a connection to the queue: each carries which space and connection attempt (invalidated ones are skipped when reached).
+#[expect(clippy::large_enum_variant, reason = "few queued jobs, consumed immediately")]
 pub enum Job {
-    /// 收下一次拉取的结果；sent 是发请求时的本机游标
+    /// Receive result of a pull; `sent` is the local cookie when the request was sent.
     Receive {
         channel: String,
         attempt: u64,
         pulled: Pulled,
         sent: Option<Cookie>,
     },
-    /// 收下连接上的一条消息；pulling 是收到时拉取在路上
+    /// Receive a message from connection; `pulling` indicates an in-flight pull when received.
     Heard {
         channel: String,
         attempt: u64,
         message: Heard,
         pulling: bool,
     },
-    /// 整份重下
+    /// Full resync.
     Resync { channel: String, attempt: u64, discard: bool },
-    /// 对一段校验和（私有空间追平了）
+    /// Verify a range of checksums (private space caught up).
     Verify { attempt: u64 },
 }

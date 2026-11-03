@@ -1,6 +1,6 @@
-//! 外键照声明的：删一行连带删引用它的行（照 SQLite 的 ON DELETE CASCADE），连带删的也占名额；
-//! 写了引用列、引用的行却已不在就整条拒收。
-//! 不该知道的：put 与 patch 怎么写行。
+//! Foreign keys follow declarations: deleting a row cascades to referencing rows (matching SQLite ON DELETE CASCADE),
+//! and cascades consume write quota; writing a reference column whose parent row is missing rejects the whole write.
+//! What it should not know: how put and patch write rows.
 
 use super::{Room, Rows, returning, too_many};
 use crate::change::Row;
@@ -10,10 +10,12 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, params};
 
 impl Rows {
-    /// 删一张表里的一组行，再一层层连带删引用它们的行，真删掉的每一行扣名额；不在的行什么也不做。
-    /// 连带删按外键一批批删（among：每层每张子表每批一条语句，按外键的索引查）：每批先只数要删几行、读回的列（主键与再下一层引用的列）
-    /// 的值共多少字节，超过这次写剩下的名额就拒收，装得下才删。外键引用的不是主键时，读回的被引用列名额里不扣，另累计进先数时的比较。
-    /// 删掉的一批批压栈、不递归（自引用的深链一层一行，递归会爆栈）
+    /// Deletes a set of rows in a table, cascading downward to referencing rows, deducting quota for each deleted row; missing rows are no-ops.
+    /// Cascades delete in batches by foreign key (among: one statement per batch per child table, querying via foreign key index):
+    /// each batch counts rows to delete and bytes of returned columns (primary key and next-level referenced columns),
+    /// rejecting if remaining quota is exceeded, deleting only if it fits.
+    /// Non-primary-key referenced columns read back are not deducted from quota, but accumulated into the pre-count comparison.
+    /// Batches of deleted rows are pushed to a stack rather than recursing (deep self-referencing chains could overflow stack).
     pub(super) fn delete(&self, db: &Connection, table: &str, keys: &[Row], room: &mut Room) -> Result<(), Error> {
         let mut retained = 0.0;
         let key = &self.tables[table].key;
@@ -46,7 +48,7 @@ impl Rows {
         Ok(())
     }
 
-    /// 删 name 里满足 condition 的行，扣名额，给出它们的主键与再下一层引用的列；retained 是这次删除读回的被引用列（不是主键的）共多少字节
+    /// Deletes rows in name matching condition, deducting quota, returning their primary keys and next-level referenced columns; retained tracks cumulative bytes of read-back non-primary-key referenced columns
     fn removed(
         &self,
         db: &Connection,
@@ -79,7 +81,7 @@ impl Rows {
         let (rows, bytes, referenced_bytes): (i64, f64, f64) = db
             .prepare_cached(&counting)?
             .query_row(params![values, room.rows + 1], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
-        #[expect(clippy::cast_precision_loss, reason = "名额在 f64 精确表示的范围里")]
+        #[expect(clippy::cast_precision_loss, reason = "quota is within exact f64 range")]
         let left = room.bytes as f64;
         if rows > room.rows || bytes + *retained > left {
             return Err(Error::Reject(too_many(room.max_rows)));
@@ -93,7 +95,7 @@ impl Rows {
         Ok(rows)
     }
 
-    /// 写完之后查改到的一行：还在、却引用不在的行就拒收（同一次写里先写子行后写父行不算）
+    /// Checks modified row after writes: rejects if row exists but references a missing parent row (writing child before parent in the same write does not fail)
     pub(super) fn check(&self, db: &Connection, table: &str, key: &Row) -> Result<(), Error> {
         let Some(references) = self.parents.get(table) else {
             return Ok(());
@@ -121,7 +123,7 @@ impl Rows {
             }
             let sql = format!("SELECT 1 FROM {} WHERE {}", quote(&reference.parent), where_key(&reference.to));
             if !db.prepare_cached(&sql)?.exists(rusqlite::params_from_iter(values))? {
-                return Err(Error::Reject(format!("{table} 引用的 {} 已不在", reference.parent)));
+                return Err(Error::Reject(format!("{table} references {}, which is missing", reference.parent)));
             }
         }
         Ok(())

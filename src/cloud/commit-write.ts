@@ -11,11 +11,15 @@ import { withBuckets } from './shared.ts';
 import type { Touched } from './written-rows.ts';
 
 /**
- * 一次写怎么落成下一版的提交：在一个事务里写、记下改到的行、校验，共用空间再维护每一项在的桶与各桶的行数，出错整条回滚。
- * 不该知道的：写是谁的（设备推来的、服务端的、重新提交的）、执行不了时怎么办、怎么通知设备。
+ * Executes a write and records it as the next commit version in a transaction.
+ *
+ * Runs write mutations, records touched rows, and validates constraints. In a shared space,
+ * it also maintains bucket membership and per-bucket row tallies. Rolls back completely on error.
+ * What it should not know: write origin (device push, server write, resubmitted write),
+ * failure recovery policy, or device notification mechanics.
  */
 
-/** 一个空间提交写要用到的：存储、提交记录、行怎么写、怎么校验；共用空间另有桶规则与各桶的行数 */
+/** Dependencies required to commit a write: storage, commits, row writer, and validator; shared spaces also include bucket rules and row counts. */
 export type CommitContext = {
   storage: CloudStorage;
   commits: Commits;
@@ -27,10 +31,14 @@ export type CommitContext = {
 };
 
 /**
- * 在一个事务里写、校验、记成下一版的提交，出错整条回滚。改到的行边写边记，内存里只留一段；
- * 写完逐段校验改到的行（parents 时也查它引用的行还在不在：服务端的写在写完之后查），共用空间给每一项并上改后它在的桶
- * （改前的随这一项报出，见 Space.mutate），各桶的行数跟着增减。used 给出设备的写当天到此刻写了几行；touched 收下校验时读到的每一行写完后的值（拼通知用）。
- * 返回这次之后的最新一版：记了就是记下的最后一版，服务端的写没改到同步的行、没有记就是原来的最新一版
+ * Writes, validates, and records the next commit version within a transaction, rolling back on error.
+ *
+ * Touched rows are recorded as changes occur, keeping only bounded segments in memory.
+ * After writing, touched rows are validated segment by segment (when parents is true, foreign key references
+ * are verified after the write completes). For shared spaces, each entry is augmented with its post-write buckets
+ * (prior buckets are reported with the entry, see Space.mutate), updating bucket row counts.
+ * Argument used reports cumulative daily writes for device accounting; touched receives post-write row values for pokes.
+ * Returns the latest cookie after the write: the new commit head if recorded, or the existing head if a server write touched no synced rows.
  */
 export function commitWrite(
   { storage, commits, query, rows, validator, buckets, bucketRows }: CommitContext,
@@ -43,7 +51,7 @@ export function commitWrite(
   return storage.transactionSync(() => {
     const recording = commits.begin(client, id, { used, reserve: buckets?.reserve ?? 0 });
     let count = 0;
-    // 改到的行超过一次写的上限（连带删的也算；共用空间每行要维护桶，上限另算）就抛 Reject：设备的写扣下，服务端的写抛给调用方
+    // Throws Reject if touched rows exceed the single-write limit (including cascade deletes; shared spaces have a separate limit due to bucket indexing): device writes are held, server writes throw to caller.
     write(
       limitRows(buckets ? sharedWriteRows : writeRows, (table, key, before) => {
         count += 1;
@@ -51,7 +59,7 @@ export function commitWrite(
         recording.add(before ? [table, canonical, before] : [table, canonical]);
       }),
     );
-    // 设备的写都记（推进序号，扣下的也是）；服务端的写没改到同步的行就不记，不多一版、不发通知（一项也没加，库里什么也没写）
+    // Device writes always record (advancing lmid, even when held); server writes touching no synced rows record nothing, creating no new version and emitting no poke.
     if (client === null && count === 0) return commits.head();
     const head = recording.finish((keys) => {
       for (const [table, key] of changedRows(keys)) {

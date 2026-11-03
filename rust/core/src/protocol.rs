@@ -1,13 +1,13 @@
-//! 设备收到的云端消息里的数据（在边界由 `sync::wire` 解析、验过）：
-//! 行的改动、主键的一段、游标、通知与拉取的块。
-//! 不该知道的：消息怎么传、怎么收下。
+//! Data in cloud messages received by the device (parsed and validated at the boundary by `sync::wire`):
+//! row mutations, primary key ranges, cookies, notifications, and pulled chunks.
+//! What it should not know: how messages are transported or received.
 //! @see <https://docs.powersync.com/architecture/powersync-protocol>
 
 use crate::change::Row;
 use serde::{Deserialize, Serialize};
 
-/// 云端行的改动。行与主键都是 SQL 列名到 SQLite 值；put 另带主键（本机还没有的表的行也按主键存）。
-/// clear 只出现在整份下发的开头；drop 是这张表（给了 columns 是这些列，给了 range 是主键在这一段里的行）设备上一个不留，之后的改动照常叠上
+/// Cloud row mutation. Both rows and primary keys map SQL column names to SQLite values; put also carries the primary key (rows for tables not yet present locally are still stored by primary key).
+/// `clear` appears only at the start of a full sync; `drop` removes the entire table (or specified `columns`, or rows within `range`) from the device, with subsequent mutations applied on top.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Op {
@@ -28,7 +28,7 @@ pub enum Op {
     Clear,
 }
 
-/// 主键的一段：key 是主键的列（按比较的先后），在 after 之后（没有是从头）、不超过 until（没有是到尾）的，按行值比
+/// A range of primary keys: `key` lists primary key columns in comparison order; matches keys strictly after `after` (from the beginning if None) and at most `until` (to the end if None), compared using row values.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KeyRange {
     pub key: Vec<String>,
@@ -38,14 +38,14 @@ pub struct KeyRange {
     pub until: Option<Row>,
 }
 
-/// 游标：空间的哪一版
+/// Cookie: a specific version of a space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cookie {
     pub version: i64,
     pub nonce: i64,
 }
 
-/// 共用空间的一版与它是空间的哪一代（代是建空间时定的随机数，清空重建后不同，版本号从头记；没记下代的本机数据是 None）
+/// A version of a shared space and its incarnation (a random number chosen at space creation, differing across wipes and recreation, resetting versions to zero; None for local data lacking an incarnation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Point {
     pub cookie: Cookie,
@@ -53,20 +53,20 @@ pub struct Point {
 }
 
 impl Point {
-    /// 比 other 新（model/Shared.tla 的 Newer）：other 没有、是另一代（代只比相等，不比先后），或同一代里版本更大
+    /// Returns true if newer than `other` (`Newer` in `model/Shared.tla`): `other` is None, is a different incarnation (compared only for equality, not order), or has a higher version within the same incarnation.
     #[must_use]
     pub fn newer(&self, other: Option<&Point>) -> bool {
         other.is_none_or(|other| self.incarnation != other.incarnation || self.cookie.version > other.cookie.version)
     }
 }
 
-/// 云端确认到每个客户端的哪个序号
+/// Confirmed sequence numbers per client from the cloud.
 pub type Lmids = std::collections::HashMap<String, i64>;
 
-/// 通知与拉取的末块：设备游标等于 base 时才能接上；lmids 是各客户端处理到第几条。分了块的末块带这次请求的 cursor。
-/// space 是入口验过的身份（私有空间），held 是 base 之后云端扣下的写，checksum 是要了校验和时这一版里一段的。
-/// 共用空间的末块另带 seen（见 `Chunk`）、next 与 landed（这一块按的订阅，编过的，设备不解读，落地时存下、拉取原样带回）；
-/// 共用空间的消息都带 sub（按的订阅的指纹）与 incarnation（空间的这一代）
+/// Notification and final pulled chunk: applied only when the device cookie matches `base`; `lmids` records the processed mutation sequence number per client. Chunked final responses include the request `cursor`.
+/// `space` is the boundary-verified space identity (for private spaces), `held` contains mutations held by the cloud after `base`, and `checksum` contains range checksums for this version when requested.
+/// Shared space final chunks additionally carry `seen` (see `Chunk`), `next`, and `landed` (opaque subscription tokens saved on write and echoed back on pull);
+/// all shared space messages carry `sub` (subscription fingerprint) and `incarnation` (space incarnation).
 #[derive(Clone, Debug, Deserialize)]
 pub struct Poke {
     pub base: Option<Cookie>,
@@ -86,7 +86,7 @@ pub struct Poke {
     pub advice: Advice,
 }
 
-/// 云端的建议：重连的窗口（毫秒，广播分片按连着的设备数给）、身份还有多久到期（毫秒）
+/// Advice from the cloud: reconnect window (`spread` in ms, scaled by active connections in broadcast shards) and credential remaining lifetime (`expiresIn` in ms).
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub struct Advice {
     pub spread: Option<f64>,
@@ -94,7 +94,7 @@ pub struct Advice {
     pub expires_in: Option<f64>,
 }
 
-/// 拉取的一块，后面还有：设备先暂存，带着 next 拉下一块。共用空间的块另带 seen：算这一块时云端的最新一版（块经缓存发出，可能是过时的副本）
+/// A non-terminal chunk of pulled data: device stages it and fetches the next chunk using `next`. Shared space chunks additionally include `seen`: the latest cloud version when computing this chunk (chunks served via cache may be stale replicas).
 #[derive(Clone, Debug, Deserialize)]
 pub struct Chunk {
     pub base: Option<Cookie>,
@@ -108,9 +108,9 @@ pub struct Chunk {
     pub incarnation: Option<i64>,
 }
 
-/// 共用空间拉取时游标不在云端当前的历史上（私有空间不回它）
+/// Shared space pull response when the cookie is not in cloud current history (private spaces do not return this).
 #[derive(Clone, Debug, Deserialize)]
-#[expect(clippy::struct_field_names, reason = "字段名是云端消息的键")]
+#[expect(clippy::struct_field_names, reason = "field name matches cloud message key")]
 pub struct Reset {
     pub reset: bool,
     pub space: Option<String>,
@@ -118,9 +118,9 @@ pub struct Reset {
     pub incarnation: Option<i64>,
 }
 
-/// 云端推给设备的提示：空间到了哪一版
+/// Cloud push notification hinting the latest version of a space to the device.
 #[derive(Clone, Debug, Deserialize)]
-#[expect(clippy::struct_field_names, reason = "字段名是云端消息的键")]
+#[expect(clippy::struct_field_names, reason = "field name matches cloud message key")]
 pub struct Hint {
     pub hint: Cookie,
     pub space: Option<String>,
@@ -130,10 +130,13 @@ pub struct Hint {
     pub advice: Advice,
 }
 
-/// 拉取的结果
+/// Result of a pull operation.
 #[derive(Clone, Debug, Deserialize)]
-// 32 位的 wasm 上指针减半，大小之差不到阈值、不报
-#[cfg_attr(target_pointer_width = "64", expect(clippy::large_enum_variant, reason = "一次拉取一个，收下就扔"))]
+// On 32-bit wasm, pointers are halved, so size difference does not exceed threshold.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(clippy::large_enum_variant, reason = "pulled one at a time and dropped after ingestion")
+)]
 #[serde(untagged)]
 pub enum Pulled {
     Reset(Reset),
@@ -142,7 +145,7 @@ pub enum Pulled {
 }
 
 impl Pulled {
-    /// 这条结果是空间的哪一代
+    /// Space incarnation for this pull result.
     #[must_use]
     pub fn incarnation(&self) -> Option<i64> {
         match self {
@@ -152,7 +155,7 @@ impl Pulled {
         }
     }
 
-    /// 算这条结果时云端的最新一版（共用空间的块与末块）
+    /// Latest cloud version when computing this result (for shared space chunks and final pokes).
     #[must_use]
     pub fn seen(&self) -> Option<i64> {
         match self {
@@ -163,7 +166,7 @@ impl Pulled {
     }
 }
 
-/// 连接上收到的消息
+/// Message received on the connection.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Heard {
@@ -171,7 +174,7 @@ pub enum Heard {
     Poke(Box<Poke>),
 }
 
-/// 云端扣下的一条写：哪个客户端的第几条、为什么
+/// Mutation held by the cloud: client ID, mutation sequence number, and rejection reason.
 #[derive(Clone, Debug, Deserialize)]
 pub struct HeldWrite {
     pub client: String,
@@ -179,7 +182,7 @@ pub struct HeldWrite {
     pub reason: String,
 }
 
-/// 校验和的一段里一张表的一部分：主键在这一段里的行
+/// A table partition within a checksum range: rows whose primary keys fall within this range.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChecksumPart {
     pub table: String,
@@ -187,7 +190,7 @@ pub struct ChecksumPart {
     pub range: KeyRange,
 }
 
-/// 按范围重下的一张表：主键在 after 之后、不超过 until 的行
+/// A table to re-pull by range: rows strictly after `after` and at most `until`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PullRange {
     pub table: String,
@@ -197,7 +200,7 @@ pub struct PullRange {
     pub until: Option<Row>,
 }
 
-/// 校验和的一段：几部分、这几部分的行的哈希之和、有几行、下一段从哪起；最后一段另带全部同步表
+/// Checksum range: parts, sum of row hashes across parts, row count, next cursor; final range also includes all synced table names.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Checksum {
     pub parts: Vec<ChecksumPart>,

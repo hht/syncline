@@ -1,9 +1,13 @@
-//! 分块拉取的块怎么暂存：不是末块的块的改动先存进 `_syncline_staged`、不生效，末块到了也暂存，再由同步表一次写进去、清空；
-//! 整份与整张表重给的行不在这里，写进影子表。暂存在库里，断线、重启后从最后一块的 next 接着拉（块的 next 记在 `_syncline_stage`）；
-//! 清掉之后收缩库文件。
-//! 按主键去重：一行只留最后一条；清空丢掉这个空间的暂存、删一张表丢掉这张表的、删几列从暂存的行里去掉这几列、
-//! 清一段主键丢掉这张表这一段里的，并各记一行，落地时先照它们清，暂存里留下的都在它们之后到，结果与按到达的先后一条条写相同。都在调用方开好的本机事务里执行。
-//! 不该知道的：块从哪来、应用一条改动怎么写本机表。
+//! Staging multi-chunk pull responses: changes from non-final chunks are stored in `_syncline_staged`
+//! without taking effect; final chunk is also staged before synced tables write them all at once and clear the stage.
+//! Full pull and whole-table rows bypass staging and write directly into shadow tables.
+//! Stage persists in database so interrupted pulls or app restarts resume from the last chunk's next cursor (stored in `_syncline_stage`).
+//! Database file shrinks after clearing stage.
+//! Deduplication by primary key: only latest op per row is kept; clear drops stage for space, drop table drops table entries,
+//! drop columns strips columns from staged rows, and key range drops rows within range. Each records a marker row so landing
+//! applies drops first; remaining staged rows arrived afterward, matching serial execution order.
+//! All executed within caller's local transaction.
+//! What it should not know: where chunks come from or how applying an op modifies local tables.
 //! @see <https://github.com/powersync-ja/powersync-sqlite-core/blob/9f729f9e95817d2b232bdd43b14a94ddb919a624/crates/core/src/sync/operations.rs#L27-L46>
 //! @see <https://github.com/rocicorp/mono/blob/945ce619249e63381fb51d46c12f0d9e80024860/packages/replicache/src/sync/patch.ts#L23-L31>
 
@@ -15,25 +19,24 @@ use crate::sql::exists;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// 暂存里清掉的一段记在哪个 key 下：[主键的列, after, until]（没有的是 null）的 JSON，以 [ 开头。行的主键（`key_text`）是对象、以 { 开头，
-/// 清空与删表、删列记在空串下：三种按 key 的先后分开，落地时按主键跳着取各段，不读暂存的行（resets）
+/// Key under which dropped range is stored in stage: JSON of `[primary_key_columns, after, until]` (missing bounds are null), starting with `[`. Row keys (`key_text`) are JSON objects starting with `{`, and clear/drop table/drop columns are stored under empty string: distinguished by key prefix so landing scans ranges without reading staged rows (`resets`)
 fn range_key(range: &KeyRange) -> String {
     let bound = |row: &Option<Row>| row.as_ref().map_or_else(|| "null".to_owned(), key_text);
     format!(
         "[{},{},{}]",
-        serde_json::to_string(&range.key).expect("列名编得成 JSON"),
+        serde_json::to_string(&range.key).expect("column names serialize to JSON"),
         bound(&range.after),
         bound(&range.until)
     )
 }
 
-/// 从 `range_key` 认回清掉的一段
+/// Decodes dropped range from `range_key`
 fn range_of(text: &str) -> Result<KeyRange, Error> {
     let (key, after, until): (Vec<String>, Option<Row>, Option<Row>) = parsed(text)?;
     Ok(KeyRange { key, after, until })
 }
 
-/// 暂存的一块另记的：共用空间的 seen 与按的订阅的指纹 sub，当中间块暂存的末块 final 为真（model/Shared.tla）
+/// Metadata recorded with staged chunk: shared space seen version and subscription hash sub; fin is true for stale final chunk staged as intermediate chunk (model/Shared.tla)
 #[derive(Default)]
 pub struct ChunkMark {
     pub seen: Option<i64>,
@@ -48,16 +51,16 @@ pub struct Stage {
 mod adding;
 
 impl Stage {
-    /// space：哪个空间的暂存，私有空间是空串
+    /// space: which space this stage belongs to; empty string for private space
     #[must_use]
     pub fn new(space: &str) -> Self {
         Stage { space: space.to_owned() }
     }
 
-    /// 暂存里有哪些表（清空记在空串下，排在最前）：按主键跳着取，不读暂存的行
+    /// Returns tables present in stage (clear recorded under empty string, sorted first): hops by primary key without reading staged rows.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn tables(&self, db: &Connection) -> rusqlite::Result<Vec<String>> {
         db.prepare_cached(
             "WITH RECURSIVE names (tbl) AS (SELECT min(tbl) FROM _syncline_staged WHERE space = ?1
@@ -68,10 +71,10 @@ impl Stage {
         .collect()
     }
 
-    /// 暂存里记下的这张表的清空或删表、删列（清空记在空串下），与清掉的各段主键（`range_key`）
+    /// Returns clear, drop table, drop columns (recorded under empty string), and dropped key ranges (`range_key`) recorded for table.
     ///
     /// # Errors
-    /// 读库出错；记下的读不出。
+    /// Database read error; deserialization error.
     pub fn resets(&self, db: &Connection, table: &str) -> Result<Vec<Op>, Error> {
         let reset: Option<(String, Option<String>)> = db
             .prepare_cached("SELECT kind, row FROM _syncline_staged WHERE space = ? AND tbl = ? AND key = ''")?
@@ -103,10 +106,10 @@ impl Stage {
         Ok(ops)
     }
 
-    /// 暂存的这张表的行
+    /// Returns staged row ops for table.
     ///
     /// # Errors
-    /// 读库出错；暂存的行读不出。
+    /// Database read error; deserialization error.
     pub fn ops(&self, db: &Connection, table: &str) -> Result<Vec<Op>, Error> {
         let rows = db
             .prepare_cached("SELECT key, kind, row FROM _syncline_staged WHERE space = ? AND tbl = ? AND kind IN ('put', 'del')")?
@@ -133,10 +136,10 @@ impl Stage {
             .collect()
     }
 
-    /// 这张表在暂存里有没有清空、删表删列之外记下的（行与清掉的段）
+    /// Returns whether table has staged entries other than clear, drop table, or drop columns (rows or dropped ranges).
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn has_entries(&self, db: &Connection, table: &str) -> rusqlite::Result<bool> {
         exists(
             db,
@@ -145,7 +148,7 @@ impl Stage {
         )
     }
 
-    /// 在 SQLite 里整批写这张表时从哪取暂存的行：FROM 之后的部分与参数（put 的整行、del 的主键在 row 列）
+    /// Source clause and parameters for batch-writing staged rows in SQLite: FROM clause and params (put full row, del primary key in row column)
     #[must_use]
     pub fn source(&self, table: &str, kind: &str) -> (String, Vec<Value>) {
         (
@@ -154,30 +157,30 @@ impl Stage {
         )
     }
 
-    /// 暂存的最后一块的 next；没有暂存是 None
+    /// Returns next cursor of last staged chunk; None if stage is empty.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn last(&self, db: &Connection) -> rusqlite::Result<Option<String>> {
         db.prepare_cached("SELECT next FROM _syncline_stage WHERE space = ? ORDER BY seq DESC LIMIT 1")?
             .query_row([&self.space], |row| row.get(0))
             .optional()
     }
 
-    /// 记下暂存的一块：拉下一块要带的 next 与另记的
+    /// Records a staged chunk: next cursor for resuming pull and metadata.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Database write error.
     pub fn add_chunk(&self, db: &Connection, next: &str, mark: &ChunkMark) -> rusqlite::Result<()> {
         db.prepare_cached("INSERT INTO _syncline_stage (next, space, seen, final, sub) VALUES (?, ?, ?, ?, ?)")?
             .execute(params![next, self.space, mark.seen, i64::from(mark.fin), mark.sub])?;
         Ok(())
     }
 
-    /// 暂存的块按的订阅的指纹（共用空间；各块都一样，回复的不同就丢掉暂存）；没有暂存或没记是 None
+    /// Returns subscription hash of staged chunks (shared space; identical across chunks, differing response discards stage); None if empty or unrecorded.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn sub(&self, db: &Connection) -> rusqlite::Result<Option<String>> {
         Ok(db
             .prepare_cached("SELECT sub FROM _syncline_stage WHERE space = ? LIMIT 1")?
@@ -186,27 +189,31 @@ impl Stage {
             .flatten())
     }
 
-    /// 丢掉这张表暂存的这几行：之后到的写进了影子表，一个主键只在一处
+    /// Drops staged rows for table: subsequent writes went into shadow table, and a primary key only exists in one location.
     ///
     /// # Errors
-    /// 读写库出错。
+    /// Database read or write error.
     ///
     /// # Panics
-    /// 不会：文本总编得成 JSON。
+    /// Never: text serializes to JSON.
     pub fn forget(&self, db: &Connection, table: &str, keys: &[Row]) -> rusqlite::Result<()> {
         if !self.has_entries(db, table)? {
             return Ok(());
         }
         let keys: Vec<String> = keys.iter().map(key_text).collect();
         db.prepare_cached("DELETE FROM _syncline_staged WHERE space = ? AND tbl = ? AND key IN (SELECT value FROM json_each(?))")?
-            .execute(params![self.space, table, serde_json::to_string(&keys).expect("文本编得成 JSON")])?;
+            .execute(params![
+                self.space,
+                table,
+                serde_json::to_string(&keys).expect("text serializes to JSON")
+            ])?;
         Ok(())
     }
 
-    /// 暂存的块里有没有清空（整份的第一块以它开头）：有的话落地后同步表全是云端的
+    /// Returns whether staged chunks contain clear (first chunk of full pull begins with it): when present, synced tables become identical to cloud state upon landing.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn clears(&self, db: &Connection) -> rusqlite::Result<bool> {
         Ok(db
             .prepare_cached("SELECT 1 FROM _syncline_staged WHERE space = ? AND tbl = '' AND key = ''")?
@@ -215,19 +222,19 @@ impl Stage {
             .is_some())
     }
 
-    /// 暂存各块最大的 seen；没有是 0
+    /// Returns maximum seen version across staged chunks; 0 if empty.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn max_seen(&self, db: &Connection) -> rusqlite::Result<i64> {
         db.prepare_cached("SELECT ifnull(max(seen), 0) FROM _syncline_stage WHERE space = ?")?
             .query_row([&self.space], |row| row.get(0))
     }
 
-    /// 最后暂存的是不是当中间块暂存的末块：是的话接着拉要带下限
+    /// Returns whether last staged chunk was a final chunk staged as intermediate chunk: if true, subsequent pulls must carry floor.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Database read error.
     pub fn ends_with_final(&self, db: &Connection) -> rusqlite::Result<bool> {
         Ok(db
             .prepare_cached("SELECT final FROM _syncline_stage WHERE space = ? ORDER BY seq DESC LIMIT 1")?
@@ -237,7 +244,7 @@ impl Stage {
     }
 
     /// # Errors
-    /// 写库出错。
+    /// Database write error.
     pub fn clear(&self, db: &Connection) -> rusqlite::Result<()> {
         db.execute("DELETE FROM _syncline_staged WHERE space = ?", [&self.space])?;
         db.execute("DELETE FROM _syncline_stage WHERE space = ?", [&self.space])?;
@@ -246,5 +253,5 @@ impl Stage {
 }
 
 fn parsed<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Error> {
-    serde_json::from_str(text).map_err(|error| Error::Failed(format!("暂存的读不出：{error}")))
+    serde_json::from_str(text).map_err(|error| Error::Failed(format!("failed to read staged entry: {error}")))
 }

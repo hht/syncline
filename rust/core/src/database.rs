@@ -1,17 +1,20 @@
-//! 设备库：一个 SQLite 连接，与开着的改动记录（session 扩展）。本机写跨好几次调用（开始、执行几条语句、结束），记录要一直开着；
-//! rusqlite 的 `Session` 借着连接，两者用 `self_cell` 放在同一个对象里。撤回一份改动集时本机行与它对不上（有人绕过本机写改了同步表）就报错，
-//! 不悄悄覆盖。
-//! 编译接入方的语句时（`prepare_guarded`）由 authorizer 拒绝 PRAGMA：有的 PRAGMA 在编译时就生效，rusqlite 判断后面还有没有语句时会把句尾也编译一遍，
-//! 只按第一个关键字查挡不住句尾的（按词法找分号也会漏，如带括号的参数 `$名字(…)` 里的分号）。只在编译时拒：执行时 SQLite 自己也会编译
-//! PRAGMA（session 扩展读表结构）。authorizer 一直装着、按开关决定拒不拒：每装一次都会让编译好的语句全部作废。
-//! 连接开着 defensive：接入方的语句不能直接改库文件的页（`sqlite_dbpage`）、改表结构的记录（`writable_schema`）这类会写坏库的事。
-//! 不该知道的：记下的改动拿去做什么、表怎么建、接入方能执行哪些语句。
+//! Device database: wraps a SQLite connection and active changeset recording (session extension).
+//! Local writes span multiple calls (begin, execute statements, end), requiring continuous recording;
+//! rusqlite [`Session`] borrows the connection, and both are co-located in one struct via `self_cell`.
+//! Reverting a changeset errors if local rows differ (e.g. out-of-band writes to synced tables) rather than silently overwriting.
+//! When compiling integrator statements (`prepare_guarded`), an authorizer rejects PRAGMAs: some PRAGMAs take effect at compile time,
+//! and rusqlite compiles statement tails to determine whether multiple statements exist, defeating keyword-based checks
+//! (lexical semicolon scanning also fails on constructs like `$name(...)` containing semicolons).
+//! PRAGMAs are rejected only during compile: SQLite compiles PRAGMAs internally at runtime (such as session extension inspecting table schemas).
+//! The authorizer remains registered and toggles via an atomic switch: re-registering an authorizer invalidates all compiled statements.
+//! The connection enables defensive mode: integrator statements cannot directly modify raw database pages (`sqlite_dbpage`) or writable schema (`writable_schema`).
+//! What it should not know: what changesets are used for, table schemas, or which statements integrators may execute.
 //! @see <https://sqlite.org/sessionintro.html>
 //! @see <https://sqlite.org/c3ref/set_authorizer.html>
-//! @see <https://sqlite.org/c3ref/c_dbconfig_defensive.html>（`SQLITE_DBCONFIG_DEFENSIVE`）
-//! @see <https://sqlite.org/security.html>（不完全可信的 SQL：开 defensive）
-//! @see <https://sqlite.org/pragma.html>（有的 PRAGMA 在编译时就生效）
-//! @see <https://github.com/rusqlite/rusqlite/blob/v0.41.1/src/lib.rs#L800-L807>（`prepare` 编译句尾判断是不是多条）
+//! @see <https://sqlite.org/c3ref/c_dbconfig_defensive.html> (`SQLITE_DBCONFIG_DEFENSIVE`)
+//! @see <https://sqlite.org/security.html> (defense-in-depth: enable defensive)
+//! @see <https://sqlite.org/pragma.html> (compile-time PRAGMA execution)
+//! @see <https://github.com/rusqlite/rusqlite/blob/v0.41.1/src/lib.rs#L800-L807> (statement tail compilation)
 //! @see <https://docs.rs/self_cell/1/self_cell/macro.self_cell.html>
 
 use rusqlite::config::DbConfig;
@@ -23,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 开着的记录，按编号
+/// Active session recordings by ID.
 type Sessions<'conn> = HashMap<u32, Session<'conn>>;
 
 self_cell!(
@@ -36,18 +39,20 @@ self_cell!(
 
 pub struct Database {
     cell: Cell,
-    /// 下一次记录的编号
+    /// Next recording ID.
     next: u32,
-    /// 正在编译接入方的语句：authorizer 拒绝 PRAGMA（authorizer 要能跨线程，开关用原子的）
+    /// Indicates compilation of integrator statements: authorizer rejects PRAGMAs (atomic flag enables cross-thread access).
     guarding: Arc<AtomicBool>,
 }
 
 impl Database {
     /// # Errors
-    /// SQLite 开不了 defensive、装不上 authorizer。
+    ///
+    /// Returns an error if SQLite fails to enable defensive mode or register the authorizer.
     ///
     /// # Panics
-    /// 编进了 bytecode 虚表（编 wasm 时没读到 `rust/.cargo/config.toml`：从工作区外调了 cargo，或环境里已设了 `SQLITE_WASM_RS_FLAGS`）。
+    ///
+    /// Panics if bytecode virtual tables are compiled into SQLite (e.g. wasm builds that did not read config flags).
     pub fn new(mut connection: Connection) -> rusqlite::Result<Self> {
         let compiles_later: bool = connection.query_row(
             "SELECT EXISTS (SELECT 1 FROM pragma_module_list WHERE name IN ('bytecode', 'tables_used'))",
@@ -56,7 +61,7 @@ impl Database {
         )?;
         assert!(
             !compiles_later,
-            "SQLite 编进了 bytecode 虚表：接入方的语句能借它在执行时让 PRAGMA 生效，见 rust/.cargo/config.toml"
+            "SQLite compiled with bytecode virtual table: integrator statements can execute PRAGMAs at runtime via bytecode table"
         );
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         let guarding = Arc::new(AtomicBool::new(false));
@@ -75,10 +80,11 @@ impl Database {
         })
     }
 
-    /// 编译接入方的语句（编译过的从缓存里取）：里面或句尾有 PRAGMA 就拒绝
+    /// Compiles an integrator statement (cached): rejects if statement or tail contains PRAGMA.
     ///
     /// # Errors
-    /// 有 PRAGMA（`SQLITE_AUTH`）；不止一条语句；编译出错。
+    ///
+    /// Returns an error if statement contains PRAGMA (`SQLITE_AUTH`), contains multiple statements, or fails compilation.
     pub fn prepare_guarded(&self, sql: &str) -> rusqlite::Result<CachedStatement<'_>> {
         self.guarding.store(true, Ordering::Relaxed);
         let statement = self.connection().prepare_cached(sql);
@@ -91,17 +97,18 @@ impl Database {
         self.cell.borrow_owner()
     }
 
-    /// 在不在事务里：出错后 SQLite 可能已自动回滚了整个事务（磁盘满、I/O 错），保存点已经没了
-    /// @see <https://sqlite.org/lang_transaction.html>（Response To Errors Within A Transaction）
+    /// Returns whether a transaction is active: SQLite may automatically roll back transactions on severe errors (disk full, I/O error), dropping savepoints.
+    /// @see <https://sqlite.org/lang_transaction.html> (Response To Errors Within A Transaction)
     #[must_use]
     pub fn in_transaction(&self) -> bool {
         !self.connection().is_autocommit()
     }
 
-    /// 开始记录对 tables（None 是所有表）的改动，给出这次记录的编号
+    /// Begins recording changes on `tables` (`None` records all tables), returning recording ID.
     ///
     /// # Errors
-    /// SQLite 开不了 session 或接不上表。
+    ///
+    /// Returns an error if SQLite fails to create a session or attach tables.
     pub fn record(&mut self, tables: Option<&[String]>) -> rusqlite::Result<u32> {
         let id = self.next;
         self.next = self.next.wrapping_add(1);
@@ -120,10 +127,11 @@ impl Database {
         })
     }
 
-    /// 结束一次记录，给出这段时间的改动集；读出错也结束。没有这个编号（已结束过）是 None
+    /// Ends a recording and returns its changeset; ends even on read errors. Returns `None` if already stopped.
     ///
     /// # Errors
-    /// SQLite 读不出改动集。
+    ///
+    /// Returns an error if SQLite fails to generate the changeset.
     pub fn stop(&mut self, id: u32) -> rusqlite::Result<Option<Vec<u8>>> {
         self.cell.with_dependent_mut(|_, sessions| {
             let Some(mut session) = sessions.remove(&id) else {
@@ -135,11 +143,12 @@ impl Database {
         })
     }
 
-    /// 撤回一份改动集：取反再应用，哪行对不上（行不在、值不同、主键已被占）就整份不撤、报错
+    /// Reverts a changeset: inverts and applies changes, aborting and returning an error if local rows conflict (missing rows, differing values, or occupied primary keys).
     /// @see <https://sqlite.org/session/sqlite3changeset_apply.html>
     ///
     /// # Errors
-    /// 改动集读不了，或与本机行对不上（`SQLITE_ABORT`）。
+    ///
+    /// Returns an error if the changeset cannot be parsed or conflicts with local rows (`SQLITE_ABORT`).
     pub fn revert(&self, changeset: &[u8]) -> rusqlite::Result<()> {
         if changeset.is_empty() {
             return Ok(());
@@ -162,14 +171,14 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT); CREATE TABLE scratch (id TEXT PRIMARY KEY);
-                 INSERT INTO workout VALUES ('w1', '深蹲');",
+                 INSERT INTO workout VALUES ('w1', 'squat');",
             )
             .unwrap();
         Database::new(connection).unwrap()
     }
 
     #[test]
-    fn 编译接入方的语句时拒绝_pragma_句尾的也不生效_执行时照常() {
+    fn prepare_guarded_rejects_pragma_including_tail() {
         let device = opened();
         let setting = || -> i64 { device.connection().query_row("PRAGMA query_only", [], |row| row.get(0)).unwrap() };
         for sql in [
@@ -180,10 +189,10 @@ mod tests {
             assert!(device.prepare_guarded(sql).is_err(), "{sql}");
             assert_eq!(setting(), 0, "{sql}");
         }
-        // 表值的 PRAGMA 函数在执行时才编译 PRAGMA，照常能读
+        // Table-valued PRAGMA functions compile PRAGMAs only at execution time and remain readable
         let mut statement = device.prepare_guarded("SELECT name FROM pragma_table_info('workout')").unwrap();
         assert_eq!(statement.query_map([], |row| row.get::<_, String>(0)).unwrap().count(), 2);
-        // Syncline 自己的语句不拦
+        // Internal Syncline statements are not blocked
         device.connection().execute_batch("PRAGMA query_only = 0").unwrap();
     }
 
@@ -194,13 +203,15 @@ mod tests {
     }
 
     #[test]
-    fn 两个记录同时开着_各记各的表_跨几次执行_撤回后回到原样() {
+    fn concurrent_sessions_record_independently_and_revert() {
         let mut device = opened();
         let workouts = device.record(Some(&["workout".to_owned()])).unwrap();
         let all = device.record(None).unwrap();
         let connection = device.connection();
-        connection.execute("UPDATE workout SET note = '前蹲' WHERE id = 'w1'", []).unwrap();
-        connection.execute("INSERT INTO workout VALUES ('w2', '卧推')", []).unwrap();
+        connection
+            .execute("UPDATE workout SET note = 'front squat' WHERE id = 'w1'", [])
+            .unwrap();
+        connection.execute("INSERT INTO workout VALUES ('w2', 'bench')", []).unwrap();
         connection.execute("INSERT INTO scratch VALUES ('s1')", []).unwrap();
         let only = device.stop(workouts).unwrap().unwrap();
         let everything = device.stop(all).unwrap().unwrap();
@@ -208,7 +219,7 @@ mod tests {
         assert_eq!(device.stop(workouts).unwrap(), None);
 
         device.revert(&only).unwrap();
-        assert_eq!(notes(&device), [("w1".to_owned(), Some("深蹲".to_owned()))]);
+        assert_eq!(notes(&device), [("w1".to_owned(), Some("squat".to_owned()))]);
         let scratch: i64 = device
             .connection()
             .query_row("SELECT count(*) FROM scratch", [], |row| row.get(0))
@@ -217,17 +228,17 @@ mod tests {
     }
 
     #[test]
-    fn 本机行与改动集对不上就整份不撤_报错() {
+    fn conflicting_local_rows_aborts_entire_revert() {
         let mut device = opened();
         let id = device.record(None).unwrap();
         device
             .connection()
-            .execute_batch("UPDATE workout SET note = '前蹲'; INSERT INTO workout VALUES ('w2', '卧推');")
+            .execute_batch("UPDATE workout SET note = 'front squat'; INSERT INTO workout VALUES ('w2', 'bench');")
             .unwrap();
         let changeset = device.stop(id).unwrap().unwrap();
         device
             .connection()
-            .execute("UPDATE workout SET note = '硬拉' WHERE id = 'w1'", [])
+            .execute("UPDATE workout SET note = 'deadlift' WHERE id = 'w1'", [])
             .unwrap();
 
         let error = device.revert(&changeset).unwrap_err();
@@ -235,24 +246,24 @@ mod tests {
         assert_eq!(
             notes(&device),
             [
-                ("w1".to_owned(), Some("硬拉".to_owned())),
-                ("w2".to_owned(), Some("卧推".to_owned()))
+                ("w1".to_owned(), Some("deadlift".to_owned())),
+                ("w2".to_owned(), Some("bench".to_owned()))
             ]
         );
     }
 
     #[test]
-    fn 什么也没改的记录给空的改动集_撤回它什么也不做() {
+    fn empty_session_yields_empty_changeset_revert_is_noop() {
         let mut device = opened();
         let id = device.record(Some(&[])).unwrap();
-        device.connection().execute("UPDATE workout SET note = '前蹲'", []).unwrap();
+        device.connection().execute("UPDATE workout SET note = 'front squat'", []).unwrap();
         let changeset = device.stop(id).unwrap().unwrap();
         assert_eq!(changeset, Vec::<u8>::new());
         device.revert(&changeset).unwrap();
     }
 
     #[test]
-    fn 事务里外() {
+    fn in_transaction_tracks_autocommit_state() {
         let device = opened();
         assert!(!device.in_transaction());
         device.connection().execute_batch("SAVEPOINT one").unwrap();

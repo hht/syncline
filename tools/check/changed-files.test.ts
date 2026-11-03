@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, onTestFinished, test } from 'vitest';
 import { changedFiles } from './changed-files.ts';
 
-test('选出相对 HEAD 改动、暂存、未跟踪的文件，不含已删除与已忽略的', () => {
+test('selects modified, staged, and untracked files relative to HEAD, excluding deleted and ignored files', () => {
   const dir = mkdtempSync(join(tmpdir(), 'changed-'));
   onTestFinished(() => rmSync(dir, { recursive: true }));
   const git = (...args: string[]) => execFileSync('git', args, { cwd: dir });

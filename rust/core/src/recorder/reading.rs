@@ -1,6 +1,7 @@
-//! 记下的怎么读出来：同步表的改动集读成要上传的改动（改到只由云端写的表报错，值要能交给 JS，一行与一次写有上限），
-//! 本机专用的表读出改到的行；有 Standard Schema 的表的行留给 JS 查。
-//! 不该知道的：怎么开始与结束记录、改动怎么重做。
+//! Reading recorded changes: converts changesets from synced tables into uploadable changes
+//! (errors if modifying read-only tables, values must be transferable to JS, row and per-write size limits apply),
+//! and reads touched rows from local-only tables; keeps rows from tables with Standard Schema for JS validation.
+//! What it should not know: how recording starts or stops, or how changes are re-applied.
 
 use super::{Recorder, Stored};
 use crate::change::{Change, MAX_SAFE_INTEGER, Row};
@@ -14,7 +15,7 @@ use rusqlite::types::Value;
 use std::collections::HashMap;
 
 impl Recorder {
-    /// 改到的表只能是同步表与本机专用的表；本机专用的表改到的行照声明查。给出改到的本机专用的表
+    /// Touched tables can only be synced tables and local-only tables; touched rows from local-only tables are validated against declarations. Returns touched local-only tables.
     pub(super) fn check_local(&self, db: &Connection, all: &[u8], rows: &mut Vec<Stored>) -> Result<Vec<String>, Error> {
         let mut changed: Vec<String> = Vec::new();
         let mut columns: HashMap<String, Vec<String>> = HashMap::new();
@@ -23,14 +24,16 @@ impl Recorder {
             let table = table.as_str();
             let Some(declared) = self.local_only.iter().find(|declared| declared.name == table) else {
                 if !self.synced.iter().any(|declared| declared.name == table) {
-                    return Err(Error::Failed(format!("本机写只能写同步表与本机专用的表：{table}")));
+                    return Err(Error::Failed(format!(
+                        "local write can only modify synced or local-only tables: {table}"
+                    )));
                 }
                 continue;
             };
             if !changed.iter().any(|name| name == table) {
                 changed.push(table.to_owned());
             }
-            // 插入给整行，修改前的值里有主键：按主键读出存着的整行
+            // Insert provides full row; update before values contain primary key: read stored full row by primary key
             let values: Vec<Option<Value>> = match change {
                 RowChange::Insert { after, .. } => after.into_iter().map(Some).collect(),
                 RowChange::Update { before, .. } => before,
@@ -49,7 +52,7 @@ impl Recorder {
         Ok(changed)
     }
 
-    /// 读到的行交给 JS 按 Standard Schema 查：只留给了 schema 的表的
+    /// Keeps read rows for JS Standard Schema validation: only for tables with declared schemas
     pub(super) fn keep(&self, table: &str, stored: Option<Row>, rows: &mut Vec<Stored>) {
         if let Some(row) = stored.filter(|_| self.schemas.contains(table)) {
             rows.push(Stored {
@@ -59,14 +62,14 @@ impl Recorder {
         }
     }
 
-    /// 同步表的改动集读成要上传的行：插入给整行，修改给主键与改了的列，删除给主键；_extra 只由同步写、删掉的列不再同步，都不上传
+    /// Converts synced table changeset into rows to upload: insert provides full row, update provides primary key and changed columns, delete provides primary key; _extra is written only by sync and retired columns are no longer synced, so neither is uploaded
     pub(super) fn changes_of(&self, db: &Connection, recorded: &[u8]) -> Result<Vec<Change>, Error> {
         let mut orders: HashMap<String, Vec<String>> = HashMap::new();
         let mut changes = Vec::new();
         for change in changeset::parse(recorded)? {
             let table = change.table().to_owned();
             let (Some(declared), Some(known)) = (self.synced.iter().find(|declared| declared.name == table), self.known.get(&table)) else {
-                return Err(Error::Failed(format!("本机写只能写同步表：{table}")));
+                return Err(Error::Failed(format!("local write can only modify synced tables: {table}")));
             };
             if !orders.contains_key(&table) {
                 orders.insert(table.clone(), column_names(db, &table)?);
@@ -107,7 +110,7 @@ impl Recorder {
         Ok(changes)
     }
 
-    /// 一行同步的列在库里共多少字节（不含 _extra，只在本机）；行不在是 0
+    /// Total bytes of synced columns for a row in database (excluding _extra, which is local-only); returns 0 if row is missing
     pub(super) fn row_bytes(&self, db: &Connection, table: &Table, row: &Row) -> Result<usize, Error> {
         let sql = format!(
             "SELECT {} FROM {} WHERE {}",
@@ -133,13 +136,13 @@ impl Recorder {
     }
 }
 
-/// 改动的值要能交给 JS：整数在 JS 的精确范围之内、不是 BLOB（行要经 JSON 上传，同步表不存 BLOB）
+/// Changed values must be transferable to JS: integers within safe JS integer range, not BLOB (rows are uploaded via JSON; synced tables do not store BLOB)
 fn transferable(table: &str, value: &Value) -> Result<(), Error> {
     match value {
-        Value::Integer(integer) if integer.abs() > MAX_SAFE_INTEGER => {
-            Err(Error::Failed(format!("{table} 的整数超出 JS 能精确表示的范围：{integer}")))
-        }
-        Value::Blob(_) => Err(Error::Failed(format!("{table} 的改动集里有不支持的字段类型 4"))),
+        Value::Integer(integer) if integer.abs() > MAX_SAFE_INTEGER => Err(Error::Failed(format!(
+            "integer in table {table} exceeds safe JS integer range: {integer}"
+        ))),
+        Value::Blob(_) => Err(Error::Failed(format!("changeset for {table} contains unsupported field type 4"))),
         _ => Ok(()),
     }
 }

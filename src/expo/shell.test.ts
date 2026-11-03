@@ -2,9 +2,9 @@ import { expect, test } from 'vitest';
 import { flush } from '../test/test-drive.ts';
 import { type Fetch, type Input, receiveTimeout, Shell } from './shell.ts';
 
-// 外壳替核心发 HTTP 请求：按「多久没收到数据」计时，慢慢在收就不打断，停住了才中止；核心撤掉的请求不再交回
+// Verifies HTTP request execution on behalf of core: resets inactivity timer on each chunk and aborts stalled or cancelled requests.
 
-/** 手动的计时器：armed 是排着、还没取消的 */
+/** Manual timer mock where armed contains active uncancelled callbacks. */
 function timers() {
   const armed = new Set<() => void>();
   const schedule = (run: () => void, delay: number) => {
@@ -20,7 +20,7 @@ function timers() {
   return { armed, schedule, fire };
 }
 
-/** 一个响应：body 按 push 一段段给出（文本或字节），close 结束 */
+/** Mock streaming response where chunks are pushed incrementally and terminated by close. */
 function streamed() {
   const { promise: started, resolve } = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
   const body = new ReadableStream<Uint8Array>({ start: resolve });
@@ -38,8 +38,8 @@ function streamed() {
 }
 
 /**
- * 一个外壳，核心换成替身：收到 go 就要外壳发第 1 号请求，收到 stop 就撤掉它；外壳交给核心的其余事件记在 received 里。
- * signal 是请求带的中止信号
+ * Test shell with mock core: emits fetch request 1 on 'go', aborts on 'stop', and records subsequent inputs in received.
+ * signal captures the abort signal passed to fetch.
  */
 function shell(fetch: Fetch, schedule: (run: () => void, delay: number) => () => void) {
   const received: Input[] = [];
@@ -68,7 +68,7 @@ function shell(fetch: Fetch, schedule: (run: () => void, delay: number) => () =>
   return { received, send: (input: Input) => outer.send(input), signal: () => signal };
 }
 
-test('一段段收到的数据每段都重新计时：总共再久也读完，读完不留计时', async () => {
+test('streaming response resets inactivity timer on each received chunk and completes without lingering timers', async () => {
   const { armed, schedule } = timers();
   const { response, push, close } = streamed();
   const { received } = shell(async () => response, schedule);
@@ -81,12 +81,12 @@ test('一段段收到的数据每段都重新计时：总共再久也读完，�
   expect(armed.size).toBe(0);
 });
 
-test('响应头一直不来、或收到一半停住：到时中止请求，交给核心失败', async () => {
+test('aborts request on timeout if response headers stall or stream pauses mid-transfer, reporting failure to core', async () => {
   const silent = timers();
   const never = shell(() => Promise.withResolvers<Response>().promise, silent.schedule);
   silent.fire();
   await flush();
-  expect(never.received).toEqual([{ type: 'failed', id: 1, error: expect.stringContaining('拉取超时') }]);
+  expect(never.received).toEqual([{ type: 'failed', id: 1, error: expect.stringContaining('Pull timed out') }]);
   expect(never.signal()?.aborted).toBe(true);
 
   const stalled = timers();
@@ -95,21 +95,21 @@ test('响应头一直不来、或收到一半停住：到时中止请求，交�
   await push('{"patch":');
   stalled.fire();
   await flush();
-  expect(half.received).toEqual([{ type: 'failed', id: 1, error: expect.stringContaining('拉取超时') }]);
+  expect(half.received).toEqual([{ type: 'failed', id: 1, error: expect.stringContaining('Pull timed out') }]);
 });
 
-test('一个字的 UTF-8 字节分在两段里：边收边解码照样解出', async () => {
+test('stream decoder decodes multibyte UTF-8 characters split across chunk boundaries', async () => {
   const { schedule } = timers();
   const { response, push, close } = streamed();
   const { received } = shell(async () => response, schedule);
-  const bytes = new TextEncoder().encode('{"note":"深蹲"}');
+  const bytes = new TextEncoder().encode('{"note":"🎉"}');
   await push(bytes.slice(0, 10));
   await push(bytes.slice(10));
   await close();
-  expect(received).toEqual([expect.objectContaining({ body: '{"note":"深蹲"}' })]);
+  expect(received).toEqual([expect.objectContaining({ body: '{"note":"🎉"}' })]);
 });
 
-test('收到一半时核心撤掉了请求（连接停了）：中止它，结果不再交给核心', async () => {
+test('aborts fetch when core cancels request mid-stream on disconnect and drops remaining response', async () => {
   const { schedule } = timers();
   const { response, push } = streamed();
   const { received, send, signal } = shell(async () => response, schedule);

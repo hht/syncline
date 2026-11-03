@@ -1,10 +1,10 @@
-//! 设备怎么对校验和：什么时候对、对不上怎么办。没对过（新装、被重置后）或上次对完一轮满一天就该对了：
-//! 设备空闲时拉一次带 checksum 的，云端当场算出末块那一版里一段的；设备按云端给的主键范围读本机的同一段算出自己的，与它比，对上了接着要下一段，
-//! 最后一段对上了是对完一轮。下一段从哪起记在库里，App 重启后接着对。一批批读（`step`），批与批之间由外层让出线程；中途库变了（本机写、收到改动）
-//! 就作罢、这一段减半（至多减到一批）；连接停了、本机库关了也作罢，段不变。每天至多要 `rows_per_day` 行，用完了等到这一天过完。
-//! 对不上就报出，记下这一段的各部分，下一次拉取按范围重下这一段，接着再对这一段；重下之后又对不上只报出、跳过这一段。这些都记在 `_syncline_verified`。
-//! 时刻（毫秒）由外层每次给：核心不读时钟。
-//! 不该知道的：本机的行怎么读、怎么按范围重下。
+//! How the device verifies checksums: when to verify and what to do on mismatch. Verification is due when never verified (new install, after reset) or 24 hours after previous round finished:
+//! pulls with checksum when device is idle; cloud computes checksum for a range on the final chunk version on the fly; device reads the same range locally by primary key to compute its own and compares them; requests next range on match;
+//! matching the final range completes a round. Where the next range starts is recorded in the database, resuming across app restarts. Reads in batches (`step`), yielding the thread between batches; if the database changes concurrently (local write, received changes),
+//! verification aborts and the range size is halved (down to at most one batch); aborts without changing range size if connection stops or local database closes. Up to `rows_per_day` rows verified per day, waiting until next day when exhausted.
+//! Mismatches are reported, recording parts of the range; next pull redownloads this range by key ranges, then re-verifies it; if mismatch persists after redownload, reports and skips to next range. Recorded in `_syncline_verified`.
+//! Timestamp in milliseconds supplied by outer layer each time: core does not read system clock.
+//! What it should not know: how local rows are read, how ranges are redownloaded.
 
 use crate::checksum::RANGE_ROWS;
 use crate::error::Error;
@@ -14,16 +14,16 @@ use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// 上次对完一轮多久之后再对；每天的行数也按这么长算
+/// Interval after previous round before verifying again; also defines daily row budget window.
 pub const INTERVAL: f64 = 24.0 * 3_600_000.0;
 
-/// 在拉取里要了校验和还没对成：至少隔这么久再要（一次失败的拉取加一次退避的上限）
+/// Minimum interval before requesting checksum again if previous request incomplete (one failed pull plus max backoff).
 pub const ASK_AGAIN_AFTER: f64 = 60_000.0;
 
-/// 每台设备每天至多要多少行
+/// Maximum rows requested per device per day.
 pub const ROWS_PER_DAY: i64 = 1_000_000;
 
-/// `_syncline_verified` 的一行
+/// Row in `_syncline_verified`.
 struct State {
     at: f64,
     repaired: bool,
@@ -34,7 +34,7 @@ struct State {
     ranges: Option<String>,
 }
 
-/// 拉取要带的：从哪起的一段、至多几行，与要按范围重下的几段
+/// Requested parameters on pull: starting range, max rows, and key ranges to redownload.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asked {
@@ -50,7 +50,7 @@ mod round;
 
 use round::Running;
 
-/// 对一段时设备这一刻的样子：还能对（连接没停、库没关）、同步的数据的状态（有待上传、分块拉到一半时对不了，是 None）
+/// Device state when verifying a range: still active (connection live, database open), sync data state (None if pending mutations exist or chunked pull in-flight).
 pub struct Moment<'a> {
     pub live: bool,
     pub mark: Option<String>,
@@ -58,7 +58,7 @@ pub struct Moment<'a> {
     pub keys: &'a HashMap<String, Vec<String>>,
 }
 
-/// 对一步的结果：还要接着对，或对完了（对上了没有；作罢是 None）
+/// Result of one verification step: continue verifying, or completed (whether matched; None if aborted).
 pub enum Progress {
     More,
     Done(Option<bool>),
@@ -66,31 +66,31 @@ pub enum Progress {
 
 pub struct Verifier {
     rows_per_day: i64,
-    /// 云端当场算的一段校验和与它对应的游标；只在内存里，游标变了就用不上
+    /// Range checksum computed on-the-fly by cloud with corresponding cookie; held in memory only, invalidated when cookie changes.
     expected: Option<(Cookie, Checksum)>,
-    /// 上次在拉取里要校验和的时刻
+    /// Timestamp when checksum was last requested in a pull.
     asked_at: f64,
-    /// 这次拉取（分块时从第一块起）要的是从哪起的一段、至多几行
+    /// Range start and max rows requested in this pull (from first chunk when chunked).
     asking: Option<(String, i64)>,
-    /// 这次拉取带着按范围重下的哪几段（原样的 JSON）；末块落地后清掉它们
+    /// Key ranges requested to redownload in this pull (raw JSON); cleared after final chunk lands.
     ranges_asked: Option<String>,
-    /// 这一天已要了、还没记进库里的行数：落地时在它的事务里记
+    /// Rows requested today not yet recorded in database: committed in transaction on landing.
     unrecorded: i64,
     running: Option<Running>,
 }
 
 impl Verifier {
-    /// `rows_per_day` 是接入方给的数（JS 的 number），在这里认成正整数
+    /// `rows_per_day` is provided by caller (JS number), validated here as a positive integer.
     ///
     /// # Errors
-    /// `rows_per_day` 不是正整数。
+    /// Returns an error if `rows_per_day` is not a positive integer.
     pub fn new(rows_per_day: Option<f64>) -> Result<Self, Error> {
         let rows_per_day = match rows_per_day {
             None => ROWS_PER_DAY,
-            // 正整数（NaN、无穷大的 fract 是 NaN，不算）；超出 i64 的照 `as` 取到 i64::MAX，一样是「不限」
-            #[expect(clippy::cast_possible_truncation, reason = "超出 i64 的照 as 取到 i64::MAX，一样是「不限」")]
+            // Positive integer (NaN, infinity fract is NaN, excluded); values exceeding i64 clamp to i64::MAX via `as`, effectively unlimited.
+            #[expect(clippy::cast_possible_truncation, reason = "values exceeding i64 clamp to i64::MAX via as")]
             Some(given) if given >= 1.0 && given.fract() == 0.0 => given as i64,
-            Some(given) => return Err(Error::Failed(format!("checksumRowsPerDay 要是正整数：{given}"))),
+            Some(given) => return Err(Error::Failed(format!("checksumRowsPerDay must be a positive integer: {given}"))),
         };
         Ok(Verifier {
             rows_per_day,
@@ -103,11 +103,11 @@ impl Verifier {
         })
     }
 
-    /// 这次拉取要带的：新开一次拉取（不是接着拉）时带要按范围重下的几段；该对了、空闲（没有待上传）、离上次要隔了一阵时带 checksum 与 checksumRows，
-    /// 要了就记下时刻、算进这一天的行数。接着拉时开头要了的接着要，但只在要了之后的一阵之内
+    /// Parameters to include on this pull: new pulls (not continuing) include ranges to redownload; when verification is due, device idle (no pending mutations), and enough time passed since last request, includes checksum and checksumRows,
+    /// recording timestamp and counting against daily budget. Continuing pulls repeat initial request if within retry window.
     ///
     /// # Errors
-    /// 读库出错；记下的几段读不出。
+    /// Returns an error if reading database fails or recorded ranges cannot be parsed.
     pub fn request(&mut self, db: &Connection, idle: bool, continued: bool, now: f64) -> Result<Asked, Error> {
         if continued {
             return Ok(match &self.asking {
@@ -143,10 +143,10 @@ impl Verifier {
         Ok(asked)
     }
 
-    /// 该为校验和拉一次了：对不上要按范围重下，或还没有 cookie 这一版的、空闲、离上次要隔了一阵、该对了
+    /// Whether pull is needed for verification: mismatch requires redownload by range, or lacks checksum for cookie version while idle, sufficient time elapsed, and verification is due.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     pub fn wants(&self, db: &Connection, cookie: Option<&Cookie>, idle: bool, now: f64) -> Result<bool, Error> {
         let state = state(db)?;
         if state.ranges.is_some() {
@@ -155,10 +155,10 @@ impl Verifier {
         Ok(self.expected_at(cookie).is_none() && idle && now - self.asked_at >= ASK_AGAIN_AFTER && self.due(&state, now))
     }
 
-    /// 拉取的末块落地了：这次带着的几段已重下，之后又记下的别的段留着
+    /// Final chunk of pull landed: requested ranges have been redownloaded; ranges recorded afterwards are retained.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn pulled(&mut self, db: &Connection) -> rusqlite::Result<()> {
         if let Some(ranges) = self.ranges_asked.take() {
             db.execute(
@@ -169,10 +169,10 @@ impl Verifier {
         Ok(())
     }
 
-    /// 收下的改动落地到了 cookie（在落地的事务里）：这一天要了的行数记进库里；末块带着这一版里一段的校验和就记下，等着对
+    /// Received changes landed at cookie (within landing transaction): records requested rows for today into database; records checksum for this version if final chunk included it, waiting to verify.
     ///
     /// # Errors
-    /// 读写库出错。
+    /// Returns an error if reading or writing the database fails.
     pub fn advanced(&mut self, db: &Connection, cookie: Cookie, checksum: Option<Checksum>, now: f64) -> Result<(), Error> {
         if self.unrecorded > 0 {
             let (day, spent, _) = self.budget(&state(db)?, now);
@@ -185,10 +185,10 @@ impl Verifier {
         Ok(())
     }
 
-    /// 被重置了（游标没了、整份重拉）：整份拉完从头再对一轮，这次整份拉取就要；要重下的段不用再下，这一天的行数照算
+    /// Reset (cookie lost, full resync): restarts verification from beginning after full resync, requested on the full resync; pending redownloads discarded, daily budget preserved.
     ///
     /// # Errors
-    /// 写库出错。
+    /// Returns an error if writing to the database fails.
     pub fn reset(&mut self, db: &Connection) -> rusqlite::Result<()> {
         self.asked_at = f64::NEG_INFINITY;
         update(
@@ -210,12 +210,12 @@ impl Verifier {
             .map(|(_, checksum)| checksum)
     }
 
-    /// 该对了：没对过、被重置后，或上次对完一轮满一天；这一天的行数还没用完
+    /// Verification due: never verified, after reset, or 24 hours after previous round completed; daily row budget not exhausted.
     fn due(&self, state: &State, now: f64) -> bool {
         now - state.at >= INTERVAL && self.budget(state, now).2 > 0
     }
 
-    /// 这一天从什么时刻起、已要了几行（含还没记进库里的）、还能要几行：上一天过完了从现在起重新算
+    /// Daily budget tracking: start timestamp, rows requested today (including unrecorded), and remaining budget; resets when day elapsed.
     fn budget(&self, state: &State, now: f64) -> (f64, i64, i64) {
         let fresh = now - state.day >= INTERVAL;
         let used = if fresh { 0 } else { state.spent } + self.unrecorded;
@@ -252,7 +252,7 @@ fn state(db: &Connection) -> rusqlite::Result<State> {
     }))
 }
 
-/// 改记着的几项（还没有这一行就先插一行默认的）
+/// Updates recorded fields in database (inserts default row if none exists).
 fn update(db: &Connection, fields: &[(&str, Value)]) -> rusqlite::Result<()> {
     db.execute(
         "INSERT OR IGNORE INTO _syncline_verified (space, at, repaired) VALUES ('', 0, 0)",

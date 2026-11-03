@@ -1,8 +1,8 @@
-//! 本机的同步表怎么存云端下发的行。设备的表定义可能落后于云端：本机表定义里没有的列整体存进库加的
-//! _extra 列，本机还没有的表的行按到达的先后存进 `_syncline_unknown`，升级后第一次打开时从它们还原，不重新下载。
-//! 分块拉取的改动先暂存，整份与整张表重给的行写进影子表，末块一起落地；一行只在同步表、`_syncline_unknown`、暂存、影子表之一。
-//! 只用本机表定义里的列名拼 SQL，下发的列名不进语句。都在调用方开好的本机事务里执行。
-//! 不该知道的：改动从哪来、什么时候撤回与重放。
+//! How local synced tables store rows delivered from cloud. Device table definitions may lag behind cloud: columns missing from local table definitions are stored collectively in the added
+//! `_extra` column; rows for tables not yet present locally are stored in order of arrival in `_syncline_unknown`, restored on first open after upgrade without redownloading.
+//! Changes from chunked pulls are staged first; rows from full resync or table resets are written into shadow tables and landed together with the final chunk; a row resides in only one of synced tables, `_syncline_unknown`, stage, or shadow tables.
+//! Only column names from local table definitions are used in SQL; delivered column names never enter statements. All executed within local transactions opened by callers.
+//! What it should not know: where changes come from, when to rollback or replay.
 //! @see <https://docs.powersync.com/client-sdks/advanced/raw-tables>
 
 use crate::change::Row;
@@ -23,25 +23,25 @@ mod landing;
 mod upgrade;
 
 pub struct SyncedTables {
-    /// 本机存不进同步表的行
+    /// Rows that cannot fit into local synced tables.
     unknown: UnknownRows,
-    /// 按声明的先后
+    /// In order of declaration.
     names: Vec<String>,
     tables: HashMap<String, SyncedTable>,
-    /// 同步的表结构：声明的，加上库里已有、声明里没有的列（App 回滚到少一列的发布），连接时带给云端判断兼容；
-    /// 这样的列有默认值就当作非空（本机插入时 SQLite 填上默认值，不会上传空值）
+    /// Synced schema: declared tables, plus columns existing in database but absent from declaration (e.g. app rolled back to release with fewer columns), sent to cloud on connect for compatibility check;
+    /// such columns with default values are treated as non-null (SQLite fills default value on local insert, never uploading null).
     declaration: Declaration,
 }
 
 impl SyncedTables {
-    /// space：这些表属于哪个空间（私有空间是空串），本机还没有的表的行按空间分开存；retired 是删掉的表与列（「表.列」）：
-    /// 打开时物理删，在那之前读库里的列也不算它们
+    /// `space`: which space these tables belong to (empty string for private space); rows for tables not yet existing locally are stored partitioned by space; `retired` contains dropped tables and columns ("table.column"):
+    /// physically dropped on open; reading database columns before that ignores them.
     ///
     /// # Errors
-    /// 读库出错。
+    /// Returns an error if reading the database fails.
     ///
     /// # Panics
-    /// 不会：declare 照同样的表描述。
+    /// Panics if declared table descriptions do not match (never occurs).
     pub fn new(db: &Connection, tables: &[Table], space: &str, retired: &HashSet<String>) -> Result<Self, Error> {
         let mut declaration = declare(tables);
         let mut synced = HashMap::new();
@@ -52,7 +52,7 @@ impl SyncedTables {
                     columns.push(column);
                 }
             }
-            let shape = declaration.get_mut(&table.name).expect("declare 照同样的表描述");
+            let shape = declaration.get_mut(&table.name).expect("declared from same table descriptions");
             for info in table_columns(db, &table.name)? {
                 if columns.contains(&info.0) && !shape.columns.contains_key(&info.0) {
                     let kind = Storage::of(&info.1).map_or_else(|| info.1.to_lowercase(), |storage| storage.to_string());
@@ -77,7 +77,7 @@ impl SyncedTables {
         &self.declaration
     }
 
-    /// 各张同步表的主键的列（校验和按主键分段读本机的行）
+    /// Primary key columns for each synced table (checksum reads local rows partitioned by primary key).
     #[must_use]
     pub fn keys(&self) -> HashMap<&str, &[String]> {
         self.tables
@@ -86,10 +86,10 @@ impl SyncedTables {
             .collect()
     }
 
-    /// 写一条云端下发的改动
+    /// Writes a change delivered from cloud.
     ///
     /// # Errors
-    /// 写库出错（值放不进本机的列除外：先存着、报出来）。
+    /// Returns an error if writing to database fails (except values incompatible with local columns: retained in unknown rows and reported).
     pub fn write(&self, db: &Connection, op: &Op, effects: &mut Effects) -> Result<(), Error> {
         match op {
             Op::Clear => return self.clear(db, &HashSet::new(), effects),
@@ -107,7 +107,7 @@ impl SyncedTables {
             return Ok(());
         };
         effects.touch(table);
-        // 之前放不进本机的列、存着的这一行：云端的新值或删除为准，存着的那份不再写回
+        // Row previously retained because values did not fit local columns: cloud's new value or deletion takes precedence; retained copy is not restored.
         self.unknown.del(db, table, key)?;
         match op {
             Op::Put { row, .. } => self.put(db, synced, table, key, row, effects),
@@ -115,8 +115,8 @@ impl SyncedTables {
         }
     }
 
-    /// 写一行云端的值：没声明的列放进 _extra；值放不进本机的列（两端这一列的类型不一致）时这一行先存着、报出来，不让整次收下回滚，
-    /// 之后打开时再试着写回（upgrade）。同步表里的旧值删掉：一个主键只在一处，界面不读到旧值，校验和不算两份
+    /// Writes a row of cloud values: undeclared columns placed into `_extra`; if values do not fit local columns (incompatible column types across sides), row is retained and reported without rolling back the entire receive,
+    /// reattempting restore on next open (upgrade). Old value in synced table deleted: one primary key lives in only one place, UI never reads stale values, and checksum does not double-count.
     fn put(&self, db: &Connection, synced: &SyncedTable, table: &str, key: &Row, row: &Row, effects: &mut Effects) -> Result<(), Error> {
         let extra = Row(row
             .0
@@ -139,14 +139,17 @@ impl SyncedTables {
             if !error.is_constraint() {
                 return Err(error);
             }
-            effects.report(format!("Syncline：{table} 的一行放不进本机的列，先存着：{}", js_message(&error)));
+            effects.report(format!(
+                "syncline: a row in {table} does not fit the local column, retained in unknown rows: {}",
+                js_message(&error)
+            ));
             delete_row(db, synced, table, key)?;
             self.unknown.put(db, table, key, row)?;
         }
         Ok(())
     }
 
-    /// 清空同步表（except 里的不清）与这个空间存着的本机还没有的表的行
+    /// Clears synced tables (except those in `except`) and retained unknown rows for this space.
     fn clear(&self, db: &Connection, except: &HashSet<String>, effects: &mut Effects) -> Result<(), Error> {
         for name in self.names.iter().filter(|name| !except.contains(*name)) {
             db.execute(&format!("DELETE FROM {}", quote(name)), [])?;
@@ -156,8 +159,8 @@ impl SyncedTables {
         Ok(())
     }
 
-    /// 离开了同步的表（给了 columns 是这些列）、扫描先清的表（给了 range 是主键在这一段里的行）：设备上一个不留，不论存在同步表、_extra
-    /// 还是本机还没有的表的行里。设备声明着的列不会离开（那样设备与云端不兼容、不同步），只清 _extra
+    /// Tables removed from sync (specified columns if `columns` given), or pre-cleared before scan (rows whose primary key falls in `range` if given): removed entirely from device, whether in synced tables, `_extra`,
+    /// or retained unknown rows. Columns declared on the device are never removed (that would make device incompatible with cloud), only `_extra` cleared.
     /// @see <https://github.com/powersync-ja/powersync-sqlite-core/blob/feb2fa5b1a432bc7189bfc15817e14ee464b129e/crates/core/src/sync/streaming_sync.rs#L181-L205>
     fn drop(
         &self,
@@ -195,7 +198,7 @@ impl SyncedTables {
             effects.touch(table);
         }
         self.unknown.drop_columns(db, table, &paths)?;
-        // 存着的这张表的行（放不进本机的列）去掉了这几列，可能放得进了：再试着写回，与暂存后一次写（去掉这几列再写）一样
+        // Retained rows for this table (previously incompatible values) now have those columns removed and may fit: reattempt restore, matching bulk write after staging (stripping those columns before writing).
         if synced.is_some() {
             self.restore_unknown(db, table, effects)?;
         }
@@ -203,7 +206,7 @@ impl SyncedTables {
     }
 }
 
-/// 库里这张表实际有的、同步的列（不含 _extra 与删掉的）
+/// Synced columns actually present in the table in database (excluding `_extra` and dropped columns).
 fn existing(db: &Connection, name: &str, retired: &HashSet<String>) -> rusqlite::Result<Vec<String>> {
     Ok(column_names(db, name)?
         .into_iter()
@@ -211,7 +214,7 @@ fn existing(db: &Connection, name: &str, retired: &HashSet<String>) -> rusqlite:
         .collect())
 }
 
-/// 库里一张表的列：名字、类型、有没有默认值
+/// Columns of a table in database: name, type, and whether a default value exists.
 fn table_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<(String, String, bool)>> {
     db.prepare(&format!("PRAGMA table_info({})", quote(table)))?
         .query_map([], |row| {
@@ -224,7 +227,7 @@ fn table_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<(String, 
         .collect()
 }
 
-/// 报出来的错的写法：SQLite 的错带结果码（「Error code N: …」）
+/// Format of reported errors: SQLite errors include result code ("Error code N: ...").
 fn js_message(error: &Error) -> String {
     match error {
         Error::Sql(rusqlite::Error::SqliteFailure(code, message)) => {
@@ -238,7 +241,7 @@ fn js_message(error: &Error) -> String {
     }
 }
 
-/// 删掉同步表里的一行
+/// Deletes a row from a synced table.
 fn delete_row(db: &Connection, synced: &SyncedTable, table: &str, key: &Row) -> Result<(), Error> {
     db.execute(
         &format!("DELETE FROM {} WHERE {}", quote(table), where_key(&synced.key)),

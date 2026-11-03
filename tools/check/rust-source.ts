@@ -1,13 +1,15 @@
 /**
- * Rust 源码里注释与新起的名字在哪：注释与名字的门禁本来用 TypeScript 解析器取，Rust 没有现成的解析器可用，这里按词法自己切。
- * 只认注释、字符串、字符字面量的边界（它们里面的 // 与名字都不算）；名字按声明的写法认，不做完整的语法分析
- * @see https://doc.rust-lang.org/1.91.0/reference/tokens.html 字面量的写法
- * @see https://doc.rust-lang.org/1.91.0/reference/comments.html 注释的写法（块注释可嵌套）
+ * Locates comments and newly declared identifiers in Rust source code: comment and identifier checks use TypeScript parsers for TS,
+ * but Rust has no off-the-shelf TS-compatible parser available here, so lexical boundaries are scanned directly.
+ * Only recognizes boundaries of comments, strings, and character literals (ignoring // and identifiers inside them);
+ * identifies declared names by syntax pattern without full AST analysis.
+ * @see https://doc.rust-lang.org/1.91.0/reference/tokens.html Literal syntax
+ * @see https://doc.rust-lang.org/1.91.0/reference/comments.html Comment syntax (block comments can nest)
  */
 
 type RustComment = { line: number; text: string };
 
-/** 位置所在的行（从 0 数）：先记下各行的起点，再二分 */
+/** Finds line index (0-based) for character offset: records line starts, then binary searches. */
 function lineFinder(text: string) {
   const starts = [0, ...[...text.matchAll(/\n/g)].map((match) => match.index + 1)];
   return (index: number) => {
@@ -23,8 +25,9 @@ function lineFinder(text: string) {
 }
 
 /**
- * 切出注释（line 从 0 数），并给出把注释与字符串换成空格的代码（换行照留，位置不变）。
- * 相邻行的同类文档注释（/// 或 //!）是一段，合成一条，与 TS 的一个 JSDoc 块相当；普通的 // 每行一条，与 TS 一样
+ * Extracts comments (0-based line) and returns code with comments and strings masked with spaces (preserving newlines and offsets).
+ * Adjacent doc comments of the same kind (/// or //!) merge into a single comment block, equivalent to a JSDoc block in TS;
+ * regular // comments produce one entry per line, matching TS.
  */
 export function rustSource(text: string) {
   const comments: RustComment[] = [];
@@ -48,14 +51,14 @@ export function rustSource(text: string) {
 
 const rawString = /[bc]?r(#*)"/y;
 
-/** i 处起的注释或字符串、字符字面量到哪为止；都不是给 undefined。没有结尾的到文件末尾 */
+/** Determines end offset of comment, string, or char literal starting at i; returns undefined if none. Unclosed tokens extend to EOF. */
 function tokenAt(text: string, i: number) {
   const head = text.slice(i, i + 2);
   if (head === '//') return { end: until(text.indexOf('\n', i), text), comment: true };
   if (head === '/*') return { end: blockEnd(text, i), comment: true };
   rawString.lastIndex = i;
   const raw = rawString.exec(text);
-  // r"、br#" 前面紧跟字母数字的是别的名字的结尾（for"）
+  // r" or br#" preceded by alphanumeric characters belongs to preceding identifiers (e.g. for").
   if (raw && !/\w/.test(text[i - 1] ?? '')) {
     const close = text.indexOf(`"${raw[1]}`, i + raw[0].length);
     return { end: close === -1 ? text.length : close + 1 + (raw[1]?.length ?? 0), comment: false };
@@ -67,7 +70,7 @@ function tokenAt(text: string, i: number) {
 
 const until = (index: number, text: string) => (index === -1 ? text.length : index);
 
-/** 接上一条注释：上一行是同类的文档注释（/// 或 //!；//// 是普通注释）就合成一段 */
+/** Merges with previous comment if preceding line is same doc comment kind (/// or //!; //// is treated as regular comment). */
 function addComment(comments: RustComment[], line: number, part: string) {
   const previous = comments.at(-1);
   const marker = /^\/\/[/!](?!\/)/.exec(part)?.[0];
@@ -81,7 +84,7 @@ function addComment(comments: RustComment[], line: number, part: string) {
   else comments.push({ line, text: part });
 }
 
-/** 块注释可以嵌套：数到配对的 *\/ 为止 */
+/** Scans nested block comments to matching *\/ boundary. */
 function blockEnd(text: string, start: number) {
   let depth = 0;
   for (let i = start; i < text.length - 1; i += 1) {
@@ -95,7 +98,7 @@ function blockEnd(text: string, start: number) {
   return text.length;
 }
 
-/** 字符串、字符字面量的结尾（含引号）：反斜杠转义下一个字符 */
+/** Scans string or char literal to closing quote (inclusive); backslash escapes next character. */
 function quotedEnd(text: string, start: number, quote: string) {
   for (let i = start + 1; i < text.length; i += 1) {
     if (text[i] === '\\') i += 1;
@@ -104,26 +107,26 @@ function quotedEnd(text: string, start: number, quote: string) {
   return text.length;
 }
 
-/** ' 开头的是字符字面量（'a'、'\n'、'中'）还是生命周期与标签（'a、'outer）：转义开头，或一个字符后紧跟 ' 的是字符 */
+/** Distinguishes char literals ('a', '\n', 'x') from lifetimes/labels ('a, 'outer): checks escape sequence or single character followed by '. */
 function isChar(text: string, start: number) {
   if (text[start + 1] === '\\') return true;
   const point = text.codePointAt(start + 1);
   return point !== undefined && text[start + 1 + String.fromCodePoint(point).length] === "'";
 }
 
-/** 新起的名字：line 从 0 数 */
+/** Declared identifier: line index is 0-based. */
 export type RustName = { text: string; line: number };
 
 const declarations = [
-  // 条目：const fn、unsafe fn 等的 const、unsafe 是修饰，名字在 fn 后面
+  // Items: const, unsafe, async, extern are modifiers; item name follows fn/struct/...
   /\b(?:fn|struct|enum|union|trait|type|mod|const|static|macro_rules!)\s+(?!fn\b|unsafe\b|async\b|extern\b)([A-Za-z_]\w*)/g,
-  // let 绑定单个名字；let Some(x) 之类的解构由后面的「名字:」或不查
+  // let bindings: single identifier; destructuring like let Some(x) is handled by field pattern or skipped
   /\blet\s+(?:mut\s+)?([A-Za-z_]\w*)\s*(?=[:=;])/g,
-  // 字段、参数、闭包参数、泛型约束：名字后跟单个冒号；路径的 ::、标签的 'a:、宏的 $x: 不算
+  // Fields, parameters, closure parameters, generic bounds: identifier followed by single colon; ::, 'a:, $x: excluded
   /(?<![\w:'$])(?:mut\s+)?([A-Za-z_]\w*)\s*:(?!:)/g,
 ];
 
-/** 从 start（括号里第一个字符）起到配对的括号为止，只留第一层的字符，更深一层的换成空格 */
+/** Retains first-level characters from start (first character inside delimiter) to matching closing delimiter, masking deeper levels with spaces. */
 function shallow(code: string, start: number) {
   let depth = 1;
   let kept = '';
@@ -135,7 +138,7 @@ function shallow(code: string, start: number) {
   return kept;
 }
 
-/** enum 的各个变体：只看 enum 的第一层括号里、跟在 { 或 , 后面的名字（属性 #[…] 在更深一层） */
+/** Enum variants: top-level identifiers following { or , inside the first level of the enum block (attributes #[...] are deeper). */
 const variants = (code: string) =>
   [...code.matchAll(/\benum\s+\w+[^{;]*\{/g)].flatMap((head) => {
     const start = head.index + head[0].length;
@@ -145,7 +148,7 @@ const variants = (code: string) =>
     });
   });
 
-/** 代码（rustSource 给出的、注释与字符串已换成空格）里新起的名字，按出现的先后；同一行同一个名字只报一次 */
+/** Extracts newly declared identifiers in masked code in appearance order; reports identical names on the same line at most once. */
 export function rustNames(code: string): RustName[] {
   const found = new Map<string, RustName & { index: number }>();
   const lineOf = lineFinder(code);

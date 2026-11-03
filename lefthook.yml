@@ -1,4 +1,4 @@
-# 本地钩子与 CI 跑同一套检查
+# Local git hooks run the same gate checks as CI
 commit-msg:
   commands:
     commit-message:

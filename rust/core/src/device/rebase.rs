@@ -1,5 +1,7 @@
-//! 收到云端改动时的 rebase：在一个本机事务里逆序撤回全部待上传、做这次的改动、删掉已确认的、重放剩下的；撤回失败就报出、整份重拉。
-//! 不该知道的：改动从哪来、怎么写进同步表。
+//! Rebase on receipt of cloud changes: executes within a single local transaction,
+//! reverting all pending writes in reverse order, applying changes, deleting writes confirmed by `lmids`,
+//! and replaying remaining pending writes; if revert fails, reports error and triggers full refetch.
+//! What it should not know: where changes originate or how they are written to synced tables.
 
 use super::Device;
 use crate::change::Change;
@@ -13,8 +15,9 @@ use crate::upload_queue::{Mutation, UploadQueue};
 use std::collections::HashSet;
 
 impl Device {
-    /// 在一个本机事务里撤回全部待上传（revert 为假时不撤回）、做 change、删掉 lmids 确认了的、重放剩下的，返回确认了的。
-    /// 撤回失败每次都会再出：报出、整条回滚，在另一个事务里做 fallback（整份重拉），返回 None
+    /// Reverts all pending writes in reverse order within a local transaction (omits revert if `revert` is false),
+    /// executes `change`, deletes writes confirmed by `lmids`, and replays remaining writes, returning confirmed writes.
+    /// Revert failures repeat on every apply: rolls back transaction, reports error, executes `fallback` (refetch) in a separate transaction, and returns None.
     pub(super) fn onto(
         &mut self,
         change: impl FnOnce(&mut Self) -> Result<(), Error>,
@@ -25,7 +28,7 @@ impl Device {
         let mut confirmed = Vec::new();
         let mut revert_failed = None;
         let result = self.commit(|device| {
-            // 待上传读一次：撤回与重放都用它（change 不改待上传）
+            // Reads pending writes once: shared across revert and replay (change does not mutate upload queue)
             let pending = UploadQueue::all(device.db.connection())?;
             if revert {
                 for write in pending.iter().rev() {
@@ -35,7 +38,7 @@ impl Device {
                             return Err(error);
                         }
                         revert_failed = Some(error.to_string());
-                        return Err(Error::Failed("撤回待上传失败".to_owned()));
+                        return Err(Error::Failed("failed to revert pending writes".to_owned()));
                     }
                     for row in changeset::parse(&write.changeset)? {
                         device.effects.touch(row.table());
@@ -60,8 +63,9 @@ impl Device {
         match (result, revert_failed) {
             (Ok(()), _) => Ok(Some(confirmed)),
             (Err(_), Some(cause)) => {
-                self.effects
-                    .report(format!("Syncline：本机的数据与待上传对不上（撤回失败），整份重拉：{cause}"));
+                self.effects.report(format!(
+                    "Syncline: local data conflicts with pending writes (revert failed); triggering refetch: {cause}"
+                ));
                 self.commit(fallback)?;
                 Ok(None)
             }
@@ -70,8 +74,10 @@ impl Device {
     }
 }
 
-/// 重放一条待上传（改到删掉的表与列的部分先去掉），返回新的改动集。重放不了（引用的行已被别处删掉、与云端的新值合起来违反约束）就是本机预测失败：
-/// 记空改动集、留在待上传照常上传，由云端裁决。存储出错与 SQLite 回滚了整个事务才报错、中止这次收下
+/// Replays a single pending write (stripping modifications to retired tables and columns), returning a new changeset.
+/// If replay fails (referenced row deleted by server, constraint violation with server values), local prediction failed:
+/// records an empty changeset, preserves write in upload queue to upload normally, and defers resolution to cloud.
+/// Returns error and aborts ingestion only on storage I/O errors or when SQLite rolls back the transaction.
 /// @see <https://github.com/rocicorp/mono/pull/6555>
 fn replay(
     db: &mut Database,

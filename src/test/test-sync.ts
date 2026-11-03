@@ -4,9 +4,9 @@ import type { SyncStatus } from '../expo/status.ts';
 import type { ConnectionOptions, Mirror } from './test-device.ts';
 import type { Calls } from './test-rust.ts';
 
-// Rust 设备上一个空间的同步当作 Connection 用：start、stop、sync 这些调用经 Shell 交给 Rust，同步状态由 Rust 报来
+// Device space sync wrapper used as Connection in tests: start, stop, and sync delegate to Rust via Shell; status sinks from Rust.
 
-/** Rust 设备上一个空间的同步，接口同 Connection：调用经 Shell 交给 Rust，同步状态是 Rust 报来的最近一次 */
+/** Space sync connection on device, conforming to Connection interface. */
 export class Connection {
   readonly #calls: Calls;
   readonly #channel: string;
@@ -52,7 +52,7 @@ export class Connection {
     return abortable(this.#calls.call({ type: 'resync', channel: this.#channel, discardPending }), signal);
   }
 
-  /** 没有这个空间的同步（关了库）时 Rust 回错：TS 那边什么也不做，这里也不理 */
+  /** When space sync is closed (database closed), Rust returns an error; ignored to match client behavior. */
   reconnect() {
     this.#calls.call({ type: 'reconnect', channel: this.#channel }).catch(() => undefined);
   }

@@ -1,26 +1,26 @@
-//! 设备一侧用到的上限：与云端的 JS 是同一组数，JS 的测试经 wasm 的 `limits` 逐个核对。
-//! 不该知道的：上限用在哪。
+//! Limits used on the client side: identical numbers to those on the cloud JavaScript side, verified one by one against the cloud limits via wasm `limits`.
+//! What it should not know: where each limit is applied.
 
-/// 单个字符串、BLOB 或一行至多多少字节（Durable Object 的上限）
+/// Maximum bytes per single string, BLOB, or row (Durable Object limit).
 pub const VALUE_BYTES: usize = 2_000_000;
-/// 按字符切又要守字节上限的，字符数取字节上限的 1/4
+/// Maximum character count when truncating by characters while respecting the byte limit (1/4 of byte limit).
 pub const VALUE_CHARS: usize = VALUE_BYTES / 4;
-/// 一行的主键编成 JSON 至多多少字节
+/// Maximum bytes for a single row's primary key serialized to JSON.
 pub const KEY_BYTES: usize = 512;
-/// 一次写至多改几行（连带删的也算）
+/// Maximum rows modified per mutation (including cascading deletes).
 pub const WRITE_ROWS: i64 = 100_000;
-/// 一次写改到的行的主键共至多多少字节
+/// Maximum total bytes for primary keys of all rows modified in a single mutation.
 pub const WRITE_KEY_BYTES: i64 = 16_000_000;
-/// 一行同步的列至多多少字节：云端一行的上限留出行头与 JSON 转义的余地。本机写时就拒，免得上传后被云端扣下、本机又撤回
+/// Maximum bytes for synced columns in a row: cloud single-row limit leaves headroom for row overhead and JSON escaping. Rejected on local write so it is not rejected by cloud and rolled back locally.
 pub const MAX_ROW_BYTES: usize = VALUE_BYTES - 100_000;
-/// 一次本机写的改动编成 JSON 至多多少字节：推送时一条 WebSocket 消息装得下，云端一次调用的 CPU 上限里执行得完
+/// Maximum bytes for local write changes serialized to JSON: fits into a single WebSocket message on push and executes within cloud single-invocation CPU limits.
 pub const WRITE_BYTES: i64 = 8 * (1 << 20);
-/// 一次推送至多几条写（云端照它拒收）
+/// Maximum mutations per push batch (rejected by cloud if exceeded).
 pub const PUSH_MUTATIONS: i64 = 1000;
-/// 多久没收到数据就当失败（毫秒）：握手与补齐、取 token；HTTP 拉取的由外壳按它计
+/// Timeout in milliseconds without receiving data before treating as failure: handshake, pull, token fetch; shell uses this for HTTP pull timeouts.
 pub const RECEIVE_TIMEOUT: f64 = 30_000.0;
 
-/// 设备一侧照着做、写进给接入方的上限文档的数（字节、行、毫秒），连同与云端共用的几个：JS 的测试拿它与文档、与云端的同一组数核对
+/// Numbers (bytes, rows, milliseconds) enforced on the client and documented in the public reference, along with constants shared with the cloud: JS tests verify these against documentation and cloud limits.
 #[must_use]
 pub fn documented() -> serde_json::Value {
     serde_json::json!({

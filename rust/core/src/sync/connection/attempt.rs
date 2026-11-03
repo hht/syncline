@@ -1,6 +1,8 @@
-//! 一次连接怎么走：换连接时上一次的一切作废（取 token、拉取、排着的重连、WebSocket），取 token（超时当出错），共用空间等建好表，
-//! 拉到追平，再连 WebSocket；失败记下出的错、按退避重连。到时的计时器交给认得它的那一步。
-//! 不该知道的：连上之后收发什么、拉取怎么一块块收。
+//! Connection attempt lifecycle: invalidates prior attempt state upon reconnect (token request,
+//! pull, scheduled reconnect, WebSocket), requests token (timeout treated as failure), waits for
+//! shared space table creation, pulls until caught up, then connects WebSocket; records errors on
+//! failure and reconnects via backoff. Timers are routed to the corresponding step upon firing.
+//! What it should not know: message protocol after connecting or chunk-by-chunk pull staging.
 
 use super::{Attempt, Connection, Kind, Link, Opened};
 use crate::limits::RECEIVE_TIMEOUT;
@@ -12,7 +14,7 @@ use crate::sync::pull::After;
 use crate::sync::status::done_downloading;
 use crate::sync::{BEARER, Context, SCHEMA_PREFIX, SUBPROTOCOL};
 
-/// 连之前在取的 token
+/// In-flight token request before connecting
 pub(super) struct TokenWait {
     attempt: u64,
     request: u32,
@@ -20,7 +22,7 @@ pub(super) struct TokenWait {
 }
 
 impl Connection {
-    /// 接入方回了 token（取不到时带着错）
+    /// Called when integrator returns token (or error)
     pub fn token(&mut self, ctx: &mut Context, request: u32, token: Result<String, Failure>) {
         if self.token.as_ref().is_some_and(|wait| wait.request == request) {
             let Some(wait) = self.token.take() else { return };
@@ -31,7 +33,7 @@ impl Connection {
         }
     }
 
-    /// 计时器到时了
+    /// Called when timer fires
     pub fn fired(&mut self, ctx: &mut Context, timer: &Timer) {
         match *timer {
             Timer::Reconnect { .. } => {
@@ -39,7 +41,7 @@ impl Connection {
                 self.connect(ctx);
             }
             Timer::TokenTimeout { request, .. } => {
-                let error = Failure::new(format!("取 token 超时（{} 秒）", RECEIVE_TIMEOUT / 1000.0));
+                let error = Failure::new(format!("token request timed out ({}s)", RECEIVE_TIMEOUT / 1000.0));
                 if self.token.as_ref().is_some_and(|wait| wait.request == request) {
                     let Some(wait) = self.token.take() else { return };
                     self.tokened(ctx, wait.attempt, Err(error));
@@ -58,7 +60,7 @@ impl Connection {
         }
     }
 
-    /// 换一次新的连接：上一次的一切作废
+    /// Initiates fresh connection attempt: invalidates all prior attempt state
     pub(super) fn begin(&mut self, out: &mut Out) -> u64 {
         self.abort(out);
         self.next_attempt += 1;
@@ -69,7 +71,7 @@ impl Connection {
         self.next_attempt
     }
 
-    /// 上一次的一切作废：取 token、拉取、排着的重连、WebSocket
+    /// Invalidates all prior attempt state: token request, pull, scheduled reconnect, WebSocket
     pub(super) fn abort(&mut self, out: &mut Out) {
         if let Some(attempt) = self.attempt {
             self.cancel(out, attempt.id);
@@ -79,7 +81,7 @@ impl Connection {
         self.drop_link(out);
     }
 
-    /// 作废这次连接：之后它上面的消息、回来的结果都不理
+    /// Cancels attempt: subsequent messages and late results are ignored
     pub(in crate::sync) fn cancel(&mut self, out: &mut Out, attempt: u64) {
         if let Some(current) = &mut self.attempt
             && current.id == attempt
@@ -93,7 +95,7 @@ impl Connection {
         self.cancel_pull(out, attempt);
     }
 
-    /// 连一次：取 token，先拉到追平，再连 WebSocket
+    /// Attempts connection: requests token, pulls until caught up, then connects WebSocket
     pub(super) fn connect(&mut self, ctx: &mut Context) {
         if !self.started {
             return;
@@ -109,16 +111,16 @@ impl Connection {
         }
         match token {
             Err(error) => self.fail(ctx, attempt, error, Kind::Download),
-            // 共用空间的建表与升级排在本机队列里（开着的本机写之后）：等它做完才读游标
+            // Shared space table setup and upgrades queue in local task queue (after active local writes): wait before reading cookie
             Ok(token) if matches!(self.opened, Opened::Pending) => self.waiting_open = Some((attempt, token)),
             Ok(token) => self.ready(ctx, attempt, token),
         }
     }
 
-    /// 取到了 token、空间也打开了：先拉到追平（云端要求先拉再连时至少拉一次）
+    /// Token acquired and space opened: pulls until caught up (at least once if cloud requested pre-pull)
     pub(super) fn ready(&mut self, ctx: &mut Context, attempt: u64, token: String) {
         if let Opened::Failed(error) = &self.opened {
-            // 建表出错（如改了列类型）照常按退避重来、报在同步状态里
+            // Table creation error (e.g. column type change) reconnects on backoff and reports in status
             let error = error.clone();
             return self.fail(ctx, attempt, error, Kind::Download);
         }
@@ -127,12 +129,12 @@ impl Connection {
         self.start_pull(ctx, attempt, false, once, Some(token.clone()), After::Attach(token));
     }
 
-    /// 拉到追平之后连 WebSocket：网址带本机游标，子协议带 token（私有空间另带表结构的指纹）
+    /// Connects WebSocket after pulling to head: URL carries cookie, subprotocol carries token (private space also carries schema fingerprint)
     pub(in crate::sync) fn attach(&mut self, ctx: &mut Context, attempt: u64, token: &str) {
         self.status.update(ctx.out, self.started, done_downloading);
         let cookie = match self.mirror().cookie(ctx.device) {
-            // 拉到追平就有游标：没有是坏了不变量
-            Ok(None) => Err(Failure::new("拉完了却没有游标")),
+            // Pulling to head yields cookie: missing cookie violates invariant
+            Ok(None) => Err(Failure::new("pull completed without cookie")),
             Ok(Some(cookie)) => Ok(cookie),
             Err(error) => Err(error),
         };
@@ -159,7 +161,7 @@ impl Connection {
         });
     }
 
-    /// 要先 HTTP 拉取再连：不算失败，等一下再拉、再连（0 到 max(spread, 1 秒) 之间）
+    /// Cloud requested HTTP pull before reconnecting: not counted as failure; waits briefly before pulling and reconnecting (between 0 and max(spread, 1s))
     pub(in crate::sync) fn repull(&mut self, ctx: &mut Context) {
         self.pull_needed = true;
         self.status.update(ctx.out, self.started, |status| status.connected = false);
@@ -167,8 +169,8 @@ impl Connection {
         self.retry(ctx, Some(delay));
     }
 
-    /// 这次连接失败：记下出的错，正在等的 `sync()` 随之失败，按退避重连；云端的协议更新、用到了云端已删的表或列时停下；换了账号时停下
-    #[expect(clippy::needless_pass_by_value, reason = "出的错交给连接记下，调用方之后不再用它")]
+    /// Connection attempt failed: records error, waiting `sync()` calls fail, and reconnects on backoff; stops if cloud protocol is newer, uses retired schema, or account mismatched
+    #[expect(clippy::needless_pass_by_value, reason = "error is stored on connection and not reused by caller")]
     pub(in crate::sync) fn fail(&mut self, ctx: &mut Context, attempt: u64, error: Failure, kind: Kind) {
         if !self.current(attempt) || !self.started {
             return;
@@ -190,7 +192,7 @@ impl Connection {
         }
     }
 
-    /// 过 delay 毫秒（默认照退避）排下一次连接
+    /// Schedules next connection attempt after delay milliseconds (defaults to backoff)
     fn retry(&mut self, ctx: &mut Context, delay: Option<f64>) {
         let delay = delay.unwrap_or_else(|| self.backoff.next(ctx.random));
         self.reconnecting = Some(ctx.out.schedule(
@@ -202,7 +204,7 @@ impl Connection {
     }
 }
 
-/// 向接入方要一次 token：`RECEIVE_TIMEOUT` 内没回就当出错（取 token 的请求挂着时连接不会一直等）
+/// Requests token from integrator: fails if not answered within `RECEIVE_TIMEOUT` (prevents hanging indefinitely)
 pub(in crate::sync) fn request_token(out: &mut Out, channel: &str) -> (u32, u32) {
     let request = out.id();
     out.push(Instruction::Token {

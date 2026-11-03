@@ -1,11 +1,13 @@
-//! 编成 wasm 的设备一侧：node 里的测试与 web 的 Worker 经它用核心。一个 `Database` 先当作普通的库（执行语句、建表），open 之后是设备：
-//! 之后每来一个事件调一次 `control`，回一组指令（`syncline::client`），网络、计时由 JS 照指令做。
-//! 语句的参数与结果是 JSON 文本，值照 JS 的样子：整数与小数都是 number、文本是 string、空是 null，布尔绑成 0 与 1；BLOB 是字节的数组；
-//! 参数里 JSON 写不了的无穷大写成 `{"real": "Infinity"}`。改动集直接传字节（Uint8Array）。
-//! 直接调的方法出错时消息照 JS 那边认的样子：SQLite 的错带结果码（「Error code 13: …」），拒收与不合声明是 JSON
-//! （`{"reject": 原因}`、`{"invalid": {"table", "issues"}}`；开库时换人、账号不一致的错是核心的 `Failure`，与 `control` 回的指令里的同一个样子），
-//! JS 照它抛对应的错。
-//! 不该知道的：核心里的规则。
+//! Device-side WebAssembly binding: tests in Node.js and web workers use the sync core through this interface.
+//! A `Database` starts as a standard SQLite database (executing statements, defining tables), becoming a device once opened:
+//! subsequent events call `control`, returning a batch of instructions (`syncline::client`) for JS to execute over the network or timers.
+//! Statement parameters and results are JSON text mirroring JS values: numbers for integers and floats, strings for text, null for empty,
+//! booleans bound to 0 and 1, byte arrays for BLOBs, and `{"real": "Infinity"}` for infinities not representable in JSON.
+//! Changesets pass raw bytes (`Uint8Array`) directly.
+//! Method error messages match JS expectations: SQLite errors include result codes ("Error code 13: ..."), rejections and declaration mismatches
+//! format as JSON (`{"reject": reason}`, `{"invalid": {"table", "issues"}}`; account switches or mismatches during open match core `Failure`
+//! JSON, identical to instructions returned by `control`), which JS parses into corresponding error instances.
+//! What this module should not know: sync rules implemented inside the core.
 
 use rusqlite::Connection;
 use serde_json::{Value as Json, json};
@@ -21,7 +23,7 @@ mod faults;
 #[cfg(target_family = "wasm")]
 mod opfs;
 
-/// 外面给的随机数：客户端编号（`randomUUID()`）与退避的抖动（`random()`，0 到 1）
+/// External host random number generator: provides client IDs via `randomUUID()` and backoff jitter via `random()` (0.0 to 1.0).
 #[wasm_bindgen]
 extern "C" {
     pub type Host;
@@ -31,7 +33,7 @@ extern "C" {
     fn random(this: &Host) -> f64;
 }
 
-/// 一个设备库（内存里的）：先当作普通的库（执行语句、建表），open 之后是设备
+/// An in-memory device database: operates first as a standard database (executing statements, defining tables) before opening as a device.
 #[wasm_bindgen]
 pub struct Database {
     store: Option<Store>,
@@ -42,19 +44,19 @@ pub struct Database {
 
 #[wasm_bindgen]
 impl Database {
-    /// 打开一个内存里的库
+    /// Opens an in-memory database.
     ///
     /// # Errors
-    /// SQLite 打不开库。
+    /// Returns an error if SQLite cannot open the database.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Result<Database, JsError> {
         Database::of(Connection::open_in_memory().map_err(sql)?)
     }
 
-    /// 从整库导出（image）恢复出的库：照官方 WASM 的 `sqlite3_deserialize`，可写、可变大
+    /// Restores a database from a serialized image: writable and growable via official WebAssembly `sqlite3_deserialize`.
     ///
     /// # Errors
-    /// SQLite 打不开库或读不了这份导出。
+    /// Returns an error if SQLite cannot open the database or deserialize the image.
     /// @see <https://sqlite.org/c3ref/deserialize.html>
     pub fn restored(image: &[u8]) -> Result<Database, JsError> {
         let mut connection = Connection::open_in_memory().map_err(sql)?;
@@ -64,17 +66,21 @@ impl Database {
         Database::of(connection)
     }
 
-    /// 测试注入存储故障：rule 是 `{"prefix"}`（接下来以它开头的语句出错一次）、`{"after"}`（接下来第几条读写语句出错一次）的 JSON，null 是不再注入
+    /// Injects storage faults for tests: rule is a JSON string of `{"prefix"}` (next matching statement fails once) or
+    /// `{"after"}` (after-th read/write statement fails once); null disarms injection.
     ///
     /// # Errors
-    /// rule 读不出。
+    /// Returns an error if the rule JSON cannot be parsed.
     #[cfg(feature = "testing")]
     pub fn inject(&self, rule: &str) -> Result<(), JsError> {
         self.faults.arm(parsed(rule).map_err(failure)?);
         Ok(())
     }
 
-    #[cfg_attr(not(feature = "testing"), expect(unused_mut, reason = "测试的构建在连接上装注入故障的钩子"))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(unused_mut, reason = "test builds install fault injection hooks on the connection")
+    )]
     pub(crate) fn of(mut connection: Connection) -> Result<Database, JsError> {
         #[cfg(feature = "testing")]
         let faults = faults::Faults::install(&mut connection).map_err(sql)?;
@@ -86,10 +92,11 @@ impl Database {
         })
     }
 
-    /// 导出整库（当作系统备份）：按页号读出库文件的每一页，空闲页也在。用 `sqlite_dbpage` 只要连接的共享引用（连接与开着的记录放在一起）
+    /// Exports the whole database image (used as system backup): reads every page in page-number order, including free pages.
+    /// Querying `sqlite_dbpage` requires only a shared reference to the connection.
     ///
     /// # Errors
-    /// 读不出页。
+    /// Returns an error if database pages cannot be read.
     /// @see <https://sqlite.org/dbpage.html>
     pub fn image(&self) -> Result<Vec<u8>, JsError> {
         let db = self.store().connection();
@@ -103,42 +110,44 @@ impl Database {
     }
 
     fn store(&self) -> &Store {
-        self.client
-            .as_ref()
-            .map_or_else(|| self.store.as_ref().expect("库总在"), |client| client.device().database())
+        self.client.as_ref().map_or_else(
+            || self.store.as_ref().expect("database is always present"),
+            |client| client.device().database(),
+        )
     }
 
-    /// 执行一条语句：bindings 是参数的 JSON 数组，返回 `{"columns": [列名], "rows": [[值]], "written": 改到的行数}`
+    /// Executes a single SQL statement: bindings is a JSON array, returns `{"columns": [...], "rows": [[...]], "written": count}`.
     ///
     /// # Errors
-    /// 参数不是 JSON 数组或有对象、不是字节的数组；语句出错；读出了超出 JS 精确范围的整数。
+    /// Returns an error if bindings is not a valid JSON array or contains invalid types, if statement execution fails,
+    /// or if an integer exceeds JS safe integer bounds.
     pub fn exec(&self, sql: &str, bindings: &str) -> Result<String, JsError> {
         let bindings: Vec<Json> = parsed(bindings).map_err(failure)?;
         let values::Statement { columns, rows, written } = values::execute(self.store().connection(), sql, &bindings).map_err(failure)?;
         Ok(json!({ "columns": columns, "rows": rows, "written": written }).to_string())
     }
 
-    /// 执行几条用分号隔开、不带参数的语句
+    /// Executes a semicolon-separated batch of parameterless SQL statements.
     ///
     /// # Errors
-    /// 哪条语句出错。
+    /// Returns an error if any statement in the batch fails.
     pub fn batch(&self, sql: &str) -> Result<(), JsError> {
         self.store().connection().execute_batch(sql).map_err(self::sql)
     }
 
-    /// 照 JS 编出的声明（`Table` 的 JSON 数组）建表、补列、建索引
+    /// Defines tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
     ///
     /// # Errors
-    /// 声明不是合法的 JSON，或与库里已有的表合不上、执行出错。
+    /// Returns an error if the declaration is invalid JSON, conflicts with existing tables, or fails execution.
     pub fn define(&self, tables: &str) -> Result<(), JsError> {
         let tables: Vec<Table> = parsed(tables).map_err(failure)?;
         tables::define(self.store().connection(), &tables).map_err(failure)
     }
 
-    /// 把 Syncline 自己的表升或退到代码要的那一版
+    /// Prepares internal tables, upgrading or downgrading them to match the code version.
     ///
     /// # Errors
-    /// 执行出错，库保持原样。
+    /// Returns an error if execution fails; the database remains untouched.
     pub fn prepare(&self) -> Result<(), JsError> {
         internal::prepare(self.store().connection()).map_err(sql)
     }
@@ -149,21 +158,22 @@ impl Database {
         self.store().in_transaction()
     }
 
-    /// 打开设备（已开着的先关掉，同一个库上重开）：options 是 `client::Opening` 的 JSON（照它建表、补列再打开），host 给随机数；
-    /// 返回打开时攒下的指令（JSON 数组）；之后经 `control` 交来事件
+    /// Opens the device (reopening closes any previous device on the same database): options is JSON of `client::Opening`
+    /// (defining tables and adding columns before opening), host provides random numbers;
+    /// returns initial instructions (JSON array); subsequent events are delivered via `control`.
     ///
     /// # Errors
-    /// options 不合法；打开出错（消息是核心的错 `Failure` 的 JSON），见 `Client::open`。
+    /// Returns an error if options is invalid or if opening fails (formatted as core `Failure` JSON, see `Client::open`).
     ///
     /// # Panics
-    /// 库既不在 store 也不在设备里（不变量坏了）。
+    /// Panics if the database is missing from both store and client (broken invariant).
     pub fn open(&mut self, options: &str, host: Host, now: f64) -> Result<String, JsError> {
         let opening = parsed(options).map_err(failure)?;
-        // 在同一个库上重开（App 重启）：上一个设备开着的本机写回滚
+        // Reopening on the same database (e.g. app restart): roll back any active local write from previous device.
         if let Some(client) = self.client.take() {
             self.store = Some(client.into_database());
         }
-        let store = self.store.take().expect("没有设备时库在 store");
+        let store = self.store.take().expect("database present in store when client is absent");
         let host = std::rc::Rc::new(host);
         let uuids = host.clone();
         match Client::open(
@@ -184,24 +194,24 @@ impl Database {
         }
     }
 
-    /// 测试读一个空间的状态（`client::Inspect` 的 JSON），回 JSON：不经 `control`，外面正做着指令时也能读（只有测试的构建有）
+    /// Inspects a space's state for tests (`client::Inspect` JSON), returning JSON directly without going through `control` (test builds only).
     ///
     /// # Errors
-    /// 还没打开设备；读不出。
+    /// Returns an error if the device has not been opened or inspection fails.
     #[cfg(feature = "testing")]
     pub fn inspect(&mut self, inspect: &str, now: f64) -> Result<String, JsError> {
         let inspect = parsed(inspect).map_err(failure)?;
-        let client = self.client.as_mut().ok_or_else(|| JsError::new("还没有打开设备（open）"))?;
+        let client = self.client.as_mut().ok_or_else(|| JsError::new("device is not open"))?;
         let value = client.inspect(inspect, now).map_err(|error| JsError::new(&error.message))?;
         Ok(value.to_string())
     }
 
-    /// 交来一个事件（`client::Input` 的 JSON），回这期间的指令（JSON 数组）；认不出的事件回它出错或照常报出（`client::unreadable`）
+    /// Delivers an event (`client::Input` JSON) and returns resulting instructions (JSON array); unreadable inputs return an error or are delivered directly (`client::unreadable`).
     ///
     /// # Errors
-    /// 还没打开设备。
+    /// Returns an error if the device has not been opened.
     pub fn control(&mut self, input: &str, now: f64) -> Result<String, JsError> {
-        let client = self.client.as_mut().ok_or_else(|| JsError::new("还没有打开设备（open）"))?;
+        let client = self.client.as_mut().ok_or_else(|| JsError::new("device is not open"))?;
         let instructions = match serde_json::from_str(input) {
             Ok(input) => client.control(input, now),
             Err(error) => match unreadable(input, &error) {
@@ -213,7 +223,7 @@ impl Database {
     }
 }
 
-/// 核心用的上限与时长（`limits::documented`）：JS 的测试据此与文档、与云端的同一组数核对
+/// Returns documented limits and durations (`limits::documented`) as JSON for verification against docs and cloud constants.
 #[wasm_bindgen]
 #[must_use]
 pub fn limits() -> String {
@@ -224,7 +234,7 @@ fn parsed<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Error> {
     serde_json::from_str(text).map_err(|error| Error::Failed(error.to_string()))
 }
 
-/// SQLite 的错：带上扩展结果码，JS 据此分出暂时的错（磁盘满、忙）与违反约束
+/// Converts SQLite errors to `JsError` with extended result codes, allowing JS to distinguish transient errors from constraint violations.
 /// @see <https://sqlite.org/rescode.html>
 fn sql(error: rusqlite::Error) -> JsError {
     match error {
@@ -243,9 +253,9 @@ fn failure(error: Error) -> JsError {
         Error::Reject(message) => JsError::new(&json!({ "reject": message }).to_string()),
         Error::Invalid { table, issues } => JsError::new(&json!({ "invalid": { "table": table, "issues": issues } }).to_string()),
         Error::Failed(message) => JsError::new(&message),
-        // 开库时的错：与 control 回的同一个样子（核心的 Failure）
+        // Errors during opening: formatted identically to Failure returned by control.
         error @ (Error::PendingWrites { .. } | Error::AccountMismatch { .. }) => {
-            JsError::new(&serde_json::to_string(&Failure::from(error)).expect("Failure 总编得成 JSON"))
+            JsError::new(&serde_json::to_string(&Failure::from(error)).expect("Failure always serializes to JSON"))
         }
     }
 }

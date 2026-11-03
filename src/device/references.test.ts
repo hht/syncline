@@ -9,9 +9,9 @@ import { upload, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { exercise, read, set, withWorkout, workout } from './test-workout.ts';
 
-// 外键：本机写、重放与云端照外键连带删、拒收孤儿行
+// Foreign keys: local writes, replay, and cloud cascade deletes and reject orphan rows according to foreign keys.
 
-/** 手机先删子行（deleteChildren），再删训练 w1，上传给云端与在线设备 */
+/** Phone deletes child rows first (deleteChildren), then deletes workout w1, uploading to cloud and online devices. */
 async function phoneDeletesParent(
   { space, phone, devices }: Awaited<ReturnType<typeof withWorkout>>,
   deleteChildren: (tx: ReturnType<typeof remoteDatabase>) => Promise<unknown>,
@@ -23,10 +23,10 @@ async function phoneDeletesParent(
   await upload(space, phone.device, devices);
 }
 
-test('删父行连带删别的设备同时加的子行', async () => {
+test('deleting parent cascades to child rows added concurrently by other devices', async () => {
   const workouts = await withWorkout();
   const { cloud, space, tablet } = workouts;
-  await write(tablet.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: '箱式深蹲' }));
+  await write(tablet.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: 'box squat' }));
   await upload(space, tablet.device, [tablet.device]);
   await phoneDeletesParent(workouts, (tx) => tx.delete(exercise).where(eq(exercise.workout_id, 'w1')));
 
@@ -34,14 +34,14 @@ test('删父行连带删别的设备同时加的子行', async () => {
   expect(read(tablet.storage)).toEqual(read(cloud));
 });
 
-test('连带删一层层往下，只删引用被删的行的', async () => {
+test('cascade delete descends level by level, only deleting rows referencing deleted parents', async () => {
   const workouts = await withWorkout();
   const { cloud, space, phone, tablet, devices } = workouts;
   await write(tablet.device, async (tx) => {
     await tx.insert(workout).values({ id: 'w2' });
     await tx.insert(exercise).values([
-      { id: 'e2', workout_id: 'w1', name: '前蹲' },
-      { id: 'e3', workout_id: 'w2', name: '卧推' },
+      { id: 'e2', workout_id: 'w1', name: 'front squat' },
+      { id: 'e3', workout_id: 'w2', name: 'bench press' },
     ]);
     await tx.insert(set).values([
       { id: 's1', exercise_id: 'e1' },
@@ -56,7 +56,7 @@ test('连带删一层层往下，只删引用被删的行的', async () => {
   for (const { storage } of [phone, tablet]) expect(read(storage)).toEqual(read(cloud));
 });
 
-test('服务端的写也照外键：删父行连带删子行，在线设备一起删掉；写完后还引用不在的行就整条不提交、抛给调用方（同一次写里先子后父不算）', async () => {
+test('server mutations also respect foreign keys: deleting parent cascades to children, online devices delete together; referencing missing rows rolls back and throws (children before parent in same mutation is allowed)', async () => {
   const { cloud, space, devices, phone } = await withWorkout();
   const online = async (poke: Poke) => {
     for (const device of devices) await device.private.receive(poke);
@@ -66,11 +66,11 @@ test('服务端的写也照外键：删父行连带删子行，在线设备一�
   expect(read(cloud)).toEqual({ workouts: [], exercises: [], sets: [] });
   expect(read(phone.storage)).toEqual(read(cloud));
 
-  expect(() => space.mutate((tx) => tx.insert(exercise, { id: 'e2', workout_id: 'gone', name: '卧推' }))).toThrow('已不在');
+  expect(() => space.mutate((tx) => tx.insert(exercise, { id: 'e2', workout_id: 'gone', name: 'bench press' }))).toThrow('missing parent');
   expect(read(cloud).exercises).toEqual([]);
   await online(
     space.mutate((tx) => {
-      tx.insert(exercise, { id: 'e3', workout_id: 'w2', name: '硬拉' });
+      tx.insert(exercise, { id: 'e3', workout_id: 'w2', name: 'deadlift' });
       tx.insert(workout, { id: 'w2' });
     }),
   );
@@ -78,17 +78,17 @@ test('服务端的写也照外键：删父行连带删子行，在线设备一�
   expect(read(cloud).exercises).toHaveLength(1);
 });
 
-test('引用的行已被别的设备删掉：本机重放时先预判拒收，云端整条拒收，确认后两端一致', async () => {
+test('referenced row deleted by another device: rejected early during local replay, rejected completely by cloud, consistent after ack', async () => {
   const { cloud, space, phone, tablet, devices } = await withWorkout();
   await write(tablet.device, async (tx) => {
     await tx.delete(exercise).where(eq(exercise.workout_id, 'w1'));
     await tx.delete(workout).where(eq(workout.id, 'w1'));
   });
-  await write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: '箱式深蹲' }));
-  await write(phone.device, (tx) => tx.update(exercise).set({ name: '前蹲' }).where(eq(exercise.id, 'e2')));
+  await write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: 'box squat' }));
+  await write(phone.device, (tx) => tx.update(exercise).set({ name: 'front squat' }).where(eq(exercise.id, 'e2')));
   expect(read(phone.storage).exercises).toEqual([
-    { id: 'e1', workout_id: 'w1', name: '深蹲' },
-    { id: 'e2', workout_id: 'w1', name: '前蹲' },
+    { id: 'e1', workout_id: 'w1', name: 'squat' },
+    { id: 'e2', workout_id: 'w1', name: 'front squat' },
   ]);
   await upload(space, tablet.device, devices);
   expect(read(phone.storage).exercises).toEqual([]);
@@ -102,7 +102,7 @@ test('引用的行已被别的设备删掉：本机重放时先预判拒收，�
   }
 });
 
-test('复合外键只改了其中一列（patch 只带改了的列）：照写完之后的整行查父行，引用的那一对不在就拒收、扣下', () => {
+test('composite foreign key modifies only one column (patch carries only changed column): parent checked against resulting row, rejected and held if pair missing', () => {
   const parent = sqliteTable('parent', { a: integer().notNull(), b: integer().notNull() }, (table) => [
     primaryKey({ columns: [table.a, table.b] }),
   ]);
@@ -121,10 +121,10 @@ test('复合外键只改了其中一列（patch 只带改了的列）：照写�
     tx.insert(child, { id: 'c', pa: 1, pb: 1 });
   });
   const poke = space.push([{ client: 'c1', id: 1, changes: [{ op: 'patch', table: 'child', row: { id: 'c', pb: 2 } }] }]);
-  expect(poke?.held).toEqual([expect.objectContaining({ client: 'c1', id: 1, reason: expect.stringContaining('已不在') })]);
+  expect(poke?.held).toEqual([expect.objectContaining({ client: 'c1', id: 1, reason: expect.stringContaining('missing parent') })]);
 });
 
-test('本机写与重放、云端同一套「行怎么写」：离线删父行，子行在本机立刻连带删；引用不在的父行，本机写就拒收、整条回滚', async () => {
+test('local write, replay, and cloud share row mutation logic: deleting parent offline cascades locally immediately; referencing missing parent rejected and rolled back', async () => {
   const { phone } = await withWorkout();
   await write(phone.device, (tx) => tx.insert(set).values({ id: 's1', exercise_id: 'e1' }));
   await write(phone.device, (tx) => tx.delete(workout).where(eq(workout.id, 'w1')));
@@ -132,14 +132,14 @@ test('本机写与重放、云端同一套「行怎么写」：离线删父行�
   expect(phone.device.private.pending().at(-1)?.changes).toEqual([{ op: 'del', table: 'workout', key: { id: 'w1' } }]);
 
   const pending = phone.device.private.pending();
-  await expect(write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e9', workout_id: 'gone', name: '卧推' }))).rejects.toThrow(
-    '已不在',
-  );
+  await expect(
+    write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e9', workout_id: 'gone', name: 'bench press' })),
+  ).rejects.toThrow('workout');
   expect(read(phone.storage).exercises).toEqual([]);
   expect(phone.device.private.pending()).toEqual(pending);
 });
 
-test('自引用的深链（一层一行，2 万层）：删掉头一行连带删完，不爆栈', async () => {
+test('deep chain of self-references (one row per level, 20,000 levels): deleting root cascades completely without stack overflow', async () => {
   const node = sqliteTable('node', { id: text().primaryKey(), parent: text().references((): AnySQLiteColumn => node.id) });
   const storage = deviceStorage('CREATE TABLE node (id TEXT PRIMARY KEY, parent TEXT)', 'CREATE INDEX "node.parent" ON node (parent)');
   const device = new Device(storage, [node]);

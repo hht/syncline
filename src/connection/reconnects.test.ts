@@ -10,15 +10,15 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 import { expectConnected } from './test-status.ts';
 
-// 一齐重连怎么摊开：分片按连着的设备数给出重连的随机窗口（spread），断了之后设备在窗口里随机等；
-// 身份快到期前设备自己换 token 重连（云端在补齐里给 expiresIn），不攒到下一次通知时被一起关掉
+// Reconnect spreading: shards distribute reconnect spread based on connected device count;
+// devices renew token and reconnect before expiry (expiresIn in catch-up) to avoid synchronized disconnects.
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY)';
 
 /**
- * 云端的补齐另带 extra；记下连接排的每个计时与取了几次 token。抖动取最大（random 为 1），看得出窗口的上限。
- * token 是第 n 次取 token 给什么（默认都是 valid）；accept 换掉云端接受连接的做法
+ * Catch-up with extra properties: tracks scheduled timers and token requests.
+ * Uses max jitter (random = 1) to inspect upper window bound.
  */
 function setup(
   extra: Record<string, unknown>,
@@ -67,7 +67,7 @@ function setup(
   return { network, connection, scheduled, tokens: () => tokens };
 }
 
-test('云端给了重连的窗口（spread，分片按连着的设备数给）：断了之后在 0 到这个窗口之间随机等，不挤在 1 秒内一齐重连（部署断开全部连接时）', async () => {
+test('uses cloud-provided reconnect spread: jitters between 0 and spread to prevent thundering herd after deploy disconnects', async () => {
   const { network, connection, scheduled } = setup({ spread: 8000 });
   connection.start();
   await drain(network);
@@ -77,7 +77,7 @@ test('云端给了重连的窗口（spread，分片按连着的设备数给）�
   connection.stop();
 });
 
-test('云端在补齐里给了身份还有多久到期（expiresIn）：到期前 1 到 4 分钟之间随机挑一刻，自己换新 token 重连，不等到期被云端关掉', async () => {
+test('proactively renews token before expiresIn: schedules renewal 1 to 4 minutes before expiry', async () => {
   const { network, connection, scheduled, tokens } = setup({ expiresIn: 600_000 });
   connection.start();
   await drain(network);
@@ -91,7 +91,7 @@ test('云端在补齐里给了身份还有多久到期（expiresIn）：到期�
   connection.stop();
 });
 
-test('云端给的到期时刻很远（超过 setTimeout 能排的 2^31-1 毫秒）：不当作 0、不一连上就反复重连', async () => {
+test('handles far-future token expiry exceeding setTimeout 32-bit limit (2^31 - 1 ms) without immediate reconnect loops', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     const { network, connection, tokens } = setup({ expiresIn: 2 ** 40 }, { schedule: 'default' });

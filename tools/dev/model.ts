@@ -6,12 +6,12 @@ import { dirname, join, resolve } from 'node:path';
 import { inScratchDir, runTool } from '../check/gates.ts';
 import { inputsHash, passedCache } from './model-cache.ts';
 
-// 协议模型的慢门禁：协议定下来后很少改，不进 pnpm check，改模型时手动跑。
-// pnpm model:setup 装 TLC 到 .tools/tlaplus；pnpm model 跑全部 MC*.cfg；pnpm model:big 完整穷举全部 .big.cfg（几分钟到几十分钟）；
-// pnpm model:trace 做轨迹核对（模拟记下的轨迹逐条交给 TracePrivate.tla，见 trace）。
-// 输入没变、上次通过了的配置与轨迹沿用上次的结论（model-cache.ts，记在 .check/model-cache.json）。
-// TLC 版本与哈希钉死，每台机器装出来一样；要 Java 11 以上。轨迹核对要的单次深度优先（StateDeque）只在 v1.8.0 预发布版里有，
-// 官方的预发布同一地址会被新构建覆盖，所以把官方 master 2ef2af8 的构建原样存在 hht/tlaplus-pin 的 release 里、从那里装
+// Slow gates for protocol models: protocols change rarely once specified and are excluded from pnpm check; run manually when modifying models.
+// pnpm model:setup installs TLC into .tools/tlaplus; pnpm model runs all MC*.cfg; pnpm model:big runs exhaustive checks on all .big.cfg (takes minutes to tens of minutes);
+// pnpm model:trace validates simulation traces against TracePrivate.tla and TraceShared.tla (see trace).
+// Configurations and traces whose inputs match their previous passing run reuse cached results (model-cache.ts, stored in .check/model-cache.json).
+// TLC version and hash are pinned so installations across machines are identical; requires Java 11+. Trace validation requires single-pass depth-first search (StateDeque) available only in the v1.8.0 pre-release;
+// official pre-release URLs can be overwritten by new builds, so the official master 2ef2af8 build is pinned and hosted under hht/tlaplus-pin release assets.
 // @see https://github.com/tlaplus/tlaplus/tree/2ef2af8c767b76e5db5cba2878f027ac07aad36c
 // @see https://github.com/hht/tlaplus-pin/releases/tag/tla2tools-2ef2af8
 
@@ -23,29 +23,30 @@ const tlc = {
   sha256: 'd15655eeaff4b3f7b3d65c46b838bc0f35d131b2ef4b1e473689b62c98d4726f',
 };
 
-/** 下载并核对哈希：对不上就是版本被换过，不装 */
+/** Downloads and verifies hash: aborts if hash mismatches to avoid installing altered binaries. */
 async function setup() {
   const response = await fetch(tlc.url);
-  if (!response.ok) throw new Error(`下载失败：${response.status} ${tlc.url}`);
+  if (!response.ok) throw new Error(`Download failed: ${response.status} ${tlc.url}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   const actual = createHash('sha256').update(bytes).digest('hex');
-  if (actual !== tlc.sha256) throw new Error(`哈希对不上：${tlc.url}\n  要 ${tlc.sha256}\n  得 ${actual}`);
+  if (actual !== tlc.sha256) throw new Error(`Hash mismatch: ${tlc.url}\n  expected ${tlc.sha256}\n  got ${actual}`);
   mkdirSync(dirname(jar), { recursive: true });
   writeFileSync(jar, bytes);
-  console.log(`装好了：${jar}`);
+  console.log(`Installed: ${jar}`);
 }
 
 /**
- * 一份配置至多用几个核：TLC 的 worker 共用一个待查队列与已见状态表，核多了互相等。本机（M5 Pro，18 核）实测：
- * 84 万状态的配置 8 核 10 秒、12 核 8 秒、18 核 7 秒；1850 万状态的配置 9 核 292 秒、18 核 299 秒。大配置多给核没有收益，留一大半给别的活
+ * Maximum worker threads per configuration: TLC workers share a state queue and seen-state table, causing contention when thread counts are high.
+ * Benchmarked locally (M5 Pro, 18 cores): an 840k-state model took 10s on 8 cores, 8s on 12 cores, 7s on 18 cores;
+ * an 18.5M-state model took 292s on 9 cores and 299s on 18 cores. Allocating more cores yields no benefit for large models while consuming host resources.
  * @see https://groups.google.com/g/tlaplus/c/pi5B8YaJzcI
  */
 const modelWorkers = 8;
 
-/** 一份配置查哪个模块、怎么跑：配置首部写了随机游走的按时随机游走，其余完整穷举 */
+/** Plan module and execution flags for a configuration: random walk by duration if specified in header, otherwise exhaustive check. */
 function planOf(cfg: string) {
-  const seconds = readFileSync(join(dir, cfg), 'utf8').match(/门禁方式：随机游走 (\d+) 秒/)?.[1];
-  // 配置要另定常量的（共用空间的键的次序）有同名的 .tla，其余直接查私有空间的 Private.tla
+  const seconds = readFileSync(join(dir, cfg), 'utf8').match(/Gate mode: random walk for (\d+)s/)?.[1];
+  // Configurations defining custom constants (key ordering for shared spaces) have a matching .tla; otherwise checks Private.tla directly.
   const named = cfg.replace(/(\.big)?\.cfg$/, '');
   const module = existsSync(join(dir, `${named}.tla`)) ? named : 'Private';
   const mode = seconds ? [`-Dtlc2.TLC.stopAfter=${seconds}`] : [];
@@ -54,8 +55,9 @@ function planOf(cfg: string) {
 }
 
 /**
- * TLC 跑一份模型配置：配置首部写了「门禁方式：随机游走 N 秒」的按时随机游走（状态太多，穷举跑不完），其余完整穷举。
- * 违反性质、语法或语义错误都报在配置第 1 行，带上 TLC 的第一条错误；完整反例在日志里
+ * Runs TLC against a model configuration: random walk if the header specifies "Gate mode: random walk for Ns" (state space too large for exhaustive search),
+ * otherwise exhaustive check. Property violations, syntax, or semantic errors are reported on line 1 of the cfg file with TLC's first error;
+ * the full counterexample is in the log.
  */
 const checkModel = (cfg: string) =>
   inScratchDir((scratch) => {
@@ -85,45 +87,45 @@ const checkModel = (cfg: string) =>
       (output) => {
         const error = output.match(/^Error: (.+)$/m)?.[1] ?? output.match(/\*\*\* ?(Parse Error|Semantic errors?)/i)?.[1];
         const done = seconds ? /^Finished in /m.test(output) : output.includes('Model checking completed. No error has been found.');
-        if (error) return [{ file: `model/${cfg}`, line: 1, rule: 'model', message: `TLC：${error}` }];
-        return done ? [] : [{ file: `model/${cfg}`, line: 1, rule: 'model', message: 'TLC 没跑完，见日志' }];
+        if (error) return [{ file: `model/${cfg}`, line: 1, rule: 'model', message: `TLC: ${error}` }];
+        return done ? [] : [{ file: `model/${cfg}`, line: 1, rule: 'model', message: 'TLC did not finish; see log' }];
       },
     );
   });
 
-/** 一份一份跑，每份至多 modelWorkers 个核；有一份不过就以失败退出 */
+/** Runs configurations sequentially, each using up to modelWorkers cores; exits with failure if any configuration fails. */
 async function check(pattern: RegExp) {
-  if (!existsSync(jar)) throw new Error('没装 TLA+ 工具：先跑 pnpm model:setup');
+  if (!existsSync(jar)) throw new Error('TLA+ tools not installed; run pnpm model:setup first');
   let ok = true;
   const cache = passedCache(cacheFile);
   const tool = toolInputs();
   for (const cfg of readdirSync(dir)
     .filter((file) => pattern.test(file))
     .sort()) {
-    // 随机游走不复用：每次跑要的时间短，重跑还会走到别的路径
+    // Random walks are never cached: each run is short and re-running explores different paths.
     const { seconds, module } = planOf(cfg);
     const hash = seconds ? '' : inputsHash([dir], module, join(dir, cfg), tool);
     if (!seconds && cache.reusable(cfg, hash)) {
-      console.log(`♻️  ${cfg} 输入没变，沿用上次的通过`);
+      console.log(`♻️  ${cfg} inputs unchanged; reusing cached pass`);
       continue;
     }
     const started = Date.now();
     const result = await checkModel(cfg);
     if (!seconds) cache.record(cfg, hash, result.ok);
     ok &&= result.ok;
-    // 完整穷举的状态数照 TLC 最后一行，配置首部照它写
+    // Distinct states count from TLC's summary line; documented in the configuration header.
     const states = result.output.match(/([\d,]+) distinct states found, 0 states left on queue/)?.[1];
-    const time = `${Math.round((Date.now() - started) / 1000)}s${states ? `，${states} 个状态` : ''}`;
+    const time = `${Math.round((Date.now() - started) / 1000)}s${states ? `, ${states} states` : ''}`;
     console.log(result.ok ? `✅ ${cfg} ${time}` : `❌ ${cfg} ${time}\n${result.problems.map((p) => `   ${p.message}`).join('\n')}`);
   }
   process.exitCode = ok ? 0 : 1;
 }
 
-/** 通过了的配置与轨迹：名字 → 输入的哈希（model-cache.ts） */
+/** Cached passing configurations and traces: name -> input hash (model-cache.ts) */
 const cacheFile = join(root, '.check/model-cache.json');
 /**
- * 除了模型本身，还有哪些会改变结论：装着的 TLC（jar 本身的哈希，手动换过的也算），怎么跑、怎么判通过（这个文件与 gates.ts 的 runTool），
- * 怎么算输入（model-cache.ts）。改了哪个，旧的结论都不算
+ * Inputs determining model check conclusions beyond model files: installed TLC jar hash, execution/pass evaluation logic
+ * (this file and gates.ts runTool), and cache hash computation (model-cache.ts). Any change invalidates cached results.
  */
 const toolInputs = () => ({
   tlc: createHash('sha256').update(readFileSync(jar)).digest('hex'),
@@ -133,23 +135,25 @@ const toolInputs = () => ({
 });
 
 /**
- * 同时核对几条轨迹、每条的堆上限：每条一个 TLC、一个核，多数用 1–3 GB；不设上限时每个 JVM 默认可拿 1/4 内存，
- * 按核数同时跑（18 个）撑爆过 64 GB 的开发机。4 条乘 6 GB 至多 24 GB；每条用单次深度优先（StateDeque，见 trace）
+ * Parallel trace validation concurrency and per-trace JVM heap limit: each trace runs one TLC instance on a single core,
+ * typically using 1-3 GB; without limits each JVM defaults to 1/4 host RAM, which previously exhausted 64 GB host RAM
+ * when running 18 instances concurrently. 4 workers * 6 GB caps total usage at 24 GB; each uses single-pass DFS (StateDeque).
  */
 const traceJobs = 4;
 const traceJvm = ['-Xmx6g', '-Dtlc2.tool.queue.IStateQueue=StateDeque', '-XX:+UseParallelGC'];
 
 /**
- * 每条轨迹的 TLC 参数：一个 worker（「对上了几条」靠单个 worker 的 TLCSet 记）；不存档（StateDeque 不支持，到默认的 30 分钟会抛错）；
- * 不在模型目录写 TE spec（对上就是违反不变量，每条都会写一份几 MB 的 *_TTrace_*）
+ * Per-trace TLC arguments: 1 worker (matched trace progress is tracked via TLCSet on a single worker); no checkpointing
+ * (unsupported by StateDeque and errors after default 30min checkpoint interval); suppresses TE spec generation in model dir
+ * (each matching step violates the Unmatched invariant, which would otherwise emit multi-megabyte *_TTrace_* specs).
  * @see https://github.com/tlaplus/tlaplus/blob/2ef2af8c767b76e5db5cba2878f027ac07aad36c/tlatools/org.lamport.tlatools/src/tlc2/tool/queue/StateDeque.java
  */
 const traceTlc = ['-workers', '1', '-checkpoint', '0', '-noGenerateSpecTE'];
 
-/** 一条轨迹至多核对多久（毫秒）：深度优先下 800 条每条至多 8 秒（实测）。超过就当没对上、报出来 */
+/** Maximum execution time per trace (ms): in DFS mode, each of the ~800 traces finishes within 8s locally. Exceeding this is treated as unmatched. */
 const traceTimeout = 10 * 60_000;
 
-/** 跑一条命令；超时、出错、被 signal 停掉都照样给出输出 */
+/** Executes a command; returns output even on timeout, error, or signal termination. */
 const exec = (
   file: string,
   args: string[],
@@ -161,7 +165,7 @@ const exec = (
     ),
   );
 
-/** 跑私有、共用空间的模拟，每个种子的轨迹记到 scratch/traces 下以它命名的目录里；给出这个目录与这些名字 */
+/** Runs private and shared space simulations, recording seed traces under scratch/traces/<seed>; returns trace directory and seed names. */
 async function recordTraces(scratch: string) {
   const traces = join(scratch, 'traces');
   const simulations = ['src/test/simulation', 'src/test/shared-simulation.test.ts'];
@@ -169,15 +173,15 @@ async function recordTraces(scratch: string) {
     cwd: root,
     env: { SIMULATION_TRACE: traces },
   });
-  if (!simulated.ok) throw new Error(`模拟没跑过：\n${simulated.output}`);
+  if (!simulated.ok) throw new Error(`Simulation failed:\n${simulated.output}`);
   return { traces, seeds: readdirSync(traces).sort() };
 }
 
-/** 两种空间各自交给哪个模块核对，结论分开报 */
-const spaces = { TracePrivate: '私有空间', TraceShared: '共用空间' } as const;
+/** Model checking spec for each space type; results are reported separately. */
+const spaces = { TracePrivate: 'private space', TraceShared: 'shared space' } as const;
 const specOf = (seed: string): keyof typeof spaces => (seed.startsWith('shared-') ? 'TraceShared' : 'TracePrivate');
 
-/** 核对一条轨迹：输入没变就沿用上次的通过；被 signal 停掉的没有结论；没对上的给出报告（完整输出写到 .check/） */
+/** Validates a single trace: reuses cached pass if inputs are unchanged; aborted runs yield no conclusion; failed traces write full output to .check/. */
 async function checkTrace(
   seed: string,
   run: { scratch: string; traces: string; cache: ReturnType<typeof passedCache>; tool: ReturnType<typeof toolInputs>; signal: AbortSignal },
@@ -204,26 +208,27 @@ async function checkTrace(
   const matched = [...output.matchAll(/"matched", (\d+)/g)].at(-1)?.[1] ?? '0';
   mkdirSync(join(root, '.check'), { recursive: true });
   writeFileSync(join(root, `.check/trace-${seed}.log`), output);
-  // 查完了才是真的对不上；超时、内存不够没查完的，只知道还没找到
-  const searched = /^Finished in /m.test(output) ? '' : '，超时或出错、没查完';
-  return { failed: `${seed}：对上了 ${matched}/${lines} 条${searched}（TLC 输出在 .check/trace-${seed}.log）` };
+  // A trace is truly unmatched only after search finishes; timeouts or errors indicate incomplete searches.
+  const searched = /^Finished in /m.test(output) ? '' : ', timed out or errored before completing search';
+  return { failed: `${seed}: matched ${matched}/${lines} steps${searched} (TLC output in .check/trace-${seed}.log)` };
 }
 
 /**
- * 轨迹核对（照 Microsoft CCF 的 trace validation）：确定性模拟每个种子记下轨迹，私有空间一条（src/test/test-trace.ts，
- * 交给 TracePrivate.tla），共用空间每台设备一条（src/test/test-shared-trace.ts，交给 TraceShared.tla）；TLC 找一条每一步都对得上的
- * 模型执行，对上了是不变量 Unmatched 被违反。种子照模拟（SIMULATION_SEED 起，默认 0）；
- * 同时跑 traceJobs 个，每个用自己的临时目录（TLC 把标准模块解到临时目录，同时跑会互相写坏）。
- * 用单次深度优先（StateDeque）：只要找到一条对得上的执行，广度优先会把同一深度的路全展开。报对上的一定是模型的一条真实执行，与搜索次序无关；
- * 报没对上的要把 VIEW 下的状态空间查完，VIEW 认作同一个的状态（TracePrivate.tla 的 TraceView 不看 dWant）留哪个代表随次序，两种搜索可能不同。
- * 不用 -dfid，它逐层加深、每层从头重搜，比广度优先还慢。
- * 一种空间里一条没对上，这种空间就停：后面的不再起，正在跑的停掉；另一种照常核对。一条对不上已经说明实现与模型没对齐，
- * 没对上的要把可能的执行全部走完才下结论，是最慢的，其余的只是多等
+ * Trace validation (following Microsoft CCF trace validation): deterministic simulation records execution traces per seed,
+ * one for private spaces (src/test/test-trace.ts, validated against TracePrivate.tla) and one per device for shared spaces
+ * (src/test/test-shared-trace.ts, validated against TraceShared.tla); TLC searches for an execution matching every step,
+ * where a match violates the Unmatched invariant. Seeds match simulation defaults (starting from SIMULATION_SEED, default 0);
+ * runs traceJobs workers in parallel, each using an isolated scratch directory (TLC unpacks standard modules into tmpdir, causing collisions if shared).
+ * Uses single-pass depth-first search (StateDeque): once a matching execution is found, BFS would unnecessarily expand all paths at that depth.
+ * A reported match is always a valid execution of the model regardless of search order; a reported mismatch requires exhausting the state space under VIEW,
+ * where representative states under TraceView (which omits dWant) depend on traversal order. -dfid is avoided as it re-explores iteratively and is slower than BFS.
+ * If a trace fails for a space type, remaining runs for that space type abort: a single mismatch disproves refinement, and exhaustive search for mismatches
+ * is the slowest path.
  * @see https://arxiv.org/pdf/2406.17455 §6.4
  * @see https://github.com/tlaplus/tlaplus/blob/2ef2af8c767b76e5db5cba2878f027ac07aad36c/tlatools/org.lamport.tlatools/src/tlc2/tool/queue/IStateQueue.java
  */
 async function trace() {
-  if (!existsSync(jar)) throw new Error('没装 TLA+ 工具：先跑 pnpm model:setup');
+  if (!existsSync(jar)) throw new Error('TLA+ tools not installed; run pnpm model:setup first');
   const scratch = mkdtempSync(join(tmpdir(), 'syncline-trace-'));
   try {
     const { traces, seeds } = await recordTraces(scratch);
@@ -252,8 +257,8 @@ async function trace() {
       const unchecked = space.total - space.reused - space.checked;
       console.log(
         space.failed.length === 0
-          ? `✅ ${spaces[spec]} ${space.total} 条轨迹都对上了（${space.reused} 条输入没变，沿用上次的）`
-          : `❌ ${spaces[spec]} ${space.failed.length} 条没对上，停下了（${unchecked}/${space.total} 条没核对）\n${space.failed.join('\n')}`,
+          ? `✅ ${spaces[spec]} all ${space.total} traces matched (${space.reused} reused from cache)`
+          : `❌ ${spaces[spec]} ${space.failed.length} trace(s) unmatched, stopped (${unchecked}/${space.total} unchecked)\n${space.failed.join('\n')}`,
       );
     }
     process.exitCode = Object.values(runs).some((space) => space.failed.length > 0) ? 1 : 0;
@@ -267,4 +272,4 @@ if (command === 'setup') await setup();
 else if (command === 'check') await check(/^MC\w+\.cfg$/);
 else if (command === 'big') await check(/\.big\.cfg$/);
 else if (command === 'trace') await trace();
-else throw new Error('用法：node tools/dev/model.ts setup | check | big | trace');
+else throw new Error('Usage: node tools/dev/model.ts setup | check | big | trace');

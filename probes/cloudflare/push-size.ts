@@ -3,36 +3,37 @@ import { withWorker } from './deploy.ts';
 import { connect, next, sleep, tailCalls } from './device.ts';
 
 /**
- * 在真实的 Cloudflare 上量一条写多大时云端还执行得了：DO 每次调用的 CPU（默认 30 秒）与每个 isolate 的内存（128 MB）有上限，本地的 workerd 都不限，
- * 超了对象被重置、设备原样重推也一样。用 wrangler 当前登录的账号以一次性的名字部署 worker.ts，每档一个新空间：HTTP 拉一次拿游标、连上、
- * 推一条全是短行的写，收到通知或提示（执行了）算过，连接被关、超时算没过；wrangler tail 报出每次调用的 CPU 与墙钟时间、没过的原因（outcome，如 exceededCpu）。
- * 量完删掉 Worker（deploy.ts）。用法（仓库根）：node probes/cloudflare/push-size.ts [MiB …]，默认 1 2 4 6 8
+ * Probes the maximum mutation payload size executable on live Cloudflare: Durable Object invocations have a CPU limit (default 30 seconds) and isolate memory limits (128 MB),
+ * whereas local workerd enforces neither; exceeding limits resets the object, causing device retries to fail identically. Deploys worker.ts under an ephemeral name using the current wrangler account,
+ * testing each payload tier in a fresh space: performs an initial HTTP pull for a cookie, connects via WebSocket, and pushes a mutation of short rows; passing requires receiving a poke or hint (indicating execution),
+ * while closed sockets or timeouts fail. wrangler tail reports per-invocation CPU and wall-clock times alongside failure outcomes (e.g., exceededCpu). Deletes the Worker after execution (deploy.ts).
+ * Usage (repo root): node probes/cloudflare/push-size.ts [MiB ...], defaults to 1 2 4 6 8
  * @see https://developers.cloudflare.com/durable-objects/platform/limits/
  */
 
 const sizes = process.argv.slice(2).map(Number);
 
-/** 推一条约 bytes 字节的写：每行只有一个短主键，同样字节数里行数最多、解析出的对象最多 */
+/** Generates a mutation payload targeting approximately bytes, using single short primary-key rows to maximize row and parsed object counts per byte. */
 function mutation(bytes: number) {
   const row = (index: number) => ({ op: 'put', table: 't', row: { i: String(index) } });
   const rows = Math.floor(bytes / JSON.stringify(row(1e5)).length);
   return JSON.stringify([{ client: 'probe', id: 1, changes: Array.from({ length: rows }, (_, index) => row(index)) }]);
 }
 
-/** 推送之后的下一条：这次写的通知（确认到第 1 条、没被扣下）或提示（太大没拼，写已提交）才算执行了 */
+/** Determines whether the subsequent message confirms execution: a poke confirming mutation 1 without holds, or a hint indicating the patch exceeded inline limits after commit. */
 function executed(message: string) {
   const reply = JSON.parse(message) as { hint?: unknown; lmids?: Record<string, number>; held?: unknown[] };
   return reply.hint !== undefined || (reply.lmids?.probe === 1 && !reply.held?.length);
 }
 
-/** 一档：执行了给出耗时，没执行给出关闭码、原因或收到的消息 */
+/** Tests a single size tier, returning elapsed time on success or close code, failure reason, or received message on failure. */
 async function attempt(url: string, secret: string, mib: number) {
   const token = `${randomUUID()}.${secret}`;
   let socket: WebSocket;
   try {
     socket = await connect(url, token);
   } catch (error) {
-    return `${mib} MiB：${error instanceof Error ? error.message : String(error)}`;
+    return `${mib} MiB: ${error instanceof Error ? error.message : String(error)}`;
   }
   try {
     const text = mutation(mib * 1024 * 1024);
@@ -43,9 +44,9 @@ async function attempt(url: string, secret: string, mib: number) {
       'failure' in reply
         ? reply.failure
         : executed(reply.message)
-          ? `执行了，${Math.round(performance.now() - sentAt)} ms`
-          : `没执行：${reply.message.slice(0, 300)}`;
-    return `${mib} MiB（${Buffer.byteLength(text)} 字节）：${result}`;
+          ? `executed, ${Math.round(performance.now() - sentAt)} ms`
+          : `not executed: ${reply.message.slice(0, 300)}`;
+    return `${mib} MiB (${Buffer.byteLength(text)} bytes): ${result}`;
   } finally {
     socket.close();
   }
@@ -54,6 +55,6 @@ async function attempt(url: string, secret: string, mib: number) {
 await withWorker('wrangler.jsonc', async ({ name, secret, url, onCleanUp }) => {
   await tailCalls(name, onCleanUp);
   for (const mib of sizes.length > 0 ? sizes : [1, 2, 4, 6, 8]) console.log(await attempt(url, secret, mib));
-  // tail 的事件晚一阵才到
+  // Tail log events arrive with slight delay.
   await sleep(30_000);
 });

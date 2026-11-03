@@ -1,17 +1,17 @@
-# 模型与轨迹核对的覆盖面
+# Scope of models and trace validation
 
-[模型与检查](model.md)的细节：模型怎样抽象协议写在各 `.tla` 的开头；这一页记读模型与配置看不出的覆盖面：哪些组合穷举跑不完、轨迹核对管不到什么。
+Details for [Models and model checking](model.md): how models abstract sync protocols is documented at the top of each `.tla` file. This page records coverage limits not evident from reading the models and configurations: combinations beyond exhaustive search limits, and what trace validation does not cover.
 
-## 穷举跑不完的组合
+## Combinations beyond exhaustive search
 
-2 行叠加崩溃与重复投递（再加丢消息更大）；后台写叠加崩溃与丢消息的活性；时间点恢复、备份恢复与 2 行或部署断连的组合，只在各自的配置里分开查过；表进入、离开同步只查了 1 台设备（2 台设备、2 行跑不完），恢复与进入同步交错时只在云端的表只有 1 行；日志截断只与备份、克隆、时间点恢复、分块各自组合，三者叠加只有随机游走；按范围重下只查了 1 台设备；日志截断没有与表的进入、离开组合过；时间点恢复与范围变化、分块三者没有一起查过（恢复后暂存的位置仍有效、since 却被恢复改了的情形），本机坏行也没有与时间点恢复组合过；时间点恢复 2 次只查了 1 台设备、1 行（`MCPrivateJumpTwice.big.cfg`）。
+Combinations of 2 rows with crashes and duplicate message delivery (adding dropped messages further expands the state space); liveness under backend writes combined with crashes and message loss; combinations of point-in-time recovery, backup restore, and 2 rows or deployment disconnects are checked only in separate configurations; tables entering and leaving sync are checked with only 1 device (2 devices with 2 rows exceeds search limits), and when recovery interleaves with table entry, cloud tables have only 1 row; log truncation is combined pairwise with backups, clones, point-in-time recovery, and multi-chunk pulls, while three-way combinations are checked only via simulation random walks; range pulls are checked with only 1 device; log truncation is not combined with tables entering or leaving sync; point-in-time recovery, scope changes, and multi-chunk pulls are not checked together (where a staged position remains valid after recovery but `since` was altered by recovery); local row corruption is not combined with point-in-time recovery; two successive point-in-time recoveries are checked with only 1 device and 1 row (`MCPrivateJumpTwice.big.cfg`).
 
-2 台设备、完整穷举的安全性配置用对称集（`SYMMETRY Symmetry`：只差两台设备对调的状态算同一个）；活性配置不用，对称会让活性检查漏报。
+Safety configurations with 2 devices running full exhaustive searches use symmetry sets (`SYMMETRY Symmetry`: states differing only by swapping two devices are treated as identical). Liveness configurations omit symmetry sets, as symmetry can cause TLC to miss liveness violations.
 
-## 轨迹核对管不到的
+## What trace validation does not cover
 
-- 只核对控制流（游标、待上传几条、暂存到哪、云端最新一版）：写的内容不比，数据对不对由模拟按模型的性质直接查。
-- 私有空间的轨迹只开至多一次时间点恢复（`MaxRestores`）。
-- 共用空间的轨迹不开模型里没有的：换人登录（清掉上一个人看过的行）、后台数每个桶的行数；也不开清空重建：云端认不出游标时回的 reset 是单独一次应答，模型里是整份第一块开头的清空。
-- P8a 按尾巴的起点查（位置里追到的那一版，整份扫完之后追的尾巴也是），增量的末块与通知另查设备的游标也在当前历史上。
-- 抓不到的：共用空间末块比暂存的块旧（去掉设备比对 `seen` 的检查，轨迹核对报不出来）。这种情形由 `shared-mirror.test.ts` 与模型（`MCSharedChunk`：S1）守着。
+- Trace validation checks only control flow (cookies, pending write counts, staging progress, cloud head version): write payloads are not compared, and data correctness is verified directly by the simulation against model invariants.
+- Private space traces enable at most one point-in-time recovery (`MaxRestores`).
+- Shared space traces exclude features absent from the model: switching user accounts (clearing rows viewed by the previous user), background row counts per bucket, and rebuilds from scratch: cloud `reset` responses for unrecognized cookies are standalone responses, whereas the model represents rebuilds as a `clear` op at the start of the first chunk of a full pull.
+- P8a is checked from the start of the tail (the version chased in the position, including tails chased after a full table scan); final chunks of incremental pulls and notices separately verify that the device cookie is on the current history.
+- Undetected anomalies: shared space final chunks older than staged chunks (omitting the device check comparing `seen` is not caught by trace validation). This scenario is guarded by `shared-mirror.test.ts` and the model (`MCSharedChunk`: S1).

@@ -9,14 +9,14 @@ import { forwardShared } from './shared.ts';
 import { fannedOut } from './test-shared.ts';
 import { recording } from './test-space.ts';
 
-// 入口 Worker 里共用空间的入口：转给带缓存入口的网址只由协议的参数决定，认不出的查询串回 400、不转进去
+// Shared space entry in entry Workers: canonicalizes URLs routed to cached entrypoints and rejects malformed queries with 400.
 
 afterAll(() => fannedOut('catalog'));
 
 const url = 'https://sync.test/catalog';
 const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
 
-/** 直接调 forwardShared，记下它转给带缓存入口的请求 */
+/** Invokes forwardShared directly and records requests routed to the cached entrypoint. */
 async function forwarded(target: string, headers: Record<string, string> = {}, method = 'GET') {
   const { seen, target: entry } = recording();
   const route = {
@@ -33,7 +33,7 @@ async function forwarded(target: string, headers: Record<string, string> = {}, m
   return { response, seen };
 }
 
-test('转给带缓存入口的网址只由协议的参数决定（缓存键规范化）：参数按固定次序、cursor 照规范写法、不带请求头；认不出的参数、坏的下限回 400，不是 GET 回 405，不进缓存', async () => {
+test('normalizes cache keys for cached entrypoint: canonicalizes query order and cursor, strips headers, and rejects non-GET or invalid queries', async () => {
   const at = '{ "nonce": 7, "version": 3 }';
   const cursor = landedAt({ version: 3, nonce: 7 });
   const canonical = pullURL(url, { cookie: null, cursor, atLeast: 5 });
@@ -66,7 +66,7 @@ test('转给带缓存入口的网址只由协议的参数决定（缓存键规�
   }
 });
 
-test('WebSocket 的查询串认不出（游标、多余的参数）：入口回 400，不转给广播分片', async () => {
+test('returns 400 without forwarding to broadcast shards on unrecognized WebSocket query parameters', async () => {
   const shards: Request[] = [];
   const route = {
     entry: () => ({ fetch: async () => new Response('{}') }),

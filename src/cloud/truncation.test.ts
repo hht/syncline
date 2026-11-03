@@ -6,13 +6,14 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Commits, rowOverhead } from './commits.ts';
 import { Space } from './space.ts';
 
-// 截日志（模型的 Truncate）：提交记录按字节封顶，超了由后台任务一步一步截掉最早的，截到上限的 3/4；下限那一版记下随机数，
-// 游标在下限及之后的照常增量，低于下限的从头整份（待上传留着）
+// Log truncation (Truncate in TLA+ models): commit log is capped by byte size; upkeep chores trim oldest commits step-by-step
+// down to 3/4 of the cap; floor commit version records its nonce; cookies at or after floor receive incremental pulls,
+// cookies below floor full-pull from scratch while preserving pending writes.
 
-/** 日志的上限至少这么多字节：调小，几百次写就超 */
+/** Minimum commit log cap in bytes: reduced so a few hundred writes exceed it. */
 const commitFloor = 2_000;
 
-/** 一个上限调小的空间，服务端写了 count 次（20 行轮着改，数据不涨、日志涨） */
+/** Creates space with reduced commit floor and executes count server writes (cycling across 20 rows so data size stays flat while log grows). */
 function written(count: number) {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, tables, { commitFloor });
@@ -20,25 +21,25 @@ function written(count: number) {
   return { cloud, space };
 }
 
-/** 服务端第 from 到 to 次写 */
+/** Executes server writes from index from to to. */
 function rewrite(space: Space, from: number, to: number) {
   for (let index = from; index < to; index += 1) space.mutate((tx) => tx.upsert(workout, { id: `w${index % 20}`, note: String(index) }));
 }
 
 const query = (cloud: ReturnType<typeof cloudStorage>, sql: string) => cloud.sql.exec(sql).toArray();
-/** 提交记录里最早与最新的一版、最新一版的累计字节 */
+/** Returns earliest and latest commit versions and head cumulative bytes. */
 function range(cloud: ReturnType<typeof cloudStorage>) {
   const [range] = query(cloud, 'SELECT min(version) AS first, max(version) AS last FROM _syncline_commit');
   const [head] = query(cloud, 'SELECT bytes FROM _syncline_commit ORDER BY version DESC LIMIT 1');
   return { first: Number(range?.first), last: Number(range?.last), bytes: Number(head?.bytes) };
 }
 
-/** 后台任务把日志截完 */
+/** Runs upkeep truncation steps until log size is within limits. */
 function truncateAll(space: Space) {
   while (space.truncate());
 }
 
-test('日志超过上限：后台任务截掉最早的提交，截到上限之下留出余地（再写一些也不超）；最新一版不删；没超的不截', () => {
+test('commit log exceeding cap: upkeep chore truncates oldest commits below limit with headroom, preserving head; does not truncate when below limit', () => {
   const { space: few } = written(10);
   expect(few.commitsOverLimit()).toBe(false);
   expect(few.truncate()).toBe(false);
@@ -54,7 +55,7 @@ test('日志超过上限：后台任务截掉最早的提交，截到上限之�
   expect(space.commitsOverLimit()).toBe(false);
 });
 
-test('游标在下限那一版或之后：照常给增量；低于下限：从头整份（先清空），设备的待上传留着、照常推上去', async () => {
+test('cookie at or after floor receives incremental pull; cookie below floor full-pulls from scratch while preserving pending writes', async () => {
   const { cloud, space } = written(1);
   const early = await install(space);
   rewrite(space, 1, 3000);
@@ -63,7 +64,7 @@ test('游标在下限那一版或之后：照常给增量；低于下限：从�
   const atLow = space.pull({ cookie: { version: Number(low?.version), nonce: Number(low?.nonce) } }, 1_000_000);
   expect(atLow.patch[0]).not.toEqual({ op: 'clear' });
 
-  await write(early.device, (tx) => tx.update(workout).set({ note: '卧推' }));
+  await write(early.device, (tx) => tx.update(workout).set({ note: 'bench press' }));
   const behind = pulled(space, early.device);
   expect(behind.patch[0]).toEqual({ op: 'clear' });
   await early.device.private.receive(behind);
@@ -71,10 +72,10 @@ test('游标在下限那一版或之后：照常给增量；低于下限：从�
   await upload(space, early.device, [early.device]);
   expect(early.device.private.pending()).toEqual([]);
   expect(workouts(early.storage)).toEqual(workouts(cloud));
-  expect(workouts(cloud).find(({ id }) => id === 'w0')?.note).toBe('卧推');
+  expect(workouts(cloud).find(({ id }) => id === 'w0')?.note).toBe('bench press');
 });
 
-test('截过日志后整份下载的进度：总共按库文件减截剩的日志算，不把截掉的算进日志', () => {
+test('full pull progress estimate after truncation: total is based on database size minus remaining log bytes without counting truncated bytes', () => {
   const { cloud, space } = written(3000);
   truncateAll(space);
   const chunk = space.pull({ cookie: null }, 200) as Chunk;
@@ -83,7 +84,7 @@ test('截过日志后整份下载的进度：总共按库文件减截剩的日�
   expect(chunk.progress?.total).toBeLessThan(cloud.sql.databaseSize);
 });
 
-test('重新打开对象：下限还在，低于它的游标照样认不出', () => {
+test('reopening object: floor is preserved and earlier cookies remain off history', () => {
   const { cloud, space } = written(3000);
   const [first] = query(cloud, 'SELECT version, nonce FROM _syncline_commit WHERE version = 1');
   const early = { version: Number(first?.version), nonce: Number(first?.nonce) };
@@ -95,13 +96,13 @@ test('重新打开对象：下限还在，低于它的游标照样认不出', ()
   expect(pulled(reopened, device).patch).toHaveLength(21);
 });
 
-test('截一步删到的正是第一个够的那一版（多留一版就超出 target）、之前的一行不留；还没截过的从第 0 版删起；只剩最新一版时不截', () => {
+test('truncation step cuts at exact version reaching target without exceeding it, deleting all earlier commits; trims from version 0 when un-truncated; skips head', () => {
   const { cloud } = written(300);
   const sql = (text: string, ...bindings: unknown[]) => cloud.sql.exec(text, ...bindings).toArray();
   const commits = new Commits(sql);
   const sizes = new Map(sql('SELECT version, bytes FROM _syncline_commit').map(({ version, bytes }) => [Number(version), Number(bytes)]));
   const head = Math.max(...sizes.keys());
-  /** 删到第 v 版（含）之后剩下的约多少字节 */
+  /** Estimates remaining bytes after truncating through version v (inclusive). */
   const left = (v: number) => (sizes.get(head) ?? 0) - (sizes.get(v) ?? 0) + (head - v) * rowOverhead;
   const target = 4_000;
   expect(commits.truncate(0, target)).toBe(false);

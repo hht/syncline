@@ -15,7 +15,7 @@ import { expect, test } from 'vitest';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { defineTables, deviceDefinitions } from './table-definitions.ts';
 
-// 照 Drizzle 表建表：设备上 STRICT、照声明与外键的第一列建索引；云端 WITHOUT ROWID、只给外键的全部列建索引；已有的表只补列
+// Table creation matching Drizzle schemas: STRICT on device with indexes on declared fields and first foreign key column; WITHOUT ROWID on cloud with foreign key composite indexes; additive column migrations.
 
 const workout = sqliteTable('workout', {
   id: text().primaryKey(),
@@ -36,7 +36,7 @@ const pair = sqliteTable('pair', { left: text().notNull(), right: text().notNull
   primaryKey({ columns: [table.left, table.right] }),
 ]);
 
-/** 主键的第一列也是外键 */
+// First column of primary key is also a foreign key.
 const set = sqliteTable('set', { exercise: text().references(() => exercise.id), position: integer() }, (table) => [
   primaryKey({ columns: [table.exercise, table.position] }),
 ]);
@@ -51,16 +51,16 @@ const withReps = (reps: ReturnType<typeof integer>) =>
   sqliteTable('workout', { id: text().primaryKey(), title: text().notNull(), done: integer({ mode: 'boolean' }).default(false), reps });
 const workoutWithDone = [
   'CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT',
-  "INSERT INTO workout VALUES ('w1', '腿日', 0)",
+  "INSERT INTO workout VALUES ('w1', 'leg day', 0)",
 ];
 
-/** 打开设备库（先执行给的语句），返回的 define 照 Drizzle 表建表（Rust 建） */
+// Opens a device SQLite database and executes definitions via Rust device core.
 const open = (...schema: string[]) => {
   const storage = deviceStorage(...schema);
   return { sql: storage.sql, define: (tables: SQLiteTable[]) => storage.define(deviceDefinitions(tables)) };
 };
 
-test('设备：新库先切 incremental 的 auto_vacuum；STRICT、只写存储类型、不写 NOT NULL、静态默认值照列转成存的值；声明的索引与外键第一列的索引都建', () => {
+test('device: initializes STRICT table with incremental auto_vacuum, omitting NOT NULL and formatting static defaults', () => {
   const storage = open();
   storage.define([workout, exercise, pair]);
   expect(storage.sql.exec('PRAGMA auto_vacuum').toArray()).toEqual([{ auto_vacuum: 2 }]);
@@ -76,7 +76,7 @@ test('设备：新库先切 incremental 的 auto_vacuum；STRICT、只写存储�
   ]);
 });
 
-test('设备：外键的第一列已是主键的第一列时不另建索引，按它找子行走主键自带的索引', () => {
+test('device: skips redundant index creation when the first foreign key column matches the first primary key column', () => {
   const storage = open();
   storage.define([workout, exercise, set]);
   expect(schemaOf(storage).map(([name]) => name)).not.toContain('set.exercise');
@@ -87,35 +87,35 @@ test('设备：外键的第一列已是主键的第一列时不另建索引，�
   ]);
 });
 
-test('设备：升级：已有的表只补新的列（带默认值的旧行取默认值），已有的列与数据不动；再跑一遍什么也不变', () => {
-  const storage = open('CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT', "INSERT INTO workout VALUES ('w1', '腿日')");
+test('device: adds missing columns to existing tables while preserving existing data and defaults', () => {
+  const storage = open('CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT', "INSERT INTO workout VALUES ('w1', 'leg day')");
   storage.define([workout]);
   storage.define([workout]);
-  expect(storage.sql.exec('SELECT * FROM workout').toArray()).toEqual([{ id: 'w1', title: '腿日', done: 0 }]);
+  expect(storage.sql.exec('SELECT * FROM workout').toArray()).toEqual([{ id: 'w1', title: 'leg day', done: 0 }]);
 });
 
-test('设备：不支持的索引与默认值在建表时就报错：唯一索引（云端不查唯一）、按表达式或带条件的索引、SQL 表达式的默认值', () => {
+test('device: rejects unsupported index and default configurations at schema initialization', () => {
   const unique = sqliteTable('a', { id: text().primaryKey(), code: text() }, (table) => [uniqueIndex('a.code').on(table.code)]);
   const partial = sqliteTable('c', { id: text().primaryKey(), code: text() }, (table) => [index('c.code').on(table.code).where(sql`1`)]);
   const expression = sqliteTable('b', { id: text().primaryKey(), at: integer().default(sql`(unixepoch())`) });
-  expect(() => open().define([unique])).toThrow('唯一');
-  expect(() => open().define([partial])).toThrow('带条件');
-  expect(() => open().define([expression])).toThrow('SQL 表达式');
+  expect(() => open().define([unique])).toThrow('UNIQUE');
+  expect(() => open().define([partial])).toThrow('WHERE');
+  expect(() => open().define([expression])).toThrow('SQL expression');
 });
 
-test('设备：已有的表主键与声明的不同（部署改了主键）：打开时就报错，不悄悄留着旧主键（之后按声明的主键写、拉取接着扫都会出错或漏行）', () => {
+test('device: throws when existing database primary key does not match declared primary key', () => {
   const storage = open('CREATE TABLE pair ("left" TEXT, "right" TEXT, PRIMARY KEY ("left", "right"))');
   const single = sqliteTable('pair', { left: text().primaryKey(), right: text().notNull() });
-  expect(() => storage.define([single])).toThrow('pair 的主键');
+  expect(() => storage.define([single])).toThrow('pair');
   expect(() => storage.define([pair])).not.toThrow();
 });
 
-test('设备：已有的列改了类型：打开时报错，要换一张表（SQLite 改不了列的类型）', () => {
+test('device: throws when existing column storage type changes', () => {
   const storage = open('CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)');
-  expect(() => storage.define([workout])).toThrow('workout.done 的类型改了（库里是 text，声明的是 integer）');
+  expect(() => storage.define([workout])).toThrow('workout.done');
 });
 
-test('设备：只写存储类型：text(n) 的表也是 STRICT，已建成 STRICT 的表照样能加 text(n) 列（长度在写时查）；声明的 text(40) 与库里的 text(20) 算同一种类型', () => {
+test('device: normalizes text(n) to STRICT text storage affinity, allowing length extensions across migrations', () => {
   const coded = (length: number) => sqliteTable('coded', { id: text().primaryKey(), code: text({ length }) });
   const storage = open();
   storage.define([coded(20)]);
@@ -126,23 +126,23 @@ test('设备：只写存储类型：text(n) 的表也是 STRICT，已建成 STRI
   expect(() => narrower.define([coded(40)])).not.toThrow();
 });
 
-test('设备：主键列不收 NULL（表都是 STRICT，含 text(n) 列的也是）：rowid 表的主键 SQLite 默认收 NULL，这样的行本机写记不进改动集、不上传', () => {
+test('device: STRICT tables reject NULL values in primary key columns', () => {
   const storage = open();
   storage.define([sqliteTable('memo', { id: text().primaryKey(), title: text({ length: 20 }) })]);
-  expect(() => storage.sql.exec("INSERT INTO memo (id, title) VALUES (NULL, '深蹲')")).toThrow(/NOT NULL/);
+  expect(() => storage.sql.exec("INSERT INTO memo (id, title) VALUES (NULL, 'squat')")).toThrow(/NOT NULL/);
 });
 
-test('设备：同步的表声明不合法（没有主键）：建表之前就报友好的错，库里一张表也没建', () => {
+test('device: throws descriptive error and creates no tables when schema table has no primary key', () => {
   const keyless = sqliteTable('keyless', { name: text() });
   const storage = open();
-  expect(() => storage.define([workout, keyless])).toThrow('keyless 没有主键');
+  expect(() => storage.define([workout, keyless])).toThrow('keyless has no primary key');
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE type = 'table'").toArray()).toEqual([]);
 });
 
-test('设备：已有的表加非空、没有固定默认值的列：打开时报错（旧行与没升级的 App 写的行都放不下，SQLite 同样不许）；可空或带固定默认值的照常补', () => {
+test('device: rejects adding non-null columns without static defaults to existing tables, while allowing nullable or defaulted columns', () => {
   {
     const storage = open(...workoutWithDone);
-    expect(() => storage.define([withReps(integer().notNull())])).toThrow('workout.reps 非空');
+    expect(() => storage.define([withReps(integer().notNull())])).toThrow('workout.reps');
     expect(() =>
       storage.define([
         withReps(
@@ -151,7 +151,7 @@ test('设备：已有的表加非空、没有固定默认值的列：打开时�
             .$defaultFn(() => 0),
         ),
       ]),
-    ).toThrow('workout.reps 非空');
+    ).toThrow('workout.reps');
     expect(() =>
       storage.define([
         withReps(
@@ -160,20 +160,20 @@ test('设备：已有的表加非空、没有固定默认值的列：打开时�
             .default(null as never),
         ),
       ]),
-    ).toThrow('workout.reps 非空');
+    ).toThrow('workout.reps');
     storage.define([withReps(integer().notNull().default(5))]);
     expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
   }
 });
 
-/** 云端的库（DO 的替身），先执行给的语句（建好的表照写的建，不另加 WITHOUT ROWID） */
+// Cloud database simulation applying schema statements directly.
 const cloud = (...statements: string[]) => {
   const storage = cloudStorage();
   for (const statement of statements) storage.sql.exec(statement);
   return storage;
 };
 
-test('云端：WITHOUT ROWID，不建声明的索引；每个外键的全部列建一个索引（连带删按父行找子行），这些列已是主键最左前缀的不建', () => {
+test('cloud: creates WITHOUT ROWID tables and indexes foreign key columns without creating client-declared indexes', () => {
   const storage = cloud();
   const rep = sqliteTable('rep', { id: text().primaryKey(), exercise: text(), position: integer() }, (table) => [
     foreignKey({ columns: [table.exercise, table.position], foreignColumns: [set.exercise, set.position] }),
@@ -191,7 +191,7 @@ test('云端：WITHOUT ROWID，不建声明的索引；每个外键的全部列�
   ]);
 });
 
-test('云端已有的表缺外键的索引（新加的外键、升级前建的表）：打开时不建，返回建它的语句交给后台任务，建好了不再返回；新建的表当场建、不返回', () => {
+test('cloud: returns deferred index statements for missing foreign key indexes on existing tables, creating fresh indexes immediately', () => {
   const storage = cloud('CREATE TABLE "exercise" ("id" TEXT, "workout" TEXT, PRIMARY KEY ("id")) STRICT, WITHOUT ROWID');
   expect(defineTables(storage, [workout, exercise])).toEqual(['CREATE INDEX IF NOT EXISTS "exercise.workout" ON "exercise" ("workout")']);
   expect(schemaOf(storage).map(([name]) => name)).toEqual(['exercise', 'workout']);
@@ -202,14 +202,14 @@ test('云端已有的表缺外键的索引（新加的外键、升级前建的�
   expect(schemaOf(fresh).map(([name]) => name)).toContain('exercise.workout');
 });
 
-test('云端：已有的表加非空、没有固定默认值的列同样报错，带固定默认值的照常补', () => {
+test('cloud: rejects adding non-null columns without static defaults to existing tables', () => {
   const storage = cloud(...workoutWithDone);
-  expect(() => defineTables(storage, [withReps(integer().notNull())])).toThrow('workout.reps 非空');
+  expect(() => defineTables(storage, [withReps(integer().notNull())])).toThrow('workout.reps is NOT NULL without a static default value');
   defineTables(storage, [withReps(integer().notNull().default(5))]);
   expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
 });
 
-test('云端只在云端的表与列照声明的类型建（BLOB、numeric、带双引号的名字都行），同步的列照样只写存储类型：它们不同步，不受同步的限制', () => {
+test('cloud: preserves declared types for cloud-only tables and columns while normalizing synced columns', () => {
   const storage = cloud();
   const synced = sqliteTable('note', { id: text().primaryKey(), body: text({ length: 40 }) });
   const cloudNote = sqliteTable('note', { id: text().primaryKey(), body: text({ length: 40 }), photo: blob() });
@@ -231,13 +231,13 @@ test('云端只在云端的表与列照声明的类型建（BLOB、numeric、带
     ['payload', 'BLOB'],
   ]);
   storage.sql.exec('INSERT INTO "audit ""log""" VALUES (?, ?, ?)', 'a1', 1.5, new Uint8Array([1, 2]));
-  // 再打开一遍：照同样的规则比类型，不报「类型改了」
+  // Reopening verifies type matching without reporting false type changes.
   defineTables(storage, [cloudNote, audit], [synced]);
 });
 
-test('只在云端的表没有主键：建表之前就报友好的错（云端的表都是 WITHOUT ROWID，要有主键），库里一张表也没建', () => {
+test('cloud: rejects cloud-only tables without primary keys before creating tables', () => {
   const keyless = sqliteTable('audit', { name: text() });
   const storage = cloud();
-  expect(() => defineTables(storage, [workout, keyless], [workout])).toThrow('audit 没有主键');
+  expect(() => defineTables(storage, [workout, keyless], [workout])).toThrow('Table audit has no primary key');
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE type = 'table'").toArray()).toEqual([]);
 });

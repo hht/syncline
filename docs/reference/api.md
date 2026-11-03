@@ -1,132 +1,132 @@
-# 接口
+# API
 
-按包的入口列出，入口按代码跑在哪分：App（`syncline/expo`、`syncline/expo/background`、`syncline/react`、`syncline/metro`）与云端（`syncline/cloudflare`）。
+Organized by package entrypoint based on execution environment: app (`syncline/expo`, `syncline/expo/background`, `syncline/react`, `syncline/metro`) and cloud (`syncline/cloudflare`).
 
-多数接入只用到：App 上的 `openSyncline`（`syncline/expo`）与 `SynclineProvider`、`useQuery`、`useSyncline`（`syncline/react`），云端的 `SynclineSpace` 与 `forward`（`syncline/cloudflare`）；先看 [README](../../README.md) 的「一眼看完」，其余按需查下文。
+Most integrations require only `openSyncline` (`syncline/expo`) and `SynclineProvider`, `useQuery`, and `useSyncline` (`syncline/react`) on the app, plus `SynclineSpace` and `forward` (`syncline/cloudflare`) on the cloud. Start with the [README](../../README.md) section "At a glance", and refer below and to [Limits](limits.md) as needed.
 
 ## `syncline/expo`
 
-iOS、Android 与 web 是同一个入口、同样的选项：打包时手机上取原生模块的实现，web 上取 Syncline 自带的专用 Worker 的实现。
+iOS, Android, and web share the same entrypoint and options: bundles on mobile resolve to native module implementations, while web resolves to Syncline's dedicated Web Worker.
 
 ### `openSyncline(options): Syncline`
 
-打开（没有就建）一个本机库，照 `schema` 建表、补列，开始同步私有空间。手机上同一个库在一个进程里只能开一份，再开就抛错（先 `close`）；后台任务的 `syncOnce` 正开着同一个人（`owner`）的库时，接管那一份（用的是 `syncOnce` 打开时给的选项）；开着别人的库就先关掉它，再按这次的选项打开。
+Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open for the same user (`owner`), it takes over that instance (using the options passed when `syncOnce` opened it); if open under a different user, it closes that instance first, then opens with the current options.
 
-| 选项 | 说明 |
+| Option | Description |
 |---|---|
-| `name` | 库的名字，文件是「名字.db」；整个 App 一个 |
-| `owner` | 可选，私有空间属于谁（登录的用户的 id）：和库里记着的不同就先清掉上一个人的私有数据与本机专用的表，共用空间留着；库里还没记过就只记下；不给就不记、不清。上一个人还有没上传的写时不清、打开出错（`PendingWrites`，`owner` 是上一个人，`count` 是条数；手机上 `openSyncline` 抛出，web 上记成私有空间的 `downloadError`）：让上一个人登录同步完再换人，或给 `discardPending` 丢掉它们。退出登录前看 `status().pending`，不为 0 就先 `sync()` |
-| `discardPending` | 可选，换了人时上一个人没上传的写也丢掉（见 `owner`）；`syncOnce` 不理它 |
-| `schema` | 同步的表：`{ 表名: Drizzle 表 }` |
-| `localOnly` | 可选，本机专用的表：`{ 表名: Drizzle 表 }`，不同步 |
-| `url` | 私有空间的同步地址（`https://`），WebSocket 与 HTTP 下载都用它；不能带查询串或 `#`（参数由 Syncline 加，云端认不出别的），带了打开时就抛错 |
-| `token` | `() => Promise<string>`，每次连接前调用；快过期时应给新的 |
-| `validation` | 可选，`Map<Drizzle 表, Standard Schema>`，写的时候按它校验 |
-| `readOnly` | 可选，只由云端写的同步表（Drizzle 表的数组）：设备只读，本机写改到就抛错、整条回滚；与云端的 `readOnly` 相同 |
-| `retired` | 可选，删掉的同步表与列（`表.列`），与云端的 `retired` 相同：不再同步，打开时从库里删掉（有待上传也是：先撤回、删掉、再重放）；不能再声明 |
-| `checksumRowsPerDay` | 可选，在线校验和每天至多对多少行，默认 100 万（云端当场算，每读一行计费） |
-| `token` 的要求 | 云端会告诉设备身份还有多久到期，设备在到期前 1 到 4 分钟之间自己重连、再调一次 `token`，这时要给新的。Firebase 的 `getIdToken()` 在 iOS、Android 上离到期 5 分钟以内就换新的；web 上（Firebase JS SDK）只用 Auth 时离到期 30 秒以内才换，到期前 1 到 4 分钟调它拿到的还是旧的 |
+| `name` | Database name; the file is `<name>.db`. One per app |
+| `owner` | Optional. Who the private space belongs to (logged-in user ID). If different from the owner recorded in the database, clears the previous user's private data and local-only tables, keeping shared spaces. If no owner was recorded, records this one; if omitted, records and clears nothing. If the previous user has pending writes, clearing is blocked and opening fails (`PendingWrites`, with `owner` set to the previous user and `count` set to the number of pending writes; thrown by `openSyncline` on mobile, recorded as the private space's `downloadError` on web). Have the previous user log in and finish syncing before switching users, or pass `discardPending` to drop them. Check `status().pending` before logging out, and call `sync()` first if non-zero |
+| `discardPending` | Optional. Drops pending writes from the previous user when switching users (see `owner`). Ignored by `syncOnce` |
+| `schema` | Synced tables: `{ tableName: drizzleTable }` |
+| `localOnly` | Optional. Local-only tables: `{ tableName: drizzleTable }`, not synced |
+| `url` | Private space sync URL (`https://`), used for both WebSocket and HTTP downloads. Must not contain query parameters or `#` (Syncline appends parameters that the cloud expects; extra parameters cause `openSyncline` to throw) |
+| `token` | `() => Promise<string>`, called before each connection. Return a fresh token when approaching expiration |
+| `validation` | Optional. `Map<DrizzleTable, StandardSchema>`, validated during writes |
+| `readOnly` | Optional. Synced tables writable only by the cloud (array of Drizzle tables). Read-only to devices; local writes modifying them throw and roll back the entire transaction. Identical to cloud `readOnly` |
+| `retired` | Optional. Permanently removed synced tables and columns (`table.column`), identical to cloud `retired`. No longer synced, dropped from the database on open (even with pending writes: reverts, drops, and replays); cannot be re-declared |
+| `checksumRowsPerDay` | Optional. Maximum number of rows verified by online checksums per day, default 1,000,000 (computed on-demand on the cloud, billed per row read) |
+| Token requirements | The cloud informs the device how long until identity expires. The device reconnects and calls `token` again between 1 and 4 minutes before expiration, when a fresh token must be returned. Firebase's `getIdToken()` refreshes when within 5 minutes of expiration on iOS and Android; on web (Firebase JS SDK) using Auth only, it refreshes only within 30 seconds of expiration, so calling it 1 to 4 minutes before expiration still returns the old token |
 
 ### `syncOnce(options, { signal }): Promise<void>`
 
-只在 iOS、Android：同步一次，给后台任务用（App 不在前台时被系统叫醒的那几十秒）。连上，推完没上传的写、拉到最新就成功。这个进程里已经开着这个库（App 还在后台活着）就用开着的那份、不关；没开就按 `options`（同 `openSyncline`）打开，同步完关掉，不留连接；同步期间用户点开了 App，`openSyncline` 接管同一个人的那份，`syncOnce` 就不再关它。`signal` 中止（如超时）或出错就失败（换了人、上一个人还有没上传的写时以 `PendingWrites` 失败），打开的库照样关掉；iOS 收回后台时间时 App 随即被挂起，不保证执行到关库。只同步私有空间。
+iOS and Android only: Syncs once, intended for background tasks (the tens of seconds when the OS wakes the app while not in the foreground). Connects, pushes pending writes, pulls to the latest version, and succeeds. If the process already has the database open (the app is still alive in the background), it uses the open instance without closing it; if not open, it opens with `options` (same as `openSyncline`), closes it after syncing, and leaves no connection open. If the user opens the app during sync, `openSyncline` takes over the instance for the same user, and `syncOnce` leaves it open. Fails if `signal` aborts (such as on timeout) or an error occurs (fails with `PendingWrites` when switching users if the previous user has pending writes), closing the opened database. When iOS reclaims background execution time, the app is suspended immediately, with no guarantee that database cleanup runs to completion. Syncs private spaces only.
 
 ### `Syncline`
 
-| 成员 | 说明 |
+| Member | Description |
 |---|---|
-| `name` | 库的名字 |
-| `db` | 只读的 Drizzle 库 |
-| `write(body): Promise<T>` | 一次本机写：`body(tx)` 在一个本机事务里，`tx` 是可读可写的 Drizzle 库 |
-| `onChange(listener): () => void` | 同步表与本机专用的表变了之后调用，给出改到的表名（`ReadonlySet<string>`） |
-| `tablesOf(sql): Promise<string[]>` | 一条查询读哪些表（不执行） |
-| `onHeld(listener): () => void` | 本机写被云端扣下时调用，给出 `{ reason, changes }[]` |
-| `status(): SyncStatus` | 当前同步状态 |
-| `onStatus(listener): () => void` | 状态每次变了调用 |
-| `sync({ signal }?): Promise<void>` | 立即同步，等到补齐、本机的写都被确认（已追平立刻成功）；出错或 `signal` 中止时失败，云端以 1007 拒收过推上去的写时立刻失败 |
-| `resync({ signal, discardPending }?): Promise<void>` | 整份重下、换掉本机的同步表（本机数据坏了时用）；没上传的写留着，重下完照常推上去。`discardPending: true` 时连没上传的写一起丢（同步一直推不上去、云端以 1007 拒收时用） |
-| `reconnect(): void` | 立刻换一条连接、重新调 `token`：令牌变了（权限变了，共用空间看得见的范围随之变）时调用，如在 Firebase 的 `onIdTokenChanged` 里 |
-| `shared(name, { schema, url, token?, owner? })` | 同一个库里的一个共用空间（只读），有自己的 `status`、`onStatus`、`sync`、`resync`、`reconnect`；看得见哪些行由云端按 token 定；`owner`（登录的人）和上次不同就先清掉上一个人看过的 |
-| `close(): Promise<void>` | 停下同步、关库 |
-| `delete(): Promise<void>` | 关库并删掉库文件（清除本机数据） |
+| `name` | Database name |
+| `db` | Read-only Drizzle database instance |
+| `write(body): Promise<T>` | Executes a local write. `body(tx)` runs in a local transaction, where `tx` is a read-write Drizzle database instance |
+| `onChange(listener): () => void` | Invoked after synced tables or local-only tables change, providing modified table names (`ReadonlySet<string>`) |
+| `tablesOf(sql): Promise<string[]>` | Lists tables read by a query without executing it |
+| `onHeld(listener): () => void` | Invoked when local writes are held by the cloud, providing `{ reason, changes }[]` |
+| `status(): SyncStatus` | Current sync status |
+| `onStatus(listener): () => void` | Invoked whenever sync status changes |
+| `sync({ signal }?): Promise<void>` | Syncs immediately, waiting until caught up and all local writes are confirmed (succeeds immediately if already up to date). Fails on errors or when `signal` aborts; fails immediately if the cloud previously rejected pushed writes with 1007 |
+| `resync({ signal, discardPending }?): Promise<void>` | Re-downloads synced tables from scratch, replacing local copies (used when local data is corrupted). Keeps pending writes and pushes them as usual after re-downloading. When `discardPending: true`, drops pending writes as well (used when uploads are permanently rejected with 1007) |
+| `reconnect(): void` | Reconnects immediately and re-invokes `token`. Call when credentials change (updating permissions and visible scopes for shared spaces), such as inside Firebase's `onIdTokenChanged` |
+| `shared(name, { schema, url, token?, owner? })` | Opens a read-only shared space in the same database, with its own `status`, `onStatus`, `sync`, `resync`, and `reconnect`. The cloud determines visible rows based on token (defaults to private space token if omitted). If `owner` (logged-in user) differs from last time, clears previously viewed rows |
+| `close(): Promise<void>` | Stops sync and closes the database |
+| `delete(): Promise<void>` | Closes the database and deletes database files (clearing local data) |
 
-### 类型
+### Types
 
-`Database`（Drizzle 库）、`Schema`、`Syncline`、`SyncStatus`、`ValidationError`（改到的行不合声明；`issues` 给出字段路径与原因）、`PendingWrites`（见 `owner`）、`AccountMismatch`（云端说的空间与本机库第一次同步时记下的不同，即这台设备上换了账号：同步停下、不推，报在 `downloadError`，`stored`、`cloud` 是两边的空间；按当前账号重新打开，换 `owner`）。
+`Database` (Drizzle database), `Schema`, `Syncline`, `SyncStatus`, `ValidationError` (modified row violates schema; `issues` provides field paths and reasons), `PendingWrites` (see `owner`), `AccountMismatch` (the space reported by the cloud differs from the space recorded on first sync, indicating an account switch on this device: sync halts without pushing, reported in `downloadError`, with `stored` and `cloud` identifying both spaces; reopen under the current account, switching `owner`).
 
 ## `syncline/expo/background`
 
-可选，只在 iOS、Android，要装 `expo-background-task` 与 `expo-task-manager`，`app.json` 的 `plugins` 加上 `expo-background-task`。
+Optional, iOS and Android only. Requires `expo-background-task` and `expo-task-manager`. Add `expo-background-task` to `plugins` in `app.json`.
 
-| 导出 | 说明 |
+| Export | Description |
 |---|---|
-| `defineBackgroundSync(options)` | 定义后台同步要做的事，在入口加载的模块顶层调用；`options` 是 `() => OpenOptions \| undefined`（可以是 Promise），给出这次要同步的库，`undefined` 时什么也不做 |
-| `startBackgroundSync(minimumInterval?)` | 让系统定时叫醒 App 同步，至少隔 `minimumInterval` 分钟（默认、也是最小 15） |
-| `stopBackgroundSync()` | 停止 |
+| `defineBackgroundSync(options)` | Defines background sync execution, called at the top level of the entry module. `options` is `() => OpenOptions \| undefined` (can return a Promise) specifying the database to sync; does nothing when returning `undefined` |
+| `startBackgroundSync(minimumInterval?)` | Schedules the operating system to periodically wake the app to sync, at least `minimumInterval` minutes apart (default and minimum: 15) |
+| `stopBackgroundSync()` | Stops scheduled background sync |
 
 ## `syncline/react`
 
-要在 TanStack 的 `QueryClientProvider` 里面用。
+Must be used inside TanStack's `QueryClientProvider`.
 
-| 导出 | 说明 |
+| Export | Description |
 |---|---|
-| `SynclineProvider` | `<SynclineProvider value={space}>`：给子树一个库；`value` 可以是 `undefined`（没登录）。换了库或卸载时丢掉上一个库的查询缓存 |
-| `useQuery(build)` | `build(db)` 写一条 Drizzle 查询；返回 TanStack 的查询结果，读到的表变了才重跑 |
-| `useSyncline()` | 当前的库（写、手动同步、共用空间用）；没有就抛错 |
-| `useSyncStatus()` | 当前库的同步状态，变了就重新渲染 |
+| `SynclineProvider` | `<SynclineProvider value={space}>`: Provides a database to the subtree; `value` can be `undefined` (logged out). Clears the query cache of the previous database when switching databases or unmounting |
+| `useQuery(build)` | `build(db)` defines a Drizzle query; returns TanStack query results, re-running only when read tables change |
+| `useSyncline()` | Returns the current database instance (used for writes, manual sync, and shared spaces); throws if missing |
+| `useSyncStatus()` | Returns the current database sync status, triggering re-renders on change |
 
 ## `syncline/metro`
 
-`withSyncline(config)`：包一层接入方的 Metro 配置（`metro.config.js`），返回同一个配置：起 Metro 时编好 web 用的 wasm（没改时一两秒，编不了就抛错），`.wasm` 当资源打包。
+`withSyncline(config)`: Wraps the integrator's Metro configuration (`metro.config.js`) and returns the modified configuration: compiles the WebAssembly binary for web when Metro starts (takes 1–2 seconds when unchanged, throws if compilation fails), bundling `.wasm` as an asset.
 
 ## `syncline/cloudflare`
 
 ### `class SynclineSpace<Env>`
 
-私有空间的 DO，继承它：`super(ctx, env, schema, options?)`，照 `schema`（与设备同一份）建表、补列。
+Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)`, creating tables and adding columns according to `schema` (shared with devices).
 
-| 选项 | 说明 |
+| Option | Description |
 |---|---|
-| `cloud` | 云端的表：同名的同步表在云端的样子（多出只在云端的列）与只在云端的表 |
-| `retired` | 删掉的表与列（`表.列`），不再回到同步，与设备上的一样；不能再声明 |
-| `validation` | 同设备，云端对上传的写与服务端的写再查一遍 |
-| `readOnly` | 只由云端写的同步表，与设备的相同：只有服务端的写（`mutate`）改它们，设备推来的写改到就扣下（改过的客户端才推得出），重新提交时改到也抛错。不能引用设备能写的表（删父行会连带删掉它们的行），打开时查。把已有的表改成只读，先发不再写它的 App：没升级的 App 写它也会被扣下 |
-| `events` | 云端事件的回调 |
-| `writeQuota` | 设备上传的写入额度 `{ rate, burst }`：每秒补 `rate` 行、至多攒 `burst` 行（行是改动条数），超了以 1013 关连接；不给就不限，见[限制](limits.md) |
-| `dailyWrites` | 设备上传的写每天（UTC）至多写几行（计费的行写，含索引与提交记录；服务端的写不算），到了以 1013 关连接、第二天照常；不给就不限，见[限制](limits.md) |
-| `connections` | 同时至多几条连接（正整数），默认 32，见[限制](limits.md)；一个用户设备多时调大 |
-| `exports` | 导出者：名字 → `Exporter`（`position()`、`write(chunk)`） |
-| `exportDelay` | 写了之后多久导出，默认 60 000 毫秒 |
-| `exportBudget` | 一次 alarm 最多导多久，默认 600 000 毫秒；导出者到时候还没回话就算这次失败、按退避重排 |
+| `cloud` | Cloud tables: cloud-side definitions of synced tables (adding cloud-only columns) and cloud-only tables |
+| `retired` | Permanently removed tables and columns (`table.column`), never returning to sync, identical to device declarations; cannot be re-declared |
+| `validation` | Same as devices: re-validates uploaded client writes and server writes on the cloud |
+| `readOnly` | Synced tables writable only by the cloud, identical to device declarations: modified only by server writes (`mutate`). Device writes touching them are held (pushed only by modified clients), and resubmitting them also throws if they touch read-only tables. Must not reference tables writable by devices (cascaded deletes would delete their rows); checked on open. To change an existing table to read-only, deploy app updates that stop writing to it first: un-upgraded apps writing to it will have those writes held |
+| `events` | Callbacks for cloud events |
+| `writeQuota` | Token-bucket rate limit on pushed writes from devices: `{ rate, burst }`. Refills `rate` rows per second up to `burst` rows (counted as row changes); closes the connection with 1013 when exceeded. Unlimited if omitted; see [Limits](limits.md) |
+| `dailyWrites` | Maximum number of billed SQLite row writes from client pushes per UTC day (including indexes and commit log; server writes do not count). Closes the connection with 1013 when reached, resuming the next day. Unlimited if omitted; see [Limits](limits.md) |
+| `connections` | Maximum concurrent connections (positive integer), default 32; see [Limits](limits.md). Increase for users with many devices |
+| `exports` | Exporters: name → `Exporter` (`position()`, `write(chunk)`) |
+| `exportDelay` | Delay after writes before exporting, default 60,000 ms |
+| `exportBudget` | Maximum export duration per alarm, default 600,000 ms. If an exporter does not respond within this budget, the attempt fails and is rescheduled with backoff |
 
-| 受保护的成员（在你的方法里调用；是实例上的函数，经 RPC 调不到） | 说明 |
+| Protected member (called in your methods; instance methods, not accessible via RPC) | Description |
 |---|---|
-| `mutate(write)` | 服务端的写，同步执行 |
-| `held({ limit?, after? })` | 扣下的写：`{ client, id, reason, version, at, changes }[]`，`changes` 是推来的原样（设备有缺陷时可以不是一组认得出的改动，类型是 `unknown`），一页默认 100 条，`after` 是上一页最后一条的 `version` |
-| `resubmit(client, id, changes?)` | 重新提交一条扣下的写；已经不扣着的、不给 `changes` 而原样的改动认不出的、改到只由云端写的表的抛错 |
-| `schedule(name, at)`、`unschedule(name)` | 自己的定时：最迟在 `at` 调 `scheduled(name)`；名字不能以 `syncline:` 开头 |
-| `scheduled` | 覆盖它（`protected override scheduled = (name) => …`）接自己的定时 |
+| `mutate(write)` | Server write, executed synchronously |
+| `held({ limit?, after? })` | Returns held writes: `{ client, id, reason, version, at, changes }[]`. `changes` contains the raw pushed payload (may not be valid recognized changes if the device had defects; typed as `unknown`). Default page size is 100 entries; `after` is the `version` of the last entry from the previous page |
+| `resubmit(client, id, changes?)` | Resubmits a held write. Throws if no longer held, if `changes` is omitted while the original changes cannot be recognized, or if it touches read-only tables |
+| `schedule(name, at)`, `unschedule(name)` | Custom scheduling: invokes `scheduled(name)` no later than `at`. Names must not start with `syncline:` |
+| `scheduled` | Override this (`protected override scheduled = (name) => …`) to handle custom scheduled callbacks |
 
-alarm 由 Syncline 管（导出与自己的定时共用一个），不要覆盖 `alarm()`、不要自己调 `setAlarm`。`SynclineSharedSpace` 的 `mutate`、`schedule`、`unschedule`、`scheduled` 同样。
+Alarms are managed by Syncline (sharing a single alarm between exports and custom schedules); do not override `alarm()` or call `setAlarm` directly. The same applies to `mutate`, `schedule`, `unschedule`, and `scheduled` on `SynclineSharedSpace`.
 
 ### `forward(request, namespace, verify)`
 
-入口 Worker 里同步请求的入口：取出 token 交给 `verify`，它返回 `{ space, expiresAt }` 或 `undefined`；认出的转给名为 `space` 的 DO，认不出回 401。
+Entrypoint for sync requests in the entry Worker: extracts the token and passes it to `verify`, which returns `{ space, expiresAt }` or `undefined`. Forwards recognized tokens to the Durable Object named `space`; returns 401 if unrecognized.
 
 ### `restoreSpace(namespace, name, at)`
 
-把一个私有空间恢复到 `at`（毫秒时刻）。
+Restores a private space to `at` (millisecond timestamp).
 
-### 共用空间
+### `Shared spaces`
 
-| 导出 | 说明 |
+| Export | Description |
 |---|---|
-| `SharedDefinition` | `{ schema, buckets, shards?, chunkRows? }`，入口与共用空间用同一份；`buckets` 是桶规则：规则名 → 表名 → `{ where?, by? }`（`where` 是只用这张表的列的 SQL 条件，`by` 是分桶列），一行满足条件、分桶列都不为空就在「规则名加分桶列的值」那个桶里 |
-| `class SynclineSharedSpace<Env>` | 共用空间的 DO：`super(ctx, env, { ...definition, broadcast, validation?, events?, retired? })`（`retired` 同 `SynclineSpace`）；`protected mutate(write): Promise<void>` |
-| `class SynclineBroadcast<Env>` | 广播分片的 DO：`super(ctx, env, sharedNamespace, events?)`；alarm 由它管（到期的连接按 alarm 关掉），不要覆盖 `alarm()`、不要自己调 `setAlarm` |
-| `abstract class SynclineSharedEntry<Env>` | 开了缓存的入口：实现 `protected shared()`，返回共用空间的命名空间 |
-| `forwardShared(request, route, verify)` | 入口 Worker 里的入口：`route` 是 `{ entry, broadcast, space, definition }`，`verify` 返回 `{ buckets, expiresAt }`（订阅的桶：`[规则名, 参数…]`，文本列的参数给字符串、整数列的给数；分桶列只能是整数或文本），认不出返回 `undefined`（回 401）；桶不合规则、订阅编成 JSON 超过 8192 字节是接入方的错，抛错 |
+| `SharedDefinition` | `{ schema, buckets, shards?, chunkRows? }`, shared between the entrypoint and shared space. `buckets` defines bucket rules: rule name → table name → `{ where?, by? }` (`where` is a static SQL predicate referencing columns of that table only; `by` specifies bucket columns). A row belongs to bucket `[ruleName, ...byValues]` if it satisfies `where` and all bucket columns are non-null |
+| `class SynclineSharedSpace<Env>` | Durable Object for shared spaces: `super(ctx, env, { ...definition, broadcast, validation?, events?, retired? })` (`retired` matches `SynclineSpace`); `protected mutate(write): Promise<void>` |
+| `class SynclineBroadcast<Env>` | Durable Object for broadcast shards: `super(ctx, env, sharedNamespace, events?)`. Alarms are managed internally (closing expired connections via alarm); do not override `alarm()` or call `setAlarm` directly |
+| `abstract class SynclineSharedEntry<Env>` | Cached entrypoint: implement `protected shared()`, returning the shared space namespace |
+| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`. `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules or if the JSON-encoded subscription exceeds 8,192 bytes (integrator error) |
 
-### 类型
+### Types
 
-`Exporter`（`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`）、`Identity`（`{ space, expiresAt }`）、`SharedIdentity`（`{ buckets, expiresAt }`）、`Bucket`、`BucketRules`、`Change`（一条写改到的一行）、`ValidationError`。
+`Exporter` (`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`), `Identity` (`{ space, expiresAt }`), `SharedIdentity` (`{ buckets, expiresAt }`), `Bucket`, `BucketRules`, `Change` (a modified row within a write), `ValidationError`.

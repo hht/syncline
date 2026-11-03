@@ -6,16 +6,18 @@ import { program, schema, viewer } from '../test/test-catalog.ts';
 import { Device } from '../test/test-device.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
-// 收到提示（只带版本、不带改动的通知）之后怎么拉：入口后面的缓存按网址存，同一版本的设备的下一个请求落在同一个网址上
+// How to pull after receiving a hint (a notification carrying only version without changes): caches behind the entry point store
+// by URL, next request from devices at the same version lands on the same URL.
 
-// 提示是第 3 版，缓存里有别的设备 5 秒内拉出来的第 2 版末块：第一次拉取带提示的版本作下限，是新的缓存键（model/Shared.tla 的 Outgoing）
-test('收到提示后第一次拉取带上提示的版本作下限：缓存里有旧末块，也一次拉到', async () => {
+// Hint is version 3, cache has the final chunk of version 2 pulled by another device within 5 seconds: the first pull includes
+// the hinted version as a lower bound, forming a new cache key (@see model/Shared.tla Outgoing)
+test('first pull after hint carries hinted version as lower bound: reaches head in one pull even when cache has stale chunk', async () => {
   const space = new Space(cloudStorage(...schema), [program], {
     shared: { buckets: { public: { program: { where: "status = 'published'" } } }, chunkRows: 100 },
   });
   const catalog = new Device(deviceStorage(...schema), []).shared('catalog', [program]);
   const publish = (id: string) => space.mutate((tx) => tx.upsert(program, { id, status: 'published' }), 0);
-  /** 照设备的请求一块块拉，直到追平；serve 决定每个请求拿到什么（模拟 CDN），返回发出的请求 */
+  /** Pulls chunk by chunk according to device requests until caught up; serve decides what each request receives (simulating CDN), returns emitted requests. */
   const pullRest = async (serve: (request: PullRequest) => Poke | Chunk | Reset) => {
     const requests: PullRequest[] = [];
     do {
@@ -28,16 +30,17 @@ test('收到提示后第一次拉取带上提示的版本作下限：缓存里�
   const live = (request: PullRequest) => space.pullShared(request, viewer);
   publish('p1');
   await pullRest(live);
-  // 设备手上的位置：所有同一版本的设备的下一个请求落在同一个网址上
+  // Position held by the device: next request from all devices at the same version lands on the same URL
   const url = catalog.pullRequest();
-  // 第 2 版提交后，别的设备经提示去拉同一个网址，缓存里存下第 2 版的末块
+  // After version 2 commits, another device pulls the same URL following a hint, caching the final chunk of version 2
   publish('p2');
   const stale = space.pullShared(url, viewer);
-  // 5 秒之内又提交了第 3 版，提示（第 3 版）到了设备
+  // Within 5 seconds version 3 commits, and the hint (version 3) arrives at the device
   publish('p3');
   await catalog.notified({ hint: space.head(), sub: viewer.sub }, false);
   const requests = await pullRest((request) => (JSON.stringify(request) === JSON.stringify(url) ? stale : live(request)));
-  expect(requests, `设备发了 ${requests.length} 个请求：\n${requests.map((request) => JSON.stringify(request)).join('\n')}`).toHaveLength(
-    1,
-  );
+  expect(
+    requests,
+    `device sent ${requests.length} requests:\n${requests.map((request) => JSON.stringify(request)).join('\n')}`,
+  ).toHaveLength(1);
 });

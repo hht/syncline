@@ -1,7 +1,7 @@
-//! 改到的行合不合表的声明（接入方的 Standard Schema 之外的部分）：按声明查 SQLite 里存的值——类型照列的存储类型，另查非空、
-//! 布尔只能是 0 或 1、枚举、长度、JSON；同步表的主键编成 JSON 不超过上限。查的是写完之后的整行，改一列也查整行。
-//! Standard Schema 要按 Drizzle 的列把值解码，由 JS 查读出的这一行。
-//! 不该知道的：行是谁写的、不合时怎么办。
+//! Validates modified rows against table declarations (beyond integrator's Standard Schema): checks values stored in SQLite against declarations—storage class, non-null,
+//! boolean restricted to 0 or 1, enums, length, JSON; synced table primary key serialized to JSON must not exceed limit. Validates the entire row after write, even if only a single column was modified.
+//! Standard Schema decodes values according to Drizzle columns, checked by JS on the read row.
+//! What it should not know: who wrote the row, what to do on mismatch.
 //! @see <https://sqlite.org/json1.html#jvalid>
 
 use crate::change::{MAX_SAFE_INTEGER, Row, key_bytes};
@@ -12,13 +12,13 @@ use crate::tables::{Column, Storage, Table};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
-/// 查改到的一行（key 至少带主键）写完之后的样子，不合给出 `Invalid`；给出读到的声明里的各列（按 SQL 列名），行已不在（删了）是 None。
-/// synced：是同步表（主键另有长度上限）
+/// Validates a modified row (`key` contains at least primary key) after write, returning `Invalid` on mismatch; returns read declared columns (by SQL column name), or None if row is gone (deleted).
+/// `synced`: whether this is a synced table (primary keys have an additional size limit).
 ///
 /// # Errors
-/// 不合声明是 `Invalid`；读库出错是 `Sql`。
+/// Returns `Error::Invalid` on declaration mismatch, or `Error::Sql` if reading the database fails.
 pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<Option<Row>, Error> {
-    // JSON 列另读 json_valid：照 RFC 8259，与 JS 的 JSON.parse 收的一样
+    // JSON columns also read json_valid: per RFC 8259, matches what JS JSON.parse accepts.
     let selected: Vec<String> = table
         .columns
         .iter()
@@ -45,7 +45,9 @@ pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<
     if keyed > KEY_BYTES {
         issues.push(Issue {
             path: Vec::new(),
-            message: format!("主键编成 JSON 是 {keyed} 字节，超过 {KEY_BYTES}：拉取接着拉的位置带着它、要放进网址"),
+            message: format!(
+                "primary key serialized to JSON is {keyed} bytes, exceeding {KEY_BYTES}: pull continuation cursor carries it in the URL"
+            ),
         });
     }
     if issues.is_empty() {
@@ -58,11 +60,11 @@ pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<
     }
 }
 
-/// 一个存着的值哪里不合（值照 JS 读出来的样子比：整数与整数值的小数都是 JS 的整数）
+/// Describes why a stored value violates declaration (compared as read in JS: integers and whole-number floats are both JS integers).
 fn problem(column: &Column, value: &Value, valid_json: bool) -> Option<String> {
     let number = match value {
-        Value::Null => return column.not_null.then(|| "不能为空".to_owned()),
-        #[expect(clippy::cast_precision_loss, reason = "JS 的数就是 f64")]
+        Value::Null => return column.not_null.then(|| "must not be null".to_owned()),
+        #[expect(clippy::cast_precision_loss, reason = "JS numbers are f64")]
         Value::Integer(integer) => Some(*integer as f64),
         Value::Real(real) => Some(*real),
         Value::Text(_) | Value::Blob(_) => None,
@@ -73,42 +75,42 @@ fn problem(column: &Column, value: &Value, valid_json: bool) -> Option<String> {
             if number == Some(0.0) || number == Some(1.0) {
                 None
             } else {
-                fails("不是 0 或 1")
+                fails("must be 0 or 1")
             }
         }
         Storage::Integer => match number {
-            #[expect(clippy::cast_precision_loss, reason = "2^53 - 1 是 f64 精确表示的")]
+            #[expect(clippy::cast_precision_loss, reason = "2^53 - 1 is exactly representable in f64")]
             Some(number) if number.fract() == 0.0 && number.abs() <= MAX_SAFE_INTEGER as f64 => None,
-            _ => fails("不是整数"),
+            _ => fails("must be an integer"),
         },
-        // 无穷大 SQLite 存得下，JSON 却写成 null：上传后云端变成 NULL、两边不一样，所以只收有限的数
+        // SQLite stores infinity, but JSON serializes it as null: becomes NULL on cloud after upload causing mismatch, so only finite numbers accepted.
         Storage::Real => match number {
             Some(number) if number.is_finite() => None,
-            _ => fails("不是有限的数"),
+            _ => fails("must be a finite number"),
         },
         Storage::Text => {
             let Value::Text(text) = value else {
-                return fails("不是文本");
+                return fails("must be text");
             };
             if let Some(values) = &column.values
                 && !values.contains(text)
             {
-                return Some(format!("不在 {} 里", values.join("、")));
+                return Some(format!("must be one of {}", values.join(", ")));
             }
             if let Some(length) = column.length
                 && text.encode_utf16().count() > length
             {
-                return Some(format!("超过 {length} 个字符"));
+                return Some(format!("exceeds {length} characters"));
             }
             if column.json && !valid_json {
-                return fails("不是合法的 JSON");
+                return fails("must be valid JSON");
             }
             None
         }
     }
 }
 
-/// 读出查到的一行的各列（JSON 列后面跟着 `json_valid`），逐列查存的值，给出读到的值与不合的问题
+/// Reads columns of queried row (JSON columns followed by `json_valid`), checks each column's stored value, returning read values and issues.
 fn read_checked(table: &Table, found: &rusqlite::Row) -> rusqlite::Result<(Row, Vec<Issue>)> {
     let mut stored = Vec::new();
     let mut issues = Vec::new();
@@ -151,7 +153,7 @@ mod tests {
                 column("reps", "integer", json!({})),
                 column("done", "integer", json!({ "boolean": true })),
                 column("weight", "real", json!({})),
-                column("kind", "text", json!({ "values": ["力量", "有氧"] })),
+                column("kind", "text", json!({ "values": ["strength", "cardio"] })),
                 column("code", "text", json!({ "length": 2 })),
                 column("extra", "text", json!({ "json": true, "notNull": true })),
             ],
@@ -174,8 +176,8 @@ mod tests {
     }
 
     #[test]
-    fn 合声明的行给出读到的各列_行不在是空() {
-        let db = opened("'w1', 5, 1, 2, '力量', '😀', '{\"a\":[1]}'");
+    fn valid_row_returns_read_columns_and_none_when_missing() {
+        let db = opened("'w1', 5, 1, 2, 'strength', '😀', '{\"a\":[1]}'");
         let stored = check(&db, &table(), true, &key("w1")).unwrap().unwrap();
         assert_eq!(stored.get("weight"), Some(&Value::Integer(2)));
         assert_eq!(stored.0.len(), 7);
@@ -183,20 +185,20 @@ mod tests {
     }
 
     #[test]
-    fn 每一列的问题都报出_位置是字段名() {
-        let db = opened("'w1', 1.5, 2, 1e999, '跑步', 'abc', '{bad'");
+    fn reports_issues_for_each_column_with_field_path() {
+        let db = opened("'w1', 1.5, 2, 1e999, 'running', 'abc', '{bad'");
         let Err(Error::Invalid { table: name, issues }) = check(&db, &table(), true, &key("w1")) else {
-            panic!("应当不合")
+            panic!("expected invalid")
         };
         assert_eq!(name, "workout");
         let found: Vec<(Vec<Segment>, String)> = issues.into_iter().map(|issue| (issue.path, issue.message)).collect();
         let expected = [
-            ("repsField", "不是整数"),
-            ("doneField", "不是 0 或 1"),
-            ("weightField", "不是有限的数"),
-            ("kindField", "不在 力量、有氧 里"),
-            ("codeField", "超过 2 个字符"),
-            ("extraField", "不是合法的 JSON"),
+            ("repsField", "must be an integer"),
+            ("doneField", "must be 0 or 1"),
+            ("weightField", "must be a finite number"),
+            ("kindField", "must be one of strength, cardio"),
+            ("codeField", "exceeds 2 characters"),
+            ("extraField", "must be valid JSON"),
         ];
         assert_eq!(
             found,
@@ -205,24 +207,28 @@ mod tests {
     }
 
     #[test]
-    fn 非空的列是空_文本列存了数() {
+    fn not_null_column_null_and_text_column_stores_number() {
         let db = opened("'w1', NULL, NULL, NULL, 7, NULL, NULL");
         let Err(Error::Invalid { issues, .. }) = check(&db, &table(), false, &key("w1")) else {
-            panic!("应当不合")
+            panic!("expected invalid")
         };
         let messages: Vec<&str> = issues.iter().map(|issue| issue.message.as_str()).collect();
-        assert_eq!(messages, ["不是文本", "不能为空"]);
+        assert_eq!(messages, ["must be text", "must not be null"]);
     }
 
     #[test]
-    fn 同步表的主键编成_json_超过上限() {
+    fn synced_table_primary_key_serialized_to_json_exceeds_limit() {
         let long = "k".repeat(KEY_BYTES);
         let db = opened(&format!("'{long}', NULL, NULL, NULL, NULL, NULL, '1'"));
         let Err(Error::Invalid { issues, .. }) = check(&db, &table(), true, &key(&long)) else {
-            panic!("应当不合")
+            panic!("expected invalid")
         };
         assert_eq!(issues[0].path, Vec::new());
-        assert!(issues[0].message.starts_with(&format!("主键编成 JSON 是 {} 字节", long.len() + 9)));
+        assert!(
+            issues[0]
+                .message
+                .starts_with(&format!("primary key serialized to JSON is {} bytes", long.len() + 9))
+        );
         assert!(check(&db, &table(), false, &key(&long)).is_ok());
     }
 }

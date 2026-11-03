@@ -7,7 +7,8 @@ import { captureReported } from '../test/test-errors.ts';
 import { createWorkout, putWorkout, tables, workout, workouts, write } from '../test/test-schema.ts';
 import { deviceStorage, failOnce, injectedError } from '../test/test-storage.ts';
 
-// 整份与整张表重给的行边下边写进影子表，末块在一个本机事务里换上
+// Rows for full sync and full table replacement stream into shadow tables while downloading,
+// swapped in a single local transaction on final chunk.
 
 type Storage = ReturnType<typeof deviceStorage>;
 
@@ -19,7 +20,7 @@ const shadows = (storage: Storage) =>
 
 const staged = (storage: Storage) => storage.sql.exec('SELECT tbl, key, kind FROM _syncline_staged ORDER BY tbl, key').toArray();
 
-/** 一块中间块：接在 cursor 后、给出 next */
+/** Intermediate chunk: follows cursor, provides next. */
 const chunk = (base: { version: number; nonce: number } | null, cursor: string | undefined, next: string, patch: Op[]) => ({
   base,
   ...(cursor && { cursor }),
@@ -27,7 +28,7 @@ const chunk = (base: { version: number; nonce: number } | null, cursor: string |
   patch,
 });
 
-/** 末块：接在 cursor 后、走到 version */
+/** Final chunk: follows cursor, advances to version. */
 const last = (base: { version: number; nonce: number } | null, cursor: string | undefined, version: number, patch: Op[] = []) => ({
   base,
   ...(cursor && { cursor }),
@@ -36,21 +37,21 @@ const last = (base: { version: number; nonce: number } | null, cursor: string | 
   patch,
 });
 
-test('整份的行边下边写进影子表、不进暂存、末块之前不生效；末块换上后同步表有全部的行，影子表没了', async () => {
+test('rows for full sync stream into shadow table without staging, inactive before final chunk; after swap synced table has all rows, shadow table removed', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
-  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('old', '旧的')]));
+  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('old', 'old')]));
   await device.private.receive(
-    chunk({ version: 1, nonce: 1 }, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一'), putWorkout('w2', '二')]),
+    chunk({ version: 1, nonce: 1 }, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one'), putWorkout('w2', 'two')]),
   );
-  expect(workouts(storage)).toEqual([{ id: 'old', note: '旧的' }]);
+  expect(workouts(storage)).toEqual([{ id: 'old', note: 'old' }]);
   expect(shadows(storage)).toEqual(['_syncline_shadow_workout']);
   expect(staged(storage)).toEqual([{ tbl: '', key: '', kind: 'clear' }]);
-  await device.private.receive(last({ version: 1, nonce: 1 }, 'n1', 2, [putWorkout('w3', '三')]));
+  await device.private.receive(last({ version: 1, nonce: 1 }, 'n1', 2, [putWorkout('w3', 'three')]));
   expect(workouts(storage)).toEqual([
-    { id: 'w1', note: '一' },
-    { id: 'w2', note: '二' },
-    { id: 'w3', note: '三' },
+    { id: 'w1', note: 'one' },
+    { id: 'w2', note: 'two' },
+    { id: 'w3', note: 'three' },
   ]);
   expect(shadows(storage)).toEqual([]);
   expect(staged(storage)).toEqual([]);
@@ -66,7 +67,7 @@ const indexes = (storage: Storage) =>
     .toArray()
     .map(({ sql }) => String(sql).replace(/^CREATE INDEX "[^"]*"/, 'CREATE INDEX'));
 
-test('共用空间同样：整份的行边下边写进影子表，末块之前界面看不到；末块换上后是全部的行', async () => {
+test('same for shared space: rows for full sync stream into shadow table, invisible before final chunk; after swap has all rows', async () => {
   const program = sqliteTable('program', { id: text().primaryKey() });
   const storage = deviceStorage(createWorkout, 'CREATE TABLE program (id TEXT PRIMARY KEY)');
   const catalog = new Device(storage, tables).shared('catalog', [program]);
@@ -79,14 +80,14 @@ test('共用空间同样：整份的行边下边写进影子表，末块之前�
   expect(shadows(storage)).toEqual([]);
 });
 
-test('连着两次整份：影子表照同步表的列建索引、名字带一代的编号，第二次换表不撞名；每组列只有一个索引，重新打开也不多建', async () => {
+test('consecutive full syncs: shadow table indexes match synced table columns with generation suffix, avoiding name collisions on second swap; one index per column set, no duplicates on reopen', async () => {
   const storage = deviceStorage();
   storage.define(deviceDefinitions([indexed]));
   const device = new Device(storage, [indexed]);
   let base: { version: number; nonce: number } | null = null;
   for (const version of [1, 2, 3]) {
     await device.private.receive(
-      chunk(base, undefined, `n${version}`, [{ op: 'clear' }, putWorkout(`w${version}`, '一', { day: version })]),
+      chunk(base, undefined, `n${version}`, [{ op: 'clear' }, putWorkout(`w${version}`, 'one', { day: version })]),
     );
     await device.private.receive(last(base, `n${version}`, version));
     base = { version, nonce: version };
@@ -104,17 +105,17 @@ test('连着两次整份：影子表照同步表的列建索引、名字带一�
   ).toEqual([expect.stringMatching(/USING INDEX/)]);
 });
 
-test('退回过更早的发布、它按原名又建了同样列的索引：影子表一组列只建一个，拉到一半重启时不当作样子变了，接着拉完', async () => {
+test('rolled back to earlier release that recreated index on same columns under original name: shadow table builds one index per column set, resumes without treating schema as changed across restart', async () => {
   const storage = deviceStorage();
   storage.define(deviceDefinitions([indexed]));
   const device = new Device(storage, [indexed]);
-  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一', { day: 1 })]));
+  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one', { day: 1 })]));
   await device.private.receive(last(null, 'n1', 1));
   device.close();
   storage.sql.exec('CREATE INDEX IF NOT EXISTS "workout_day" ON "workout" ("day")');
   const reopened = new Device(storage, [indexed]);
   const base = { version: 1, nonce: 1 };
-  await reopened.private.receive(chunk(base, undefined, 'n2', [{ op: 'clear' }, putWorkout('w2', '二', { day: 2 })]));
+  await reopened.private.receive(chunk(base, undefined, 'n2', [{ op: 'clear' }, putWorkout('w2', 'two', { day: 2 })]));
   reopened.close();
   const again = new Device(storage, [indexed]);
   expect(again.private.staging()).toBe(true);
@@ -123,108 +124,110 @@ test('退回过更早的发布、它按原名又建了同样列的索引：影�
   expect(indexes(storage)).toEqual(['CREATE INDEX ON "workout" ("day")']);
 });
 
-test('同步表上有视图：换表照常（改名时不改写视图），换上后视图读到新表的行', async () => {
+test('synced table has views: swap works normally (renaming does not rewrite views), view reads new table rows after swap', async () => {
   const storage = deviceStorage(createWorkout, 'CREATE VIEW recent AS SELECT id FROM workout');
   const device = new Device(storage, tables);
-  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一')]));
-  await device.private.receive(last(null, 'n1', 1, [putWorkout('w2', '二')]));
+  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one')]));
+  await device.private.receive(last(null, 'n1', 1, [putWorkout('w2', 'two')]));
   expect(storage.sql.exec('SELECT id FROM recent ORDER BY id').toArray()).toEqual([{ id: 'w1' }, { id: 'w2' }]);
-  // 临时开的已关回去
+  // Temporarily enabled flag restored
   expect(storage.sql.exec('PRAGMA legacy_alter_table').toArray()[0]?.legacy_alter_table).toBe(0);
 });
 
-test('换表中途出错（磁盘满）：整个落地回滚，同步表、影子表、暂存与游标都照旧；再收末块照常落地', async () => {
+test('error mid-swap (disk full): entire apply rolls back, synced table, shadow table, stage, and cookie unchanged; subsequent final chunk applies normally', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
-  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('old', '旧的')]));
+  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('old', 'old')]));
   const base = { version: 1, nonce: 1 };
-  await device.private.receive(chunk(base, undefined, 'n1', [{ op: 'drop', table: 'workout' }, putWorkout('w1', '一')]));
+  await device.private.receive(chunk(base, undefined, 'n1', [{ op: 'drop', table: 'workout' }, putWorkout('w1', 'one')]));
   failOnce(storage, 'ALTER TABLE "_syncline_shadow_workout" RENAME');
-  await expect(device.private.receive(last(base, 'n1', 2, [putWorkout('w2', '二')]))).rejects.toThrow(injectedError);
-  expect(workouts(storage)).toEqual([{ id: 'old', note: '旧的' }]);
+  await expect(device.private.receive(last(base, 'n1', 2, [putWorkout('w2', 'two')]))).rejects.toThrow(injectedError);
+  expect(workouts(storage)).toEqual([{ id: 'old', note: 'old' }]);
   expect(device.private.cookie()).toEqual(base);
   expect(shadows(storage)).toEqual(['_syncline_shadow_workout']);
   expect(device.private.staging()).toBe(true);
-  expect(await device.private.receive(last(base, 'n1', 2, [putWorkout('w2', '二')]))).toBe(true);
+  expect(await device.private.receive(last(base, 'n1', 2, [putWorkout('w2', 'two')]))).toBe(true);
   expect(workouts(storage)).toEqual([
-    { id: 'w1', note: '一' },
-    { id: 'w2', note: '二' },
+    { id: 'w1', note: 'one' },
+    { id: 'w2', note: 'two' },
   ]);
 });
 
-test('同步表上有接入方自己按表达式建的索引：影子表不照建它，换表照常', async () => {
+test('synced table has expression index created by consumer: shadow table skips it, swap succeeds normally', async () => {
   const storage = deviceStorage(createWorkout, 'CREATE INDEX workout_note ON workout (lower(note))');
   const device = new Device(storage, tables);
-  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一')]));
+  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one')]));
   await device.private.receive(last(null, 'n1', 1));
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: '一' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'one' }]);
 });
 
-test('拉到一半时 App 更新删掉了一张表：它的影子表一起删，别的表接着拉完', async () => {
+test('app update removes table mid-pull: its shadow table dropped, other tables complete pulling', async () => {
   const plan = sqliteTable('plan', { id: text().primaryKey() });
   const storage = deviceStorage(createWorkout, 'CREATE TABLE plan (id TEXT PRIMARY KEY)');
   const device = new Device(storage, [workout, plan]);
-  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一')]));
+  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one')]));
   expect(shadows(storage)).toEqual(['_syncline_shadow_plan', '_syncline_shadow_workout']);
   device.close();
   const reopened = new Device(storage, tables, { retired: ['plan'] });
   expect(shadows(storage)).toEqual(['_syncline_shadow_workout']);
   await reopened.private.receive(last(null, 'n1', 1));
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: '一' }]);
+  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'one' }]);
 });
 
-test('整张表重给时本机有待上传：先撤回、再换表、之后重放，本机写的行在新表里、照常待上传', async () => {
+test('pending writes present during table replacement: rewinds, swaps table, then replays; local rows present in new table and remain pending', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
-  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('w1', '旧的')]));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w9', note: '本机写的' }));
-  await write(device, (tx) => tx.update(workout).set({ note: '本机改的' }));
+  await device.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('w1', 'old')]));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w9', note: 'written locally' }));
+  await write(device, (tx) => tx.update(workout).set({ note: 'modified locally' }));
   const base = { version: 1, nonce: 1 };
   await device.private.receive(
-    chunk(base, undefined, 'n1', [{ op: 'drop', table: 'workout' }, putWorkout('w1', '云端的'), putWorkout('w2', '二')]),
+    chunk(base, undefined, 'n1', [{ op: 'drop', table: 'workout' }, putWorkout('w1', 'from cloud'), putWorkout('w2', 'two')]),
   );
   await device.private.receive(last(base, 'n1', 2));
   expect(workouts(storage)).toEqual([
-    { id: 'w1', note: '本机改的' },
-    { id: 'w2', note: '二' },
-    { id: 'w9', note: '本机改的' },
+    { id: 'w1', note: 'modified locally' },
+    { id: 'w2', note: 'two' },
+    { id: 'w9', note: 'modified locally' },
   ]);
   expect(device.private.pendingCount()).toBe(2);
 });
 
-test('影子表里放不进本机列的值：这一行进暂存、落地时存进 _syncline_unknown、不在同步表；之后又来了放得进的值，以后到的为准、只在同步表', async () => {
+test('value incompatible with local column in shadow table: staged and stored in _syncline_unknown on apply, excluded from synced table; later compatible value takes precedence in synced table', async () => {
   const strict = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
   const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT');
   const device = new Device(storage, [strict]);
   const reported = captureReported();
   await device.private.receive(
-    chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一', { reps: 'bad' }), putWorkout('w2', '二', { reps: 'bad' })]),
+    chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one', { reps: 'bad' }), putWorkout('w2', 'two', { reps: 'bad' })]),
   );
   expect(staged(storage)).toEqual([
     { tbl: '', key: '', kind: 'clear' },
     { tbl: 'workout', key: '{"id":"w1"}', kind: 'put' },
     { tbl: 'workout', key: '{"id":"w2"}', kind: 'put' },
   ]);
-  await device.private.receive(chunk(null, 'n1', 'n2', [putWorkout('w2', '二改', { reps: 2 }), putWorkout('w3', '三', { reps: 3 })]));
+  await device.private.receive(
+    chunk(null, 'n1', 'n2', [putWorkout('w2', 'two updated', { reps: 2 }), putWorkout('w3', 'three', { reps: 3 })]),
+  );
   await device.private.receive(last(null, 'n2', 1));
   expect(storage.sql.exec('SELECT id, note, reps FROM workout ORDER BY id').toArray()).toEqual([
-    { id: 'w2', note: '二改', reps: 2 },
-    { id: 'w3', note: '三', reps: 3 },
+    { id: 'w2', note: 'two updated', reps: 2 },
+    { id: 'w3', note: 'three', reps: 3 },
   ]);
   expect(storage.sql.exec('SELECT key FROM _syncline_unknown').toArray()).toEqual([{ key: '{"id":"w1"}' }]);
   expect(reported).toHaveLength(1);
 });
 
-/** 一台新设备整份拉了第一块（行在影子表里）就关了：给出它的库 */
+/** New device closes after pulling first chunk of full sync (rows in shadow table): returns its storage. */
 async function closedMidway() {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
-  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', '一')]));
+  await device.private.receive(chunk(null, undefined, 'n1', [{ op: 'clear' }, putWorkout('w1', 'one')]));
   device.close();
   return storage;
 }
 
-test('拉到一半时 App 更新加了一列：影子表与同步表不一样了，拉到一半的作废、从头拉，落地后有新的列', async () => {
+test('app update adds column mid-pull: shadow and synced table schemas diverge, invalidates in-progress pull and restarts from scratch, new column present after apply', async () => {
   const storage = await closedMidway();
   const wider = sqliteTable('workout', { id: text().primaryKey(), note: text(), day: integer() });
   storage.define(deviceDefinitions([wider]));
@@ -232,18 +235,20 @@ test('拉到一半时 App 更新加了一列：影子表与同步表不一样了
   expect(shadows(storage)).toEqual([]);
   expect(reopened.private.staging()).toBe(false);
   expect(reopened.private.pullRequest()).not.toHaveProperty('cursor');
-  await reopened.private.receive(chunk(null, undefined, 'm1', [{ op: 'clear' }, putWorkout('w1', '一', { day: 5 })]));
+  await reopened.private.receive(chunk(null, undefined, 'm1', [{ op: 'clear' }, putWorkout('w1', 'one', { day: 5 })]));
   await reopened.private.receive(last(null, 'm1', 1));
-  expect(storage.sql.exec('SELECT id, note, day, _extra FROM workout').toArray()).toEqual([{ id: 'w1', note: '一', day: 5, _extra: null }]);
+  expect(storage.sql.exec('SELECT id, note, day, _extra FROM workout').toArray()).toEqual([
+    { id: 'w1', note: 'one', day: 5, _extra: null },
+  ]);
 });
 
-test('拉到一半时内部表退版清了暂存、留下了影子表：再打开时影子表删掉，不当作在拉，从头拉', async () => {
+test('internal table downgrade clears stage but leaves shadow table mid-pull: shadow table dropped on reopen, pull restarts from scratch', async () => {
   const storage = await closedMidway();
   storage.sql.exec('DELETE FROM _syncline_stage');
   storage.sql.exec('DELETE FROM _syncline_staged');
   const reopened = new Device(storage, tables);
   expect(shadows(storage)).toEqual([]);
   expect(reopened.private.staging()).toBe(false);
-  await reopened.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('w2', '二')]));
-  expect(workouts(storage)).toEqual([{ id: 'w2', note: '二' }]);
+  await reopened.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('w2', 'two')]));
+  expect(workouts(storage)).toEqual([{ id: 'w2', note: 'two' }]);
 });

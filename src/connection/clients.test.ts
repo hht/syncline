@@ -6,10 +6,11 @@ import { createWorkout, serving, tables, workout, workouts, write } from '../tes
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 
-// 每次启动一个客户端：有待上传的启动多了，拉取与连接照样连得上（私有空间的拉取把客户端放进 POST 的正文，连接的网址只带协议版本与游标），
-// 连上时的补齐按游标确认（模型的 LmidsSince）
+// One client per launch: accumulation of pending writes across launches still allows successful pulls and connections
+// (private space pull puts clients in POST body, connection URL only carries protocol version and cookie),
+// with initial catch-up confirming pending mutations via cookie (LmidsSince in model).
 
-/** 一台设备连着一个空间（limit 是一块与一条消息的上限），记下连接的网址 */
+/** Connects a device to a space with an optional limit per chunk and message, tracking connection URLs. */
 function connected(device: Device, limit?: number) {
   const cloud = cloudStorage(createWorkout);
   const space = new Space(cloud, tables);
@@ -24,8 +25,8 @@ function connected(device: Device, limit?: number) {
   return { cloud, space, network, connection, addresses };
 }
 
-// 200 次打开设备库、200 条写，并行跑满时约 5 秒，默认的 5 秒不够
-test('有待上传的启动了 200 次（200 个客户端）：HTTP 拉取与 WebSocket 都连得上，待上传都推上去、都被确认；连接的网址只有版本与游标', {
+// 200 opens and writes take ~5s under high concurrency, requiring extended timeout.
+test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', {
   timeout: 30_000,
 }, async () => {
   const storage = deviceStorage(createWorkout);
@@ -45,25 +46,25 @@ test('有待上传的启动了 200 次（200 个客户端）：HTTP 拉取与 We
   connection.stop();
 });
 
-test('推上去执行了、确认的通知没送到就断了：重连的补齐按游标确认这批（网址里不列客户端），不重复执行', async () => {
+test('reconnect catch-up confirms applied mutations by cookie without re-executing when disconnected before poke delivery', async () => {
   const device = new Device(deviceStorage(createWorkout), tables);
   const { cloud, network, connection } = connected(device);
   connection.start();
   await drain(network, { advance: false });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: '深蹲' }));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
   await flush();
-  // 推送送到云端、执行了，通知还在路上时断了
+  // Mutation applied on server; disconnect while confirmation poke is in flight.
   network.deliver();
   expect(workouts(cloud)).toHaveLength(1);
   network.disconnect(0);
   expect(device.private.pending()).toHaveLength(1);
   await drain(network);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(cloud)).toEqual([expect.objectContaining({ id: 'w1', note: '深蹲' })]);
+  expect(workouts(cloud)).toEqual([expect.objectContaining({ id: 'w1', note: 'squat' })]);
   connection.stop();
 });
 
-test('离线期间别的 200 个客户端各推了一条：连上时的补齐要确认的客户端太多、装不下一条消息，只发提示，设备连着走 HTTP 拉到最新', async () => {
+test('falls back to hint and HTTP pull when catch-up poke exceeds message size limit due to 200 client confirmations', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
   const limit = 4000;

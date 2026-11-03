@@ -10,15 +10,15 @@ import { Commits } from './commits.ts';
 import { decodePosition, landedAt } from './position.ts';
 import { Space } from './space.ts';
 
-// 共用空间的拉取：按订阅的桶给看得见的行；请求带游标与落地的订阅，整份从最近的块边界起，落在同一版、订阅相同的设备网址相同；
-// 订阅变了从落地的地方重起，加了桶只扫新加的，去掉了桶整份；规则改了这张表重扫；每块带 seen
+// Shared space pulls: delivers visible rows for subscribed buckets; full pulls align to chunk boundaries for shared URLs;
+// added buckets scan only additions, removed buckets trigger full pull, rule changes rescan tables, and each chunk carries seen.
 
-test('桶：公开的桶只有已发布的计划与给公开看的计划日，全部的桶都有；一行在不在桶里只看它自己的列；行出了桶，增量里给删除', () => {
+test('buckets: public bucket includes published programs and public days while all includes everything; row visibility depends only on its own columns; rows leaving bucket emit del in incremental pulls', () => {
   const { space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft');
   publish('p3', 'published', 'admin');
-  // p2 的计划是草稿，它的计划日写的是公开：看得见。计划日跟着计划藏起来，要把受众写在计划日上
+  // Draft program p2 has public day: visible. Days follow program visibility only if audience is set explicitly on the day.
   const first = pullAll(space, viewer, { cookie: null });
   expect(contents(first)).toEqual(['day/p1-d', 'day/p2-d', 'program/p1', 'program/p3']);
   expect(contents(pullAll(space, admin, { cookie: null }))).toHaveLength(6);
@@ -27,7 +27,7 @@ test('桶：公开的桶只有已发布的计划与给公开看的计划日，�
   expect((pullAll(space, viewer, landedRequest(first)).at(-1) as Poke).patch).toEqual([{ op: 'del', table: 'program', key: { id: 'p1' } }]);
 });
 
-test('声明与桶规则都没变时重新打开共用空间（对象被叫醒、部署）：一行也不写', () => {
+test('reopening shared space with identical schema and bucket rules executes zero writes', () => {
   const { cloud, publish } = catalog();
   publish('p1');
   const changes = () => Number(cloud.sql.exec('SELECT total_changes() AS n').toArray()[0]?.n);
@@ -36,14 +36,14 @@ test('声明与桶规则都没变时重新打开共用空间（对象被叫醒�
   expect(changes() - before).toBe(0);
 });
 
-test('首次整份从最近的块边界起：不同时间开始的设备水位相同，之后从水位追增量', () => {
+test('initial full pull starts from nearest chunk boundary: devices starting at different times share watermark, catching up incrementally thereafter', () => {
   const { space, publish } = catalog();
   for (const id of ['p1', 'p2']) publish(id);
   const early = pullAll(space, admin, { cookie: null }, 1);
   publish('p3');
   const late = pullAll(space, admin, { cookie: null }, 1);
 
-  // 写了 3 次、6 行：块边界在第 2 版（4 行）；两次首次整份的水位都是第 2 版
+  // 3 writes, 6 rows: chunk boundary at version 2 (4 rows); both initial full pulls share version 2 watermark.
   const watermark = (chunk: Chunk | Poke | Reset | undefined) => decodePosition((chunk as Chunk).next)?.round.to;
   expect(watermark(early[0])).toEqual(watermark(late[0]));
   expect(watermark(late[0])).toMatchObject({ version: 2 });
@@ -51,7 +51,7 @@ test('首次整份从最近的块边界起：不同时间开始的设备水位�
   expect(contents(late)).toHaveLength(6);
 });
 
-test('落在同一版、订阅相同的设备带同一个网址：整份拉到的与从更早一版增量拉到的，接着拉的请求与结果都相同', () => {
+test('devices landing at same version with identical subscription carry identical URLs: full pulls and incremental pulls from earlier versions share requests and responses', () => {
   const { space, publish } = catalog();
   publish('p1');
   const at1 = pullAll(space, admin, { cookie: null });
@@ -63,7 +63,7 @@ test('落在同一版、订阅相同的设备带同一个网址：整份拉到�
   expect(space.pullShared(landedRequest(caught), admin)).toEqual(space.pullShared(landedRequest(at2), admin));
 });
 
-test('每块带 seen（算这一块时的最新一版）；末块另带 next 与按的订阅，设备发现它是过时的副本时从 next 接着拉；位置不带 seen', () => {
+test('each chunk carries seen (head version at computation); final chunk carries next and subscription for resuming from stale cache responses; positions omit seen', () => {
   const { space, publish } = catalog();
   for (const id of ['p1', 'p2', 'p3']) publish(id);
   const chunks = pullAll(space, admin, { cookie: null }, 1);
@@ -75,7 +75,7 @@ test('每块带 seen（算这一块时的最新一版）；末块另带 next 与
   expect(space.pullShared({ ...landedRequest(chunks), cursor: last.next ?? '' }, admin)).toMatchObject({ cookie: last.cookie, patch: [] });
 });
 
-test('订阅加了桶（令牌换了）：从落地的地方重起，只扫新加的桶、不清空，原有的行留着（分在几块里也是）；之后的增量按新订阅给', () => {
+test('subscription adds buckets (token upgraded): resumes from landed position, scanning only newly added buckets without table drops; subsequent incremental pulls use new subscription', () => {
   const { space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft', 'admin');
@@ -93,7 +93,7 @@ test('订阅加了桶（令牌换了）：从落地的地方重起，只扫新�
   ]);
 });
 
-test('订阅去掉了桶：整份重下（先清空），只剩新订阅看得见的行；分块拉到一半时订阅变了，按新订阅从落地的地方重起', () => {
+test('subscription removes buckets: triggers full pull (with clear op) leaving only rows visible under new subscription; mid-pull subscription changes resume from landed position', () => {
   const { space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft', 'admin');
@@ -102,13 +102,13 @@ test('订阅去掉了桶：整份重下（先清空），只剩新订阅看得�
   expect((after[0] as Chunk).patch[0]).toEqual({ op: 'clear' });
   expect(contents(after)).toEqual(['day/p1-d', 'program/p1']);
 
-  // 管理员拉到一半（还在扫）时被撤了权限：带着按全部的桶算的位置来拉，按公开的桶整份重下
+  // Admin permissions revoked mid-pull while scanning: resumes from position with public subscription, triggering full pull.
   const [first] = pullAll(space, admin, { cookie: null }, 1) as Chunk[];
   const switched = pullAll(space, viewer, { cookie: null, cursor: first?.next ?? '' });
   expect(contents([first as Chunk, ...switched])).toEqual(['day/p1-d', 'program/p1']);
 });
 
-test('部署改了一张表的桶规则：拿着旧规则下的游标接着拉、不重置，这张表清掉、按新规则重给看得见的行，别的表不动；只差空白与大小写的不算改了', () => {
+test('deployment updates bucket rules on a table: incremental pull resumes without reset, dropping only updated table and rescanning under new rules; whitespace/case differences ignored', () => {
   const { cloud, space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft');
@@ -133,7 +133,7 @@ test('部署改了一张表的桶规则：拿着旧规则下的游标接着拉�
   ]);
 });
 
-test('部署改了桶规则、之后删了按新规则看不见的行：拿着旧规则下的游标接着拉，设备上不留这一行（删除按新规则记、不在订阅里，靠清掉这张表）', () => {
+test('deployment updates bucket rules and deletes row now hidden under new rules: incremental pull removes row via table drop rather than subscription filter', () => {
   const { cloud, space, publish } = catalog();
   publish('p1');
   publish('p2');
@@ -144,11 +144,11 @@ test('部署改了桶规则、之后删了按新规则看不见的行：拿着�
   changed.mutate((tx) => tx.delete(program, { id: 'p1' }));
   const after = pullAll(changed, viewer, landedRequest(before));
   expect(contents(before)).toEqual(['day/p1-d', 'day/p2-d', 'program/p1', 'program/p2']);
-  // 计划日引用计划，删计划连带删了它
+  // Day references program, deleted via cascade
   expect(contents([...before, ...after])).toEqual(['day/p2-d', 'program/p2']);
 });
 
-test('桶规则改了又改回来（部署后回滚），其间离线的设备拿着最早的游标接着拉：结果与现在整份拉的一样，不漏、不多', () => {
+test('bucket rules updated and rolled back while offline: device resuming from earliest cookie matches fresh full pull exactly without missing or extraneous rows', () => {
   const { cloud, space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft');
@@ -165,7 +165,7 @@ test('桶规则改了又改回来（部署后回滚），其间离线的设备�
   expect(contents([...before, ...after])).toEqual(contents(pullAll(back, viewer, { cookie: null })));
 });
 
-test('一次后台写改到很多行（目录整份导入）：记成一版，增量能在这次写的中间分块，设备只落在这一版', () => {
+test('large server write modifying many rows (catalog bulk import): recorded as single version, splittable across incremental chunks while landing at that version', () => {
   const { space } = catalog();
   const before = pullAll(space, admin, { cookie: null });
   space.mutate((tx) => {
@@ -179,7 +179,7 @@ test('一次后台写改到很多行（目录整份导入）：记成一版，�
   expect((chunks.at(-1) as Poke).cookie).toEqual(space.head());
 });
 
-test('从没公开过的草稿：它的主键与改动不发给公开的桶；公开过又撤下的给删除；连带删的只给看过的那几行', () => {
+test('unreleased draft: keys and row changes excluded from public buckets; unpublishing emits del; cascade deletes emit only visible child rows', () => {
   const { space, publish } = catalog();
   publish('p1');
   const first = pullAll(space, viewer, { cookie: null });
@@ -191,17 +191,17 @@ test('从没公开过的草稿：它的主键与改动不发给公开的桶；�
   space.mutate((tx) => tx.update(program, { id: 'secret', status: 'draft-2' }));
   const ops = pullAll(space, viewer, landedRequest(first)).flatMap((chunk) => ('patch' in chunk ? chunk.patch : []));
   expect(ops).toEqual([{ op: 'del', table: 'program', key: { id: 'p1' } }]);
-  // 发给分片的一轮里，草稿只在全部的桶里
+  // In shard round, draft exists only in "all" bucket
   const rows = space.round(64_000, base).rows ?? [];
   expect(rows.find((row) => row.key.id === 'secret')?.touched).toEqual(['["all"]']);
-  // 连带删的：删掉草稿的计划，连带删它的训练日；它们从没在公开的桶里
+  // Cascade delete: deleting draft program cascades to days that were never in public bucket
   const later = space.head();
   space.mutate((tx) => tx.insert(day, { id: 'secret-d', program_id: 'secret', audience: 'admin' }));
   space.mutate((tx) => tx.delete(program, { id: 'secret' }));
   for (const row of space.round(64_000, later).rows ?? []) expect(row.touched).toEqual(['["all"]']);
 });
 
-test('发给分片的一轮装不下就不带行：这段提交记录的主键就超过上限时只给版本、不读提交（不把它们读进内存）；从最新一版起的一轮没有改动', () => {
+test('shard broadcast round omits row data when changes exceed budget: walks version numbers without reading commit records; round starting at head carries no rows', () => {
   const { space } = catalog();
   const base = space.head();
   space.mutate((tx) => {
@@ -214,19 +214,19 @@ test('发给分片的一轮装不下就不带行：这段提交记录的主键�
   expect(space.round(64_000)).toMatchObject({ base: space.head(), rows: [] });
 });
 
-test('桶规则写错（表不是同步表、列不在表上、引用别的表、几张表的分桶列对不上）：建共用空间时就报错', () => {
+test('rejects malformed bucket rules on space initialization (unsynced table, nonexistent column, subquery, or mismatched bucket columns across tables)', () => {
   const cloud = cloudStorage(...schema);
   for (const [buckets, message] of [
-    [{ r: { programs: { where: "status = 'published'" } } }, '不是共用空间的同步表'],
+    [{ r: { programs: { where: "status = 'published'" } } }, 'is not a synced table'],
     [{ r: { program: { where: "state = 'published'" } } }, 'no such column'],
-    [{ r: { day: { where: "program_id IN (SELECT id FROM program WHERE status = 'published')" } } }, '不能有子查询'],
-    [{ r: { program: { by: ['owner'] } } }, '不在表上'],
-    [{ r: { program: { by: ['status'] }, day: {} } }, '个数与类型要一样'],
+    [{ r: { day: { where: "program_id IN (SELECT id FROM program WHERE status = 'published')" } } }, 'contains a subquery'],
+    [{ r: { program: { by: ['owner'] } } }, 'does not exist'],
+    [{ r: { program: { by: ['status'] }, day: {} } }, 'has mismatched bucket columns'],
   ] satisfies [BucketRules, string][])
     expect(() => new Space(cloud, [program, day], { shared: { buckets } })).toThrow(message);
 });
 
-test('分桶列：一行在它的分桶列取值的那个桶里，改了分桶列就从一个桶移到另一个桶，分桶列为空的不在任何桶里', () => {
+test('bucket columns: row belongs to bucket defined by its bucket column value; updating bucket column moves row across buckets; null values belong to no bucket', () => {
   const task = sqliteTable('task', { id: text().primaryKey(), team: integer() });
   const space = new Space(cloudStorage('CREATE TABLE task (id TEXT PRIMARY KEY, team INTEGER)'), [task], {
     shared: { buckets: { team: { task: { by: ['team'] } } } },
@@ -246,7 +246,7 @@ test('分桶列：一行在它的分桶列取值的那个桶里，改了分桶�
   expect(contents([...twos, ...pullAll(space, two, landedRequest(twos))])).toEqual(['task/a', 'task/b']);
 });
 
-test('同一次后台写里一行只在中间状态进过某个桶：订阅那个桶的设备收不到它（主键也不发），改前按这次写之前算', () => {
+test('row entering bucket only in transient state within single write is excluded from that bucket (including primary key); pre-write state evaluates prior to transaction', () => {
   const task = sqliteTable('task', { id: text().primaryKey(), team: text() });
   const space = new Space(cloudStorage('CREATE TABLE task (id TEXT PRIMARY KEY, team TEXT)'), [task], {
     shared: { buckets: { team: { task: { by: ['team'] } } } },
@@ -262,23 +262,23 @@ test('同一次后台写里一行只在中间状态进过某个桶：订阅那�
     tx.delete(task, { id: 'passing' });
   });
   expect(pullAll(space, x, landedRequest(first)).flatMap((chunk) => ('patch' in chunk ? chunk.patch : []))).toEqual([]);
-  // 发给分片的一轮里，它们记下的桶不含 x（分片按连接的订阅筛，x 的设备收不到）
+  // Shard round touched buckets exclude transient bucket x (connections for x receive nothing)
   const touched = Object.fromEntries(
     (space.round(64_000, (first.at(-1) as Poke).cookie).rows ?? []).map(({ key, touched: names }) => [String(key.id), names]),
   );
   expect(touched).toEqual({ secret: ['["team","a"]', '["team","b"]'], passing: [] });
 });
 
-/** 设备上的一个共用空间按订阅拉到末块 */
+/** Pulls a shared space mirror on device to completion. */
 async function syncMirror(space: Space, mirror: ReturnType<Device['shared']>, who: ReturnType<typeof subscribed>) {
   for (let step = 0; step < 50; step += 1) {
     await mirror.receive(space.pullShared(mirror.pullRequest(), who));
     if (mirror.cookie() && !mirror.staging()) return;
   }
-  throw new Error('拉不完');
+  throw new Error('Pull did not complete');
 }
 
-test('同一台设备换了人登录（App 传的 owner 换了）：打开时先清掉上一个人看过的行，整份重下', async () => {
+test('user account switch on same device (different owner): clears previous data on open and performs full pull', async () => {
   const { space, publish } = catalog();
   publish('p1');
   publish('p2', 'draft');

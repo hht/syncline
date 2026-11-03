@@ -5,7 +5,7 @@ import { cloudStorage } from '../test/test-storage.ts';
 import { Server, type Socket } from './server.ts';
 import { Space } from './space.ts';
 
-// 一个私有空间同时至多几条连接（connections）：再连上来就以 1008 关掉最早接受的一条，新的照常补齐
+// Connection limit per private space (connections): exceeding limit closes the oldest accepted socket with 1008 while new socket catches up normally.
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 
@@ -13,7 +13,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test('连接上限调成 2：第三条连上来关掉最早接受的一条（全部连接从新到旧给，同 workerd），另两条开着', () => {
+test('connection limit configured to 2: third connection closes oldest accepted connection (sockets listed newest-to-oldest, matching workerd) while others remain open', () => {
   vi.useFakeTimers();
   const space = new Space(cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY)'), [note]);
   const sockets: Socket[] = [];
