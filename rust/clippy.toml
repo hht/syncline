@@ -1,0 +1,3 @@
+# 函数体至多 50 行（不数空行与注释），与 TS 一侧 biome 的 noExcessiveLinesPerFunction 相同
+# @see https://rust-lang.github.io/rust-clippy/master/index.html#too_many_lines
+too-many-lines-threshold = 50

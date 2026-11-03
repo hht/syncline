@@ -1,0 +1,5 @@
+allowBuilds:
+  lefthook: true
+  # wrangler 的打包器与本地运行时：安装脚本检查并放好本平台的二进制
+  esbuild: true
+  workerd: true

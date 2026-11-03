@@ -1,0 +1,3 @@
+---- MODULE MCLiveSharedRule ----
+EXTENDS MCSharedRule
+====

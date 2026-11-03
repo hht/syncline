@@ -1,0 +1,3 @@
+---- MODULE MCSharedLate ----
+EXTENDS MCShared
+====

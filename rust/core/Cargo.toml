@@ -1,0 +1,25 @@
+[package]
+name = "syncline"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+self_cell.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
+
+# 测试数 SQLite 开始执行的语句、在指定的一条上中断（与 wasm 的故障注入同一个做法）
+[dev-dependencies]
+rusqlite = { workspace = true, features = ["trace"] }
+
+# 测试的构建打开：收测试直接喂的拉取结果与消息、整份重下、对校验和（client 的 Probe），不经连接
+[features]
+testing = []
+
+[lints]
+workspace = true

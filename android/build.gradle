@@ -1,0 +1,36 @@
+// Syncline 的原生模块：Kotlin 的 Expo 模块（SynclineModule.kt）加 Rust 的设备一侧（rust/native）。构建前用 cargo-ndk 把后者编成各个 ABI 的
+// 动态库（只编这次构建要的 ABI，reactNativeArchitectures），放进 jniLibs 打进包里；cargo 是增量编译，没改时一两秒。
+// 用 rustup 的 cargo 代理并清掉 RUSTUP_TOOLCHAIN：版本只认 rust/rust-toolchain.toml
+// @see https://github.com/bbqsrc/cargo-ndk
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.syncline'
+version = '0.0.0'
+
+android {
+  namespace "expo.modules.syncline"
+  ndkVersion rootProject.ext.ndkVersion
+  defaultConfig {
+    versionCode 1
+    versionName "0.0.0"
+  }
+}
+
+def rustLibraries = layout.buildDirectory.dir("rustJniLibs")
+android.sourceSets.main.jniLibs.srcDirs += rustLibraries
+
+def cargoRust = tasks.register("cargoRust", Exec) {
+  def cargoHome = System.getenv("CARGO_HOME") ?: "${System.getProperty('user.home')}/.cargo"
+  def abis = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,arm64-v8a,x86,x86_64").split(",")
+  workingDir file("../rust")
+  executable "${cargoHome}/bin/cargo"
+  environment "RUSTUP_TOOLCHAIN", ""
+  environment "ANDROID_NDK_HOME", android.ndkDirectory.path
+  args(["ndk", "--platform", "${rootProject.ext.minSdkVersion}", "-o", rustLibraries.get().asFile.path]
+    + abis.collectMany { ["-t", it.trim()] }
+    + ["build", "--locked", "--release", "-p", "syncline-native"])
+}
+tasks.named("preBuild") { dependsOn cargoRust }

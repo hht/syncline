@@ -1,0 +1,61 @@
+{
+  "forbidden": [
+    {
+      "name": "device-not-cloud",
+      "comment": "设备上的 JS（expo/ 下的入口与绑定：手机、web 页面与 Worker、React、后台同步）不许经任何路径引用云端的代码：Metro 不摇树，引用到就打进手机包",
+      "severity": "error",
+      "from": {
+        "path": "^src/expo/[^/]+\\.ts$",
+        "pathNot": "\\.test\\.ts$"
+      },
+      "to": {
+        "path": "^src/(cloud|cloudflare|features/[^/]+/cloud)/",
+        "reachable": true
+      }
+    },
+    {
+      "name": "core-not-features",
+      "comment": "核心不许引用可插拔的功能（src/features/：校验和、导出）：核心只定接口，云端的功能由入口文件（组装根：cloudflare/index.ts）接上（设备一侧的在 Rust 的核心里）；不接它们时核心照样完整工作（只有要对校验和的测试才经 test/test-checksum.ts 接上）",
+      "severity": "error",
+      "from": {
+        "path": "^src/(common|tables|cloud|expo|cloudflare)/",
+        "pathNot": "(\\.test\\.ts$|/test-[^/]+\\.ts$|^src/cloudflare/index\\.ts$)"
+      },
+      "to": {
+        "path": "^src/features/"
+      }
+    },
+    {
+      "name": "no-circular",
+      "comment": "循环依赖让加载顺序和测试边界都说不清",
+      "severity": "error",
+      "from": {},
+      "to": {
+        "circular": true
+      }
+    },
+    {
+      "name": "product-not-tools",
+      "comment": "产品代码不引用门禁与开发脚本：tools/ 只给开发用",
+      "severity": "error",
+      "from": {
+        "path": "^(src|probes)/"
+      },
+      "to": {
+        "path": "^tools/"
+      }
+    }
+  ],
+  "options": {
+    "doNotFollow": {
+      "path": "node_modules"
+    },
+    "tsPreCompilationDeps": true,
+    "exclude": {
+      "path": "(^|/)(node_modules|rust/target)/"
+    },
+    "tsConfig": {
+      "fileName": "tsconfig.json"
+    }
+  }
+}

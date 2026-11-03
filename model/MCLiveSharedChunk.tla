@@ -1,0 +1,3 @@
+---- MODULE MCLiveSharedChunk ----
+EXTENDS MCShared
+====

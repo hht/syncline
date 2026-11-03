@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    // Workers 没有浏览器的 DOM；运行时与 Env 类型由 wrangler types 生成
+    "lib": ["esnext"],
+    "types": ["@cloudflare/vitest-plugin/types"]
+  },
+  "include": [
+    "vitest.workerd.config.ts",
+    "src/cloudflare",
+    "src/**/*.workerd.test.ts",
+    "probes/cloudflare/worker.ts",
+    "probes/cloudflare/shared-worker.ts"
+  ]
+}

@@ -1,0 +1,11 @@
+// 手机上的 Hermes（React Native 自带的版本）没有这两个内置方法，调用即抛「undefined is not a function」；
+// Node 与浏览器都有，所以测试照样全过，只在手机上坏。Hermes 的 ES2023 其余方法（toReversed、with、findLast）都有，类型检查的 lib 拦不住这一个，由这条规则拦
+// @see https://github.com/vitalyiegorov/suuudokuuu/pull/446
+language js
+
+or {
+  `$array.toSorted($...)`,
+  `Array.fromAsync($...)`
+} as $call where {
+  register_diagnostic(span=$call, message="手机上的 Hermes 没有 Array.prototype.toSorted、Array.fromAsync（调用即抛错）：复制再排 [...items].sort(…)，或逐个 await")
+}

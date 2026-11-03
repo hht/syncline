@@ -1,0 +1,18 @@
+node_modules/
+.check/
+.q/
+# Expo 模块被 App 编译时 Gradle 留下的产物
+android/build/
+android/.cxx/
+*.db
+.env*
+.wrangler/
+# 由 wrangler types 在安装依赖时生成（package.json 的 postinstall）
+worker-configuration.d.ts
+# tsc 增量编译的缓存
+*.tsbuildinfo
+# 门禁用的外部工具（pnpm model:setup 装的 TLA+ 工具）
+.tools/
+
+# 换会话的交接（AGENTS.md「汇报」）：每次覆盖，不提交
+/HANDOFF.md

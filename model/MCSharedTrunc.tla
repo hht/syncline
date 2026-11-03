@@ -1,0 +1,3 @@
+---- MODULE MCSharedTrunc ----
+EXTENDS MCShared
+====

@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 140 },
+  "javascript": { "formatter": { "quoteStyle": "single" } },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "error",
+        "noExcessiveLinesPerFunction": "error"
+      },
+      "style": {
+        "noExcessiveLinesPerFile": "error"
+      },
+      "suspicious": {
+        "noEmptyBlockStatements": "error",
+        "noExplicitAny": "error"
+      }
+    }
+  },
+  "overrides": [
+    // 会打进手机包的代码不用 Hermes 没有的内置方法（规则与理由在插件文件里）；测试只在 Node 里跑
+    { "includes": ["src/**", "!**/*.test.ts"], "plugins": ["./tools/check/hermes-builtins.grit"] }
+  ]
+}

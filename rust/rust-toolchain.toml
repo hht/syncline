@@ -1,0 +1,14 @@
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+# node 里的测试与 web 用的 wasm；iOS（真机、Apple 芯片与 Intel 的模拟器）；Android 的四种 ABI
+targets = [
+  "wasm32-unknown-unknown",
+  "aarch64-apple-ios",
+  "aarch64-apple-ios-sim",
+  "x86_64-apple-ios",
+  "aarch64-linux-android",
+  "armv7-linux-androideabi",
+  "i686-linux-android",
+  "x86_64-linux-android",
+]

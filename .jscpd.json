@@ -1,0 +1,5 @@
+{
+  "minTokens": 50,
+  "format": ["typescript", "tsx", "javascript", "jsx", "markdown", "rust"],
+  "gitignore": true
+}

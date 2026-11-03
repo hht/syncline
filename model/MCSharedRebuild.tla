@@ -1,0 +1,3 @@
+---- MODULE MCSharedRebuild ----
+EXTENDS MCShared
+====

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // 测试前编 wasm 用 mise 找它装的 LLVM，不是 npm 包
+  "ignoreBinaries": ["mise"],
+  // 平台测试在 workerd 里跑，Worker 是 src/cloudflare/test-worker.ts；真实 Cloudflare 上的探针由命令行直接跑（probes/cloudflare）；vitest.workerd.config.ts 的 include
+  // 顶替了 knip 默认的测试入口，所以另把 src/**/*.test.ts 列为入口
+  "entry": [
+    "src/cloudflare/test-worker.ts",
+    "src/**/*.test.ts",
+    "probes/cloudflare/worker.ts",
+    "probes/cloudflare/push-size.ts",
+    "probes/cloudflare/kill.ts",
+    "probes/cloudflare/cascade.ts",
+    "probes/cloudflare/shared-worker.ts",
+    "probes/cloudflare/shared-write.ts"
+  ],
+  "project": ["src/**/*.{ts,mjs}", "tools/**/*.ts", "probes/**/*.ts"],
+  // 门禁按 node_modules/.bin 的路径调用这几个工具，knip 从脚本里看不到；cloudflare:workers 是运行时自带的模块，不是 npm 包
+  "ignoreDependencies": ["@biomejs/biome", "dependency-cruiser", "jscpd", "cloudflare"]
+}

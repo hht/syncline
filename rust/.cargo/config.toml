@@ -1,0 +1,8 @@
+# 编 wasm 版 SQLite 的开关（sqlite-wasm-rs 读它，追加在它默认的开关之后；原生用的 libsqlite3-sys 不读）。
+# 去掉 bytecode 虚表：bytecode()、tables_used() 在执行时编译传进来的 SQL，接入方的 SELECT 能借它让 PRAGMA 生效，
+# 绕过编译时的 authorizer（database.rs）；原生构建本来就没开它。cargo 只在这个目录里（含子目录）运行时读这份配置，
+# 从别处调（--manifest-path）或环境里已设了这个变量就读不到：database.rs 开库时查，编进了就报错
+# @see https://docs.rs/crate/sqlite-wasm-rs/0.6.2/source/build.rs（SQLITE_WASM_RS_FLAGS）
+# @see https://sqlite.org/bytecodevtab.html
+[env]
+SQLITE_WASM_RS_FLAGS = "-USQLITE_ENABLE_BYTECODE_VTAB"

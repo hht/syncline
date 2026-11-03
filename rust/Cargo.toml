@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["core", "native", "wasm"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+# session：记下本机写的改动；hooks：authorizer（执行接入方的语句时拒绝 PRAGMA）
+rusqlite = { version = "0.41.1", features = ["session", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+self_cell = "1"
+wasm-bindgen = "=0.2.130"
+
+[workspace.lints.rust]
+# 只有原生模块的 C 接口、JNI 与 poll 要用：在那几处写 expect 并写理由
+unsafe_code = "deny"
+# 声明了没用到的依赖（rustc 自带，默认关）
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# 豁免一律写成 expect 并写理由：规则不再触发时 expect 会报，豁免跟着删掉，不留下没用的
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+# 测试编的 wasm 用这一档：照 release 优化（不优化时 bulk.test 对 Rust 跑 64 秒，优化后 25 秒，TS 版 18 秒；每次 pnpm check 都要跑），
+# 溢出检查与调试断言照旧开着。cargo test、clippy 照旧用 dev，编得快，与测试并行时少占 CPU
+# @see https://doc.rust-lang.org/cargo/reference/profiles.html#custom-profiles
+[profile.wasm-test]
+inherits = "dev"
+opt-level = 3
+
+# 手机上的构建（rust/native）：整个程序一起优化、去掉没用到的代码，包小、跑得快；panic 照旧展开，核心线程接住后交回 JS（native/src/host.rs）
+# @see https://doc.rust-lang.org/cargo/reference/profiles.html#release
+[profile.release]
+lto = true
+codegen-units = 1
+
+# web 的 wasm（src/build-wasm.mjs）：按体积优化。web 上实测体积优先与速度优先一样快（推断是 wasm 本身的代价占大头）；
+# 函数名段由 wasm-bindgen 去掉（这里 strip 会连它要读的 target_features 段一起删）
+[profile.web]
+inherits = "release"
+opt-level = "s"

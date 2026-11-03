@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    // 接入方从 node_modules 里直接跑的脚本写成 JS（Node 不擦那里的 TS 类型），类型照样查
+    "allowJs": true,
+    "checkJs": true,
+    "types": ["node"]
+  },
+  "include": [
+    "*.ts",
+    "tools/**/*.ts",
+    "src",
+    "probes/cloudflare/push-size.ts",
+    "probes/cloudflare/kill.ts",
+    "probes/cloudflare/cascade.ts",
+    "probes/cloudflare/shared-write.ts"
+  ],
+  "exclude": ["vitest.workerd.config.ts", "src/cloudflare", "src/**/*.workerd.test.ts"]
+}

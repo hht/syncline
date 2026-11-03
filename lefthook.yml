@@ -1,0 +1,9 @@
+# 本地钩子与 CI 跑同一套检查
+commit-msg:
+  commands:
+    commit-message:
+      run: node tools/check/commit-msg.ts {1}
+pre-commit:
+  commands:
+    check:
+      run: pnpm check --changed

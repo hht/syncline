@@ -1,0 +1,10 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // 量平台限制用的临时 Worker：shared-write.ts 用一次性的名字（--name）部署、量完删掉，这里不写名字、不能直接部署；兼容日期同 src/cloudflare/wrangler.jsonc
+  "main": "shared-worker.ts",
+  "compatibility_date": "2026-09-30",
+  "durable_objects": {
+    "bindings": [{ "name": "SHARED", "class_name": "ProbeShared" }, { "name": "BROADCAST", "class_name": "ProbeBroadcast" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeShared", "ProbeBroadcast"] }]
+}
