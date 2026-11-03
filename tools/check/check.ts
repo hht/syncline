@@ -4,7 +4,6 @@ import { availableParallelism } from 'node:os';
 import { join, resolve } from 'node:path';
 import { wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs';
 import { changedFiles } from './changed-files.ts';
-import { checkChineseComments } from './chinese-comments.ts';
 import { checkCommentRules } from './comment-rules.ts';
 import { checkCommands, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
 import { checkForbiddenWords } from './forbidden-words.ts';
@@ -86,7 +85,6 @@ const gates: Gate[] = [
   },
   { name: 'wasm', icon: '🦀', first: true, run: async () => together([await wasm('node'), await wasm('web')]) },
   inProcess('forbidden-words', '🏷️', () => checkForbiddenWords([...sources, ...rustSources, ...configs, ...jsons])),
-  inProcess('chinese-comments', '💬', () => checkChineseComments([...sources, ...rustSources])),
   inProcess('comment-rules', '💬', () => checkCommentRules([...sources, ...rustSources, ...configs])),
   inProcess('docs', '📄', checkDocs),
 ];

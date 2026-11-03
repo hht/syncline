@@ -1,10 +1,17 @@
-const subject = /^(新增|修复|调整|重构|测试|文档|依赖|工具): .*\p{Script=Han}/u;
+const subject = /^(feat|fix|change|refactor|test|docs|deps|chore): \S/;
+const han = /\p{Script=Han}/u;
+const scissors = '# ------------------------ >8 ------------------------';
 
-/** 返回不合规的原因；git 的 # 提示行不属于提交说明 */
+/** Returns why the message is rejected; git's `#` hint lines are not part of the message. */
 export function checkCommitMessage(message: string): string[] {
-  const [first = '', second] = message.split('\n').filter((line) => !line.startsWith('#'));
+  // `git commit -v` appends the diff below the scissors line; it is not part of the message
+  const [body = ''] = message.split(scissors);
+  const lines = body.split('\n').filter((line) => !line.startsWith('#'));
+  const [first = '', second] = lines;
   return [
-    ...(subject.test(first) ? [] : ['首行须为 <类型>: <中文说明>，类型只有 新增 修复 调整 重构 测试 文档 依赖 工具']),
-    ...(second ? ['首行后须空一行'] : []),
+    ...(subject.test(first) ? [] : ['first line must be <type>: <summary>, type is one of feat fix change refactor test docs deps chore']),
+    ...(first.endsWith('.') ? ['summary must not end with a period'] : []),
+    ...(lines.some((line) => han.test(line)) ? ['message must be in English'] : []),
+    ...(second ? ['first line must be followed by a blank line'] : []),
   ];
 }
