@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
-import { inputsHash, passedCache, usedModules, withoutComments } from './model-cache.ts';
+import { inputsHash, passedCache, usedModules, withoutCodeComments, withoutComments } from './model-cache.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -109,4 +109,21 @@ test('keeps passes recorded by a concurrent run (pnpm model and pnpm model:trace
   first.record('MCA.cfg', 'h1', true);
   second.record('MCB.cfg', 'h2', true);
   expect([passedCache(file).reusable('MCA.cfg', 'h1'), passedCache(file).reusable('MCB.cfg', 'h2')]).toEqual([true, true]);
+});
+
+test('strips comments from runner code so comment edits keep the hash, keeping strings and regular expressions that look like comments', () => {
+  const run = (output: string) => {
+    // Exhaustive checks pass only on completion.
+    return /No error has been found/.test(output) && !output.includes('// not a comment');
+  };
+  const reworded = (output: string) => {
+    /* A run passes once TLC reports completion. */
+    return /No error has been found/.test(output) && !output.includes('// not a comment'); // trailing note
+  };
+  const changed = (output: string) => {
+    return /No error has been found/.test(output) && !output.includes('/* not a comment */');
+  };
+  expect(withoutCodeComments(String(reworded))).toBe(withoutCodeComments(String(run)));
+  expect(withoutCodeComments(String(changed))).not.toBe(withoutCodeComments(String(run)));
+  expect(withoutCodeComments(String(run))).toContain('"// not a comment"');
 });

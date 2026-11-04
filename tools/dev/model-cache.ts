@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import ts from 'typescript';
 
 // Model checking results are cached by input: a configuration (or trace) result depends only on .cfg, modules transitively imported via EXTENDS and INSTANCE (.tla, standard modules follow TLC version),
-// TLC version, execution arguments and evaluation logic (provided by caller, including model.ts source code), and trace files. Comments are excluded so comment-only edits reuse cached results.
+// TLC version, execution arguments and evaluation logic (provided by caller: the runner functions, see withoutCodeComments), and trace files. Comments are excluded so comment-only edits reuse cached results.
 // Cached results record passes only. To force re-running, delete the cache file.
 // What this module must not know: how TLC is invoked or how passes are evaluated (model.ts).
 
@@ -35,6 +36,17 @@ export function withoutComments(text: string) {
     .map((line) => line.trimEnd())
     .filter((line) => line !== '')
     .join('\n');
+}
+
+/**
+ * Strips comments from runner code (function source from Function.prototype.toString) by parsing it and printing the syntax tree without
+ * them, so comment and formatting edits keep the hash while strings and regular expressions that look like comments stay intact.
+ * @see https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API#creating-and-printing-a-typescript-ast
+ */
+export function withoutCodeComments(code: string) {
+  // Parenthesized so a function declaration parses as an expression.
+  const file = ts.createSourceFile('runner.ts', `(${code})`, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  return ts.createPrinter({ removeComments: true }).printFile(file);
 }
 
 /** Scans from (* at start to matching closing *) (supporting nested block comments); returns undefined if unclosed. */

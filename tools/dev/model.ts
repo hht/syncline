@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { inScratchDir, runTool } from '../check/gates.ts';
-import { inputsHash, passedCache } from './model-cache.ts';
+import { inputsHash, passedCache, withoutCodeComments } from './model-cache.ts';
 
 // Slow gates for protocol models: protocols change rarely once specified and are excluded from pnpm check; run manually when modifying models.
 // pnpm model:setup installs TLC into .tools/tlaplus; pnpm model runs all MC*.cfg; pnpm model:big runs exhaustive checks on all .big.cfg (takes minutes to tens of minutes);
@@ -125,13 +125,13 @@ async function check(pattern: RegExp) {
 const cacheFile = join(root, '.check/model-cache.json');
 /**
  * Inputs determining model check conclusions beyond model files: installed TLC jar hash, and the source of the functions that build TLC
- * command lines, run TLC, and judge its output (with the argument lists they use). Any change to them invalidates cached results; edits
- * elsewhere in this runner or in other gates keep them. A function these start calling, or a setting they start reading, must join the list.
+ * command lines, run TLC, and judge its output (with the argument lists they use), without comments. Any code change to them invalidates
+ * cached results; comment edits, and edits elsewhere in this runner or in other gates, keep them. A function these start calling, or a setting they start reading, must join the list.
  * Worker counts and timeouts are left out: they change how long a check takes, not what passes.
  */
 const toolInputs = () => ({
   tlc: createHash('sha256').update(readFileSync(jar)).digest('hex'),
-  runner: [planOf, checkModel, checkTrace, exec, runTool, inScratchDir].map(String),
+  runner: [planOf, checkModel, checkTrace, exec, runTool, inScratchDir].map((run) => withoutCodeComments(String(run))),
   arguments: [traceJvm, traceTlc],
 });
 
@@ -185,7 +185,7 @@ const specOf = (seed: string): keyof typeof spaces => (seed.startsWith('shared-'
 /** Validates a single trace: reuses cached pass if inputs are unchanged; aborted runs yield no conclusion; failed traces write full output to .check/. */
 async function checkTrace(
   seed: string,
-  run: { scratch: string; traces: string; cache: ReturnType<typeof passedCache>; tool: ReturnType<typeof toolInputs>; signal: AbortSignal },
+  run: { scratch: string; traces: string; cache: ReturnType<typeof passedCache>; tool: unknown; signal: AbortSignal },
 ) {
   const library = join(run.traces, seed);
   const spec = specOf(seed);
