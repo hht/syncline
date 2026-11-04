@@ -91,6 +91,12 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Send empty catch-up chained onto device cookie when head version cannot be queried (`MCFanout`: `Covers`)
 - Shard acknowledgments adopt head instead of reverting to persisted version after shared space actor restart (`MCFanout`: S2)
 
+## Schedule (`Schedule.tla`)
+
+- Run every due entry together even when one of them never finished a run (`MCSchedule`: `Bounded`; with `Bounded` removed, `Served`: tasks cut off alongside a crasher never finish)
+- Never pause an entry that reached `ResetLimit` (`MCSchedule`: `Bounded`)
+- Keep the lease and reset count of a delivery across a restart instead of replacing its entry (`MCSchedule`: `Exempt`)
+
 ## Ownership (`Ownership.tla`)
 
 - Keep tables no space records on a private owner switch (`MCOwnership`: `NoLeak`)

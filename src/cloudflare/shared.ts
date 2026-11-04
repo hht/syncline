@@ -118,10 +118,11 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
       },
       ctx.storage.kv.get<Confirmed>(fanoutKey) ?? null,
     );
-    // Dispatches immediately if unacknowledged shards or pending rescans exist. Replaces the entry outright, clearing the lease and reset
-    // count a reset left: rounds are bounded by shard timeouts, so delivery is never the task whose reset restarted the object.
-    if (!this.#fanout.allAcked()) this.timetable.at(deliverName, Date.now());
-    else if (this.timetable.when(deliverName) === undefined) this.timetable.at(deliverName, Date.now() + refreshInterval);
+    // Dispatches immediately if unacknowledged shards or pending rescans exist, else keeps the scheduled time. Replaces the entry outright on
+    // every start, clearing the lease and reset count a reset left: rounds are bounded by shard timeouts, so delivery is never the task
+    // whose reset restarted the object, and runs other resets cut must not pause it.
+    const when = this.#fanout.allAcked() ? (this.timetable.when(deliverName) ?? Date.now() + refreshInterval) : Date.now();
+    this.timetable.at(deliverName, when);
     // Re-arms the alarm on startup to recover scheduled times if the actor restarted before setting the alarm.
     void ctx.blockConcurrencyWhile(() => this.timetable.arm());
   }

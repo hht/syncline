@@ -101,6 +101,23 @@ test('an export leased together with a task that resets the object leaves that l
   expect(await object(name).exported()).not.toEqual([]);
 });
 
+/** Leases the delivery entry of shared space `name` as a reset mid-run leaves it, with `resets` cut runs, then restarts the object. */
+async function cutDelivery(name: string, resets: number) {
+  await runInDurableObject(env.CATALOG.getByName(name), (_, state) =>
+    state.storage.sql.exec(
+      "UPDATE _syncline_schedule SET at = ?, failures = -1, resets = ? WHERE name = 'syncline:deliver'",
+      Date.now() + lease,
+      resets,
+    ),
+  );
+  await expect(runInDurableObject(env.CATALOG.getByName(name), (_, state) => state.abort('Reset'))).rejects.toThrow();
+  // The aborted object rejects calls until the runtime replaces it.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  return runInDurableObject(env.CATALOG.getByName(name), (_, state) =>
+    state.storage.sql.exec("SELECT at, failures, resets FROM _syncline_schedule WHERE name = 'syncline:deliver'").one(),
+  );
+}
+
 test('restarting with shards behind redelivers at once even if a reset left the delivery leased', async () => {
   // Stubs break once their object resets: fetch a fresh one per call.
   const leased = () => env.CATALOG.getByName('leased');
@@ -109,19 +126,18 @@ test('restarting with shards behind redelivers at once even if a reset left the 
   const behind = await runInDurableObject(leased(), (_, state) => state.storage.kv.get('syncline:fanout'));
   await leased().publish('r2');
   await fannedOut('leased');
-  await runInDurableObject(leased(), (_, state) => {
-    state.storage.kv.put('syncline:fanout', behind);
-    state.storage.sql.exec("UPDATE _syncline_schedule SET at = ?, failures = -1 WHERE name = 'syncline:deliver'", Date.now() + lease);
-  });
-  await expect(runInDurableObject(leased(), (_, state) => state.abort('Reset'))).rejects.toThrow();
-  // The aborted object rejects calls until the runtime replaces it.
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const at = await runInDurableObject(leased(), (_, state) =>
-    Number(state.storage.sql.exec("SELECT at FROM _syncline_schedule WHERE name = 'syncline:deliver'").one().at),
-  );
-  expect(at).toBeLessThanOrEqual(Date.now());
+  await runInDurableObject(leased(), (_, state) => state.storage.kv.put('syncline:fanout', behind));
+  const { at } = await cutDelivery('leased', 1);
+  expect(Number(at)).toBeLessThanOrEqual(Date.now());
   await alarmAfter(leased(), 0);
   await fannedOut('leased');
+});
+
+test('restarting with shards caught up clears the count of cut delivery runs, so resets that cut deliveries never pause them', async () => {
+  await env.CATALOG.getByName('cut').publish('c1');
+  await fannedOut('cut');
+  const { failures, resets } = await cutDelivery('cut', 2);
+  expect([failures, resets]).toEqual([0, 0]);
 });
 
 /** Moves every entry past the lease and fires the alarm, tolerating a task that resets the object, then waits for the replacement. */
