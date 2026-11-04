@@ -10,7 +10,7 @@ iOS, Android, and web share the same entrypoint and options: bundles on mobile r
 
 ### `openSyncline(options): Syncline`
 
-Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open for the same user (`owner`), it takes over that instance (using the options passed when `syncOnce` opened it); if open under a different user, it closes that instance first, then opens with the current options.
+Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open, it closes that instance first, then opens with the current options.
 
 | Option | Description |
 |---|---|
@@ -30,7 +30,7 @@ Opens (or creates) a local database, creates tables and adds columns according t
 
 ### `syncOnce(options, { signal }): Promise<void>`
 
-iOS and Android only: Syncs once, intended for background tasks (the tens of seconds when the OS wakes the app while not in the foreground). Connects, pushes pending writes, pulls to the latest version, and succeeds. If the process already has the database open (the app is still alive in the background), it uses the open instance without closing it; if not open, it opens with `options` (same as `openSyncline`), closes it after syncing, and leaves no connection open. If the user opens the app during sync, `openSyncline` takes over the instance for the same user, and `syncOnce` leaves it open. Fails if `signal` aborts (such as on timeout) or an error occurs (fails with `PendingWrites` when switching users if the previous user has pending writes), closing the opened database. When iOS reclaims background execution time, the app is suspended immediately, with no guarantee that database cleanup runs to completion. Syncs private spaces only.
+iOS and Android only: Syncs once, intended for background tasks (the tens of seconds when the OS wakes the app while not in the foreground). Connects, pushes pending writes, pulls to the latest version, and succeeds. If the process already has the database open (the app is still alive in the background), it uses the open instance without closing it; if not open, it opens with `options` (same as `openSyncline`), closes it after syncing, and leaves no connection open. If the user opens the app during sync, `openSyncline` closes the instance and opens its own, and `syncOnce` succeeds without finishing its pass (the foreground instance syncs from then on). Fails if `signal` aborts (such as on timeout) or an error occurs (fails with `PendingWrites` when switching users if the previous user has pending writes), closing the opened database. When iOS reclaims background execution time, the app is suspended immediately, with no guarantee that database cleanup runs to completion. Syncs private spaces only.
 
 ### `Syncline`
 

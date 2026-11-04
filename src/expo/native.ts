@@ -43,11 +43,11 @@ const opened = new OpenDatabases<Syncline>();
 /**
  * Opens or creates a local database and starts synchronizing its private space.
  *
- * Adopts an existing database if a background syncOnce task is currently running for the same owner, or closes it first if running for
- * a different owner; throws if already open in the foreground under the same name.
+ * Closes an instance a background syncOnce task opened first, so these options take effect; throws if already open in the foreground
+ * under the same name.
  */
 export function openSyncline<S extends Schema>(options: OpenOptions<S>) {
-  return opened.open(options.name, options.owner, () => open(options));
+  return opened.open(options.name, () => open(options));
 }
 
 function open<S extends Schema>(options: OpenOptions<S>) {
@@ -95,11 +95,11 @@ function open<S extends Schema>(options: OpenOptions<S>) {
  *
  * Connects, pushes pending writes, and pulls up to head. Reuses an already-open database in this process if the app remains in memory
  * in the background without closing it; otherwise opens it, syncs, and closes cleanly without leaving idle connections or timers.
- * If the user opens the app during sync, the foreground adopts the database and keeps it open. Aborts via signal or failure close
+ * If the user opens the app during sync, the foreground closes this instance and opens its own, and this resolves. Aborts via signal or failure close
  * opened databases; on iOS background time expiration the app is suspended immediately, which may preclude graceful closure.
  * Synchronizes only the private space. Preserves pending writes regardless of discardPending: switching owners while pending writes
  * remain rejects with PendingWrites for resolution in the foreground.
  */
 export function syncOnce<S extends Schema>({ discardPending: _, ...options }: OpenOptions<S>, settings: { signal?: AbortSignal } = {}) {
-  return opened.syncOnce(options.name, options.owner, () => open(options), settings);
+  return opened.syncOnce(options.name, () => open(options), settings);
 }

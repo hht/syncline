@@ -5,39 +5,36 @@ import { report } from '../common/listeners.ts';
  *
  * Opening the same database twice would create two independent device sync state machines competing for the same file.
  * When a background task wakes up while the database is already open, syncOnce shares that open instance without closing it.
- * If the user opens the app while syncOnce is running, foreground adopts the database for that owner so syncOnce does not close it.
- * If the background database belongs to a different owner, foreground closes it before opening its own instance, failing that syncOnce.
+ * If the user opens the app while syncOnce is running, foreground closes the background instance and opens its own, so its options
+ * (token, schema, owner, validation) always take effect; the superseded syncOnce resolves.
  * Used only on mobile (web has no background tasks).
  * What this module must not know: How databases are opened or how sync proceeds internally.
  */
 
 type Database = { sync(options?: { signal?: AbortSignal }): Promise<void>; close(): Promise<void> };
 
-/** Tracked open instance: owner (private space owner) and whether opened by background syncOnce task not yet adopted by foreground. */
-type Entry<D> = { database: D; owner: string | undefined; background: boolean };
+/** Tracked open instance, whether a background syncOnce task opened it, and whether the foreground closed it to open its own. */
+type Entry<D> = { database: D; background: boolean; superseded?: true };
 
 export class OpenDatabases<D extends Database> {
   readonly #opened = new Map<string, Entry<D>>();
 
   /**
-   * Opens database in foreground, adopting an existing background instance for the same owner or closing one of a different owner.
+   * Opens database in foreground, closing an instance a background syncOnce opened.
    *
    * Throws if already open in the foreground. The caller must call closed as soon as close is invoked on the created instance.
    */
-  open(name: string, owner: string | undefined, create: () => D): D {
+  open(name: string, create: () => D): D {
     const running = this.#opened.get(name);
-    if (running?.background && running.owner === owner) {
-      running.background = false;
-      return running.database;
-    }
     if (running && !running.background)
       throw new Error(`Local database ${name} is already open: close it first, or reuse the open instance`);
     if (running) {
+      running.superseded = true;
       this.#opened.delete(name);
       running.database.close().catch(report);
     }
     const database = create();
-    this.#opened.set(name, { database, owner, background: false });
+    this.#opened.set(name, { database, background: false });
     return database;
   }
 
@@ -46,17 +43,20 @@ export class OpenDatabases<D extends Database> {
     if (this.#opened.get(name)?.database === database) this.#opened.delete(name);
   }
 
-  /** Runs single sync pass in background task, reusing open instance if present or opening temporary instance and closing on completion. */
-  async syncOnce(name: string, owner: string | undefined, create: () => D, options?: { signal?: AbortSignal }) {
+  /**
+   * Runs single sync pass in background task, reusing open instance if present or opening temporary instance and closing on completion.
+   * Resolves without syncing further if the foreground closes the instance to open its own, which syncs from then on.
+   */
+  async syncOnce(name: string, create: () => D, options?: { signal?: AbortSignal }) {
     const running = this.#opened.get(name);
-    if (running) return running.database.sync(options);
-    const database = this.open(name, owner, create);
-    const entry = this.#opened.get(name) as Entry<D>;
-    entry.background = true;
+    const entry = running ?? { database: this.open(name, create), background: true };
+    if (!running) this.#opened.set(name, entry);
     try {
-      await database.sync(options);
+      await entry.database.sync(options);
+    } catch (error) {
+      if (!entry.superseded) throw error;
     } finally {
-      if (this.#opened.get(name) === entry && entry.background) await database.close();
+      if (!running && this.#opened.get(name) === entry) await entry.database.close();
     }
   }
 }
