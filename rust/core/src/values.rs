@@ -90,7 +90,7 @@ pub fn value_of(json: &Json) -> Result<Value, Error> {
 pub fn json_of(value: ValueRef<'_>) -> Result<Json, Error> {
     Ok(match value {
         ValueRef::Null => Json::Null,
-        ValueRef::Integer(integer) if integer.abs() <= MAX_SAFE_INTEGER => Json::from(integer),
+        ValueRef::Integer(integer) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => Json::from(integer),
         ValueRef::Integer(integer) => return Err(Error::Failed(format!("integer outside JS safe integer range: {integer}"))),
         // SQLite does not store NaN (stored as NULL); infinity cannot be written in JSON.
         ValueRef::Real(real) => {

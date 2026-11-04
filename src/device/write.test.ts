@@ -76,6 +76,16 @@ test('no-op writes are not uploaded; writing to unsynced tables throws and rolls
   expect(read(phone.storage).workouts).toMatchObject([{ note: 'squat' }]);
 });
 
+test('writing to the internal cookie table throws and rolls back (SQLite sessions skip tables without a primary key)', async () => {
+  const { phone } = await withWorkout();
+  const cookie = phone.device.private.cookie();
+  expect(cookie).not.toBeNull();
+  await expect(phone.device.write(async (execute) => execute('UPDATE _syncline_cookie SET version = 999', []))).rejects.toThrow(
+    'local write can only modify synced',
+  );
+  expect(phone.device.private.cookie()).toEqual(cookie);
+});
+
 test('mutating primary key behaves as deleting old row and inserting new row', async () => {
   const { phone } = await withWorkout();
   await write(phone.device, (tx) => tx.update(workout).set({ id: 'w9' }).where(eq(workout.id, 'w1')));
@@ -136,4 +146,11 @@ test('client ID retrieved via provided randomUUID (Hermes lacks Web Crypto, avoi
   await device.private.resync(true);
   await write(device, (tx) => tx.insert(workout).values({ id: 'w2' }));
   expect(device.private.pending().map(({ client }) => client)).toEqual(['c-2']);
+});
+
+test('JSON text containing NUL is invalid on the device as on the cloud (JSON.parse rejects it; SQLite json_valid stops reading at NUL)', async () => {
+  const device = new Device(deviceStorage(...statements), tables);
+  const insert = device.write(async (execute) => execute("INSERT INTO workout (id, extra) VALUES ('w1', ?)", ['{}\u0000x']));
+  await expect(insert).rejects.toMatchObject({ table: 'workout', issues: [{ path: ['extra'] }] });
+  expect(() => JSON.parse('{}\u0000x')).toThrow();
 });

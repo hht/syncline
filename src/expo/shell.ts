@@ -126,6 +126,7 @@ export class Shell {
   /** Events queued while processing an instruction batch. */
   readonly #inbox: Input[] = [];
   #busy = false;
+  #closed = false;
 
   constructor(core: { control(input: string, now: number): string }, network: Network, deliver: (instruction: Delivered) => void) {
     this.#core = core;
@@ -143,6 +144,11 @@ export class Shell {
 
   /** Dispatches an input event to the core and executes resulting instructions, queueing nested events until the batch completes. */
   send(input: Input) {
+    if (this.#closed) {
+      // Late inputs (token answers, timers, socket events) must not drive a core that a newer shell may now be driving.
+      if (typeof input.id === 'number') this.#deliver({ type: 'reply', id: input.id, error: { message: 'local database is closed' } });
+      return;
+    }
     this.#inbox.push(input);
     this.#drain();
   }
@@ -165,9 +171,10 @@ export class Shell {
   }
 
   /**
-   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls return "Local database is closed".
+   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls reply "local database is closed", as the closed core does.
    */
   close() {
+    this.#closed = true;
     for (const cancel of this.#timers.values()) cancel();
     for (const socket of this.#sockets.values()) socket.close();
     for (const controller of this.#requests.values()) controller.abort();

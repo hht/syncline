@@ -3,6 +3,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { Space } from '../cloud/space.ts';
 import { Device } from '../test/test-device.ts';
+import { captureReported } from '../test/test-errors.ts';
 import { createWorkout, unchunked, workout, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
@@ -75,10 +76,26 @@ test('empty poke or renewal without changes or confirmations does not revert/rep
   expect(phone.device.private.pending()).toEqual([]);
 });
 
-test('resync with clear notifies all synced tables', async () => {
-  const { phone } = await withDevices();
+test('resync discarding pending writes notifies all synced tables when the full pull lands, not before', async () => {
+  const { space, phone } = await withDevices();
   await phone.device.private.resync(true);
+  expect(phone.changes).toEqual([]);
+  await phone.device.private.receive(space.pull(phone.device.private.pullRequest(), unchunked));
   expect(phone.changes).toEqual([['exercise', 'workout']]);
+});
+
+test('resync discarding a pending write that no longer reverts reports why before falling back to wiping synced tables', async () => {
+  const space = new Space(cloudStorage(createWorkout, createExercise), tables);
+  const storage = deviceStorage(createWorkout, createExercise, createIndex);
+  const device = new Device(storage, tables);
+  await device.private.receive(space.pull(device.private.pullRequest(), unchunked));
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
+  // Changed outside any local write, so reverting the insert no longer matches the row.
+  storage.sql.exec("UPDATE workout SET note = 'outside' WHERE id = 'w1'");
+  const reported = captureReported();
+  await device.private.resync(true);
+  expect(reported).toEqual([expect.stringContaining('revert failed')]);
+  expect(device.private.pending()).toEqual([]);
 });
 
 test('reads queue behind active local writes: sees committed changes only, rolled-back writes invisible', async () => {

@@ -29,7 +29,6 @@ pub(super) enum Task {
     },
     OpenShared {
         name: String,
-        owner: Option<String>,
     },
     Job(Box<Job>),
     Verify,
@@ -107,8 +106,8 @@ impl Client {
                 }
                 Err(error) => self.reply(id, Err(error.into())),
             },
-            Task::OpenShared { name, owner } => {
-                let opened = match self.device.open_shared(&name, owner.as_deref()) {
+            Task::OpenShared { name } => {
+                let opened = match self.device.open_shared(&name) {
                     Ok(()) => Opened::Ready,
                     Err(error) => Opened::Failed(error.into()),
                 };
@@ -153,6 +152,8 @@ impl Client {
                 self.with(&channel, jobs, now, |connection, ctx| connection.resynced(ctx, attempt, result));
             }
             Job::Verify { attempt } => self.verify(Waiter::Attempt(attempt), jobs, now),
+            // Already queued behind local writes as a job: opens in place
+            Job::Reopen { channel } => self.run(Task::OpenShared { name: channel }, jobs, now),
         }
     }
 }

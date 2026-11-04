@@ -44,6 +44,8 @@ pub enum Input {
         id: u64,
         channel: String,
         url: String,
+        #[serde(default)]
+        allow_cleartext: bool,
     },
     /// Claims a shared space (`tables` contains compiled definitions), creating and upgrading tables.
     Shared {

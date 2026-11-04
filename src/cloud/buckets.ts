@@ -201,7 +201,7 @@ export class Buckets {
 
   /**
    * Validates and canonicalizes a subscription derived from a token: rules must exist, parameter counts and types must match bucket columns;
-   * serialized JSON must not exceed subscriptionBytes. Throws if invalid, indicating an integrator verify implementation error.
+   * each bucket must not exceed bucketBytes, and serialized JSON must not exceed subscriptionBytes. Throws if invalid, indicating an integrator verify implementation error.
    */
   subscribe(buckets: readonly unknown[]): Subscription {
     const ids = new Set<string>();
@@ -213,7 +213,10 @@ export class Buckets {
       if (!rule) throw new Error(`Subscription bucket ${JSON.stringify(bucket)} — Unknown bucket rule: ${name}`);
       if (params.length !== rule.types.length || !params.every((param, index) => fits(param, rule.types[index] as ColumnType)))
         throw new Error(`Invalid parameters in subscription bucket ${JSON.stringify(bucket)}: ${rule.types.join(', ') || 'none'}`);
-      ids.add(bucketId(bucket as Bucket));
+      const id = bucketId(bucket as Bucket);
+      // No row can be in such a bucket (row writes reject it), so subscribing to it is a verify error.
+      if (utf8Bytes(id) > bucketBytes) throw new Error(`Subscription bucket exceeds ${bucketBytes} bytes: ${id.slice(0, 100)}`);
+      ids.add(id);
     }
     const subscription = [...ids].sort();
     if (utf8Bytes(JSON.stringify(subscription)) > subscriptionBytes)

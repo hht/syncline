@@ -102,6 +102,16 @@ test('referenced row deleted by another device: rejected early during local repl
   }
 });
 
+test('foreign keys must reference the parent primary key: cloud and device both refuse other columns when defining tables', () => {
+  // Offline devices cannot keep a non-key column unique, so a row referencing it by value has no single parent.
+  const coded = sqliteTable('parent', { id: text().primaryKey(), code: text() });
+  const byCode = sqliteTable('child', { id: text().primaryKey(), parent_code: text().references(() => coded.code) });
+  const statements = ['CREATE TABLE parent (id TEXT PRIMARY KEY, code TEXT)', 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_code TEXT)'];
+  const message = 'child.parent_code references parent.code, which is not its primary key';
+  expect(() => new Space(cloudStorage(...statements), [coded, byCode])).toThrow(message);
+  expect(() => new Device(deviceStorage(...statements), [coded, byCode])).toThrow(message);
+});
+
 test('composite foreign key modifies only one column (patch carries only changed column): parent checked against resulting row, rejected and held if pair missing', () => {
   const parent = sqliteTable('parent', { a: integer().notNull(), b: integer().notNull() }, (table) => [
     primaryKey({ columns: [table.a, table.b] }),

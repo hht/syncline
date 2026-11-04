@@ -16,7 +16,7 @@ impl Device {
     /// # Errors
     ///
     /// Returns an error if the space name or table names violate registration rules.
-    pub fn declare_shared(&mut self, name: &str, tables: Vec<Table>) -> Result<(), Error> {
+    pub fn declare_shared(&mut self, name: &str, tables: Vec<Table>, owner: Option<String>) -> Result<(), Error> {
         if name.is_empty() {
             return Err(Error::Failed("shared space name must not be empty".to_owned()));
         }
@@ -34,7 +34,7 @@ impl Device {
                 )));
             }
         }
-        self.shared.insert(name.to_owned(), SharedSpace::new(name, tables));
+        self.shared.insert(name.to_owned(), SharedSpace::new(name, tables, owner));
         Ok(())
     }
 
@@ -43,7 +43,7 @@ impl Device {
     /// # Errors
     ///
     /// Returns an error if the space was not claimed, or see [`SharedSpace::open`].
-    pub fn open_shared(&mut self, name: &str, owner: Option<&str>) -> Result<(), Error> {
+    pub fn open_shared(&mut self, name: &str) -> Result<(), Error> {
         let Device {
             shared,
             db,
@@ -54,7 +54,7 @@ impl Device {
         let space = shared
             .get_mut(name)
             .ok_or_else(|| Error::Failed(format!("shared space {name} does not exist")))?;
-        space.open(db.connection(), effects, retired, owner)
+        space.open(db.connection(), effects, retired)
     }
 
     /// Returns a claimed shared space along with its database connection and side effects.

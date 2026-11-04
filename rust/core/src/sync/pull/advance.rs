@@ -138,18 +138,17 @@ impl Connection {
         }
     }
 
-    /// Unexpected errors such as database read/write failures: pull stops here; handed back to connection if before connecting (fails and reports), reported if connected.
+    /// Unexpected errors such as database read/write failures: handed back to connection if before connecting (fails and reports); if
+    /// connected, reported and retried with backoff like an unusable response, so the pull (and `sync()` waiting on it) does not stop.
     pub(super) fn thrown(&mut self, ctx: &mut Context, error: Failure) {
-        let Some(pull) = self.pull.take() else { return };
-        if !self.live(pull.attempt) {
-            return;
+        if self.pull.as_ref().is_some_and(|pull| matches!(pull.then, After::PullUp)) {
+            ctx.out.report(error.clone());
+            return self.stepped(ctx, Err(error));
         }
-        match pull.then {
-            After::Attach(_) => {
-                self.fail(ctx, pull.attempt, error.clone(), Kind::Download);
-                ctx.out.report(error);
-            }
-            After::PullUp => ctx.out.report(error),
+        let Some(pull) = self.pull.take() else { return };
+        if self.live(pull.attempt) {
+            self.fail(ctx, pull.attempt, error.clone(), Kind::Download);
+            ctx.out.report(error);
         }
     }
 

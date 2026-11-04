@@ -6,7 +6,7 @@
 //! @see <https://tc39.es/ecma262/#sec-numeric-types-number-tostring>
 
 use rusqlite::types::Value;
-use serde::de::{self, MapAccess, Visitor};
+use serde::de::{MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -160,7 +160,7 @@ struct ToJs<'value>(&'value Value);
 impl Serialize for ToJs<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self.0 {
-            Value::Integer(integer) if integer.abs() <= MAX_SAFE_INTEGER => serializer.serialize_i64(*integer),
+            Value::Integer(integer) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => serializer.serialize_i64(*integer),
             Value::Integer(integer) => Err(serde::ser::Error::custom(format!("integer exceeds safe integer range: {integer}"))),
             Value::Real(real) if real.is_finite() => serializer.serialize_f64(*real),
             Value::Null | Value::Real(_) => serializer.serialize_unit(),
@@ -180,7 +180,8 @@ impl Serialize for Row {
     }
 }
 
-/// Value received from JS: numbers that are integers deserialize as integers (JS does not distinguish integers from floats; SQLite converts on write to REAL columns).
+/// Value received from JS: integral numbers within the safe integer range deserialize as integers (JS does not distinguish integers from floats;
+/// SQLite converts on write to REAL columns); beyond it, a JS number is a float, so it stays REAL and serializes back.
 struct FromJs(Value);
 
 impl<'de> Deserialize<'de> for FromJs {
@@ -194,12 +195,22 @@ impl<'de> Deserialize<'de> for FromJs {
             fn visit_unit<E>(self) -> Result<FromJs, E> {
                 Ok(FromJs(Value::Null))
             }
+            #[expect(clippy::cast_precision_loss, reason = "beyond the safe integer range, the JS number is this float")]
             fn visit_i64<E>(self, value: i64) -> Result<FromJs, E> {
-                Ok(FromJs(Value::Integer(value)))
+                Ok(FromJs(if value.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() {
+                    Value::Integer(value)
+                } else {
+                    Value::Real(value as f64)
+                }))
             }
-            fn visit_u64<E: de::Error>(self, value: u64) -> Result<FromJs, E> {
-                #[expect(clippy::cast_precision_loss, reason = "integers exceeding i64 are represented as floats in JS")]
-                Ok(FromJs(i64::try_from(value).map_or(Value::Real(value as f64), Value::Integer)))
+            #[expect(clippy::cast_precision_loss, reason = "beyond the safe integer range, the JS number is this float")]
+            fn visit_u64<E>(self, value: u64) -> Result<FromJs, E> {
+                Ok(FromJs(
+                    i64::try_from(value)
+                        .ok()
+                        .filter(|value| *value <= MAX_SAFE_INTEGER)
+                        .map_or(Value::Real(value as f64), Value::Integer),
+                ))
             }
             fn visit_f64<E>(self, value: f64) -> Result<FromJs, E> {
                 Ok(FromJs(Value::Real(value)))

@@ -24,13 +24,14 @@ export class Schedule {
     this.#storage = storage;
   }
 
-  /** Schedules chore name to run no later than at epoch ms, preserving earlier scheduled times or active backoff. */
+  /** Schedules chore name to run no later than at epoch ms, preserving earlier scheduled times or active backoff; replaces a lease. */
   by(name: string, at: number) {
     this.#storage.sql.exec(
       // Avoid updating unchanged rows to minimize billed SQLite row writes on opens and writes.
-      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at WHERE failures = 0 AND excluded.at < at',
+      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at, failures = 0 WHERE failures = ? OR (failures = 0 AND excluded.at < at)',
       name,
       at,
+      leased,
     );
   }
 
@@ -70,17 +71,23 @@ export class Schedule {
   /**
    * Executes all due chores and scheduled tasks concurrently when an alarm fires:
    * Syncline chores run via chores (stepping, rescheduling, or backing off on error); integrator tasks run via scheduled.
-   * Clears due entries before running so new writes can reschedule, then arms the alarm for the next earliest due time.
+   * Leases due entries (moving them to the end of the lease, marked leased) rather than deleting them: if the actor resets mid-run,
+   * the entry survives and the alarm re-armed on restart runs it again. Scheduling during the run replaces the lease; an entry is
+   * deleted on completion only if it still holds its lease. Then arms the alarm for the next earliest due time.
    */
   async run(chores: (name: string) => Chore | undefined, scheduled: (name: string) => void | Promise<void>) {
+    const now = Date.now();
     const due = this.#storage.sql
-      .exec('DELETE FROM _syncline_schedule WHERE at <= ? RETURNING name, failures', Date.now())
+      .exec('SELECT name, failures FROM _syncline_schedule WHERE at <= ?', now)
       .toArray()
-      .map(({ name, failures }) => ({ name: String(name), failures: Number(failures) }));
+      // An entry still leased here was orphaned by a reset: its backoff count is gone, so it runs as a first attempt.
+      .map(({ name, failures }) => ({ name: String(name), failures: Math.max(0, Number(failures)) }));
+    this.#storage.sql.exec('UPDATE _syncline_schedule SET at = ?, failures = ? WHERE at <= ?', now + lease, leased, now);
     await Promise.all(
-      due.map(({ name, failures }) =>
-        name.startsWith(reserved) ? this.#chore(name, failures, chores(name)) : this.#scheduled(name, scheduled),
-      ),
+      due.map(async ({ name, failures }) => {
+        await (name.startsWith(reserved) ? this.#chore(name, failures, chores(name)) : this.#scheduled(name, scheduled));
+        this.#storage.sql.exec('DELETE FROM _syncline_schedule WHERE name = ? AND failures = ?', name, leased);
+      }),
     );
     await this.arm();
   }
@@ -118,6 +125,16 @@ export class Schedule {
     } else if (current !== at) await this.#storage.setAlarm(at);
   }
 }
+
+/**
+ * How long a running entry stays leased: an alarm invocation cannot run longer (15-minute wall-time limit), so a leased entry is
+ * never run twice at once, and an entry orphaned by a reset runs again at most this long after its run started.
+ * @see https://developers.cloudflare.com/durable-objects/platform/limits/
+ */
+export const lease = 15 * 60_000;
+
+/** Failure count marking a leased entry (a running entry, or one orphaned by a reset mid-run). */
+const leased = -1;
 
 /** Reserved prefix for internal Syncline chores in _syncline_schedule. */
 export const reserved = 'syncline:';

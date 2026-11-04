@@ -160,6 +160,11 @@ export class Client {
     return this.channel('', url, token);
   }
 
+  /** Settles with the open call: rejects with the reason the database could not open (e.g. PendingWrites). */
+  get opening() {
+    return this.#opened;
+  }
+
   /** Dispatches call to engine and awaits reply, deserializing structured errors. */
   call<T>(call: Call, id = this.#id()): Promise<T> {
     if (this.#broken) return Promise.reject(this.#broken);
@@ -280,19 +285,21 @@ export class Client {
       tables: deviceDefinitions(shared.tables),
       ...(shared.owner !== undefined && { owner: shared.owner }),
     };
-    this.#opened
+    // Calls on the space wait for it to connect (the core rejects them before connect) and fail with the reason it could not.
+    const connected = this.#opened
       .then(() => share && this.call(share))
-      .then(() => this.call({ type: 'connect', channel: name, url }))
-      .then(() => this.#send({ type: 'start', channel: name }))
-      .catch((error: Error) => this.failed(name, error));
+      .then(() => this.call({ type: 'connect', channel: name, url, ...(this.#options.allowCleartext && { allowCleartext: true }) }))
+      .then(() => this.#send({ type: 'start', channel: name }));
+    connected.catch((error: Error) => this.failed(name, error));
+    const after = <T>(call: Call) => connected.then(() => this.call<T>(call));
     return {
       status: () => space.status,
       onStatus: subscribe(space.listeners),
-      sync: (options) => abortable(this.call({ type: 'sync', channel: name }), options?.signal),
+      sync: (options) => abortable(after({ type: 'sync', channel: name }), options?.signal),
       resync: (options) =>
-        abortable(this.call({ type: 'resync', channel: name, discardPending: options?.discardPending ?? false }), options?.signal),
+        abortable(after({ type: 'resync', channel: name, discardPending: options?.discardPending ?? false }), options?.signal),
       // No-op on closed database or engine crash; failure state is reflected in sync status.
-      reconnect: () => void this.call({ type: 'reconnect', channel: name }).catch(() => undefined),
+      reconnect: () => void after({ type: 'reconnect', channel: name }).catch(() => undefined),
     };
   }
 }

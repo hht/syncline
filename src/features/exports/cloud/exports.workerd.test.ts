@@ -12,10 +12,10 @@ const firstExport = {
   patch: [{ op: 'clear' }, { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'squat' } }],
 };
 
-/** Runs alarm: exporter receives full snapshot of first write; no further runs scheduled without new writes. */
-async function exportedOnce(name: string) {
+/** Runs alarm: exporter (stats unless received reads another) receives full snapshot of first write; no further runs scheduled without new writes. */
+async function exportedOnce(name: string, received = () => object(name).exported()) {
   expect(await alarmAfter(object(name), maxExportDelay)).toBe(true);
-  expect(await object(name).exported()).toEqual([firstExport]);
+  expect(await received()).toEqual([firstExport]);
   expect(await alarmAfter(object(name), maxExportDelay)).toBe(false);
 }
 
@@ -48,6 +48,23 @@ test('cloud history replaced after export (point-in-time recovery): exporter in 
       ],
     },
   ]);
+});
+
+test('exporter added by a deploy: the next actor start exports an idle space to it, without waiting for a write', async () => {
+  const { name, phone: device } = await online(1);
+  device.push(squat);
+  await device.next();
+  await exportedOnce(name);
+  // Simulates a deploy adding the search exporter: the previous release knew only stats, and search has received nothing.
+  await runInDurableObject(object(name), (_: TestSpace, state) => {
+    state.storage.kv.put('syncline:exporters', ['stats']);
+    state.storage.kv.delete('searched');
+    state.storage.kv.delete('searched:position');
+  });
+  // Aborts in a later call: aborting inside the same call would discard its uncommitted writes.
+  await runInDurableObject(object(name), (_: TestSpace, state) => state.abort('Deploy')).catch(() => undefined);
+  await exportedOnce(name, () => object(name).searched());
+  expect(await object(name).exported()).toEqual([firstExport]);
 });
 
 /** A device writes initial entry, stats exporter fails repeatedly. */

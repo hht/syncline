@@ -98,19 +98,34 @@ impl Device {
     }
 
     /// Resyncs the private space (user-requested): subsequent pull fetches full state from scratch, preserving and replaying pending writes,
-    /// and resets checksum verification from the beginning; discards pending writes if `discard_pending` is true.
+    /// and resets checksum verification from the beginning; rows stay visible until the full pull lands, swapped in from shadow tables.
+    /// If `discard_pending` is true, first reverts pending writes and discards them; if one cannot be reverted, wipes synced tables instead,
+    /// since its effects could no longer be undone.
     ///
     /// # Errors
     ///
     /// Returns an error if reading or writing to the database fails.
     pub fn resync(&mut self, discard_pending: bool) -> Result<(), Error> {
-        if discard_pending {
-            return self.reset(false);
-        }
-        self.commit(|device| {
+        let mut conflicted = None;
+        let result = self.commit(|device| {
+            if discard_pending {
+                let pending = UploadQueue::all(device.db.connection())?;
+                if let Some(cause) = device.revert(&pending)? {
+                    conflicted = Some(cause);
+                    return Err(Error::Failed("failed to revert pending writes".to_owned()));
+                }
+                device.uploads.clear(device.db.connection())?;
+            }
             device.refetch()?;
             device.reset_verifier()
-        })
+        });
+        if let Some(cause) = conflicted {
+            self.effects.report(format!(
+                "Syncline: local data conflicts with pending writes (revert failed); clearing synced tables to refetch: {cause}"
+            ));
+            return self.reset(false);
+        }
+        result
     }
 
     /// Frees reclaimed database pages to filesystem after staging tables are cleared, truncating up to `limit` pages per step and returning whether more free pages remain.

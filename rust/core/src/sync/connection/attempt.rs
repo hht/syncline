@@ -12,7 +12,7 @@ use crate::sync::instructions::{Instruction, Out, Timer};
 use crate::sync::mirror::{format_cookie, pull_url};
 use crate::sync::pull::After;
 use crate::sync::status::done_downloading;
-use crate::sync::{BEARER, Context, SCHEMA_PREFIX, SUBPROTOCOL};
+use crate::sync::{BEARER, Context, Job, SCHEMA_PREFIX, SUBPROTOCOL};
 
 /// In-flight token request before connecting
 pub(super) struct TokenWait {
@@ -120,8 +120,13 @@ impl Connection {
     /// Token acquired and space opened: pulls until caught up (at least once if cloud requested pre-pull)
     pub(super) fn ready(&mut self, ctx: &mut Context, attempt: u64, token: String) {
         if let Opened::Failed(error) = &self.opened {
-            // Table creation error (e.g. column type change) reconnects on backoff and reports in status
+            // Table creation error (transient storage error, or e.g. column type change): reports in status, opens again in the task
+            // queue, and reconnects on backoff, by which time the new opening has finished or is awaited
             let error = error.clone();
+            self.opened = Opened::Pending;
+            ctx.jobs.push(Job::Reopen {
+                channel: self.channel.clone(),
+            });
             return self.fail(ctx, attempt, error, Kind::Download);
         }
         self.mirror().connecting(ctx.device);

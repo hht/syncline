@@ -10,7 +10,7 @@ import { drain } from './test-drive.ts';
 import { captureReported } from './test-errors.ts';
 import { type CloudEnd, Network } from './test-network.ts';
 import { write } from './test-schema.ts';
-import { cloudStorage, deviceStorage } from './test-storage.ts';
+import { cloudStorage, deviceStorage, failOnce } from './test-storage.ts';
 import { Connection } from './test-sync.ts';
 
 // Device connecting to shared space: Connection connects to device.shared space; HTTP pulls via shared space, WebSockets via broadcast shard;
@@ -27,7 +27,7 @@ const everything = subscribed(['all']);
  * Shared space (all buckets and public non-secret bucket), one broadcast shard, and two devices; commit executes backend write and notifies;
  * token supplies device subscription.
  */
-function setup() {
+function setup(prepare: (storage: ReturnType<typeof deviceStorage>) => void = () => undefined) {
   const buckets = { all: { program: {} }, public: { program: { where: "title != 'secret'" } } };
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 4 } });
   const token = { subscribed: everything };
@@ -49,6 +49,7 @@ function setup() {
   const devices = [0, 1].map((index) => {
     const storage = deviceStorage(createProgram);
     const device = new Device(storage, []);
+    prepare(storage);
     const catalog = device.shared('catalog', [program]);
     const connection = new Connection(catalog, { url: 'https://sync.test/catalog', ...network.options(index) });
     const titles = () => drizzle(storage).select().from(program).orderBy(program.id).all();
@@ -138,15 +139,21 @@ test('backend write too large for inline poke: shard sends hint without disconne
   }
 });
 
+/** First device connects after backend write p1 and catches up; prepare runs on device storage before the shared space opens. */
+async function connected(prepare?: Parameters<typeof setup>[0]) {
+  const context = setup(prepare);
+  const [first] = context.devices;
+  if (!first) throw new Error('no devices configured');
+  context.commit([{ id: 'p1', title: 'plan 1' }]);
+  first.connection.start();
+  await context.run();
+  return { ...context, first };
+}
+
 /** Device connects, backend write exceeds inline limit, hint delivered: device begins pulling while connected. */
 async function hinted() {
-  const context = setup();
-  const { devices, commit, run, network } = context;
-  const [first] = devices;
-  if (!first) throw new Error('no devices configured');
-  commit([{ id: 'p1', title: 'plan 1' }]);
-  first.connection.start();
-  await run();
+  const context = await connected();
+  const { commit, network, first } = context;
   commit(Array.from({ length: 40 }, (_, n) => ({ id: `q${String(n).padStart(2, '0')}`, title: 'long title text'.repeat(5) })));
   while (!first.connection.status().downloading) {
     network.deliver();
@@ -156,7 +163,7 @@ async function hinted() {
   const request = async () => {
     while (network.pending().length === 0 && network.fire(1000)) await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ...context, first, request };
+  return { ...context, request };
 }
 
 test('pull landing queued behind an open local write stops when database closes without reporting errors', async () => {
@@ -213,4 +220,10 @@ test('broadcast shard reports version ahead of cloud (unreachable target): pulls
   expect(pulls).toBeGreaterThan(0);
   expect(pulls).toBeLessThan(10);
   first.connection.stop();
+});
+
+test('shared space whose opening hits a transient storage error opens again on the next connection attempt and syncs', async () => {
+  const { first } = await connected((storage) => failOnce(storage, 'PRAGMA table_info'));
+  expect(first.titles()).toEqual([{ id: 'p1', title: 'plan 1' }]);
+  expect(first.connection.status()).toMatchObject({ connected: true, downloadError: undefined });
 });

@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { readBytes } from '../common/limits.ts';
+import { parseMutations } from '../common/parse.ts';
 import type { Change, Poke } from '../common/protocol.ts';
 import { queryOf } from '../common/storage.ts';
 import { Device } from '../test/test-device.ts';
@@ -278,4 +279,17 @@ test('list held writes paginates by bytes: large entries yield fewer items per p
   expect(first.map(({ id }) => id)).toEqual([1, 2]);
   const rest = writes.list({ after: first.at(-1)?.version ?? 0 });
   expect(rest.map(({ id }) => id)).toEqual([3, 4]);
+});
+
+test('held reasons are bounded and well-formed: an oversized name or a cut surrogate pair still holds the write', () => {
+  // Malformed change whose 200-character excerpt ends inside an emoji's surrogate pair.
+  const prefix = JSON.stringify({ op: 'put', table: 'workout', row: { id: '' } }).indexOf('""') + 1;
+  const cut = { op: 'put', table: 'workout', row: { id: `${'x'.repeat(199 - prefix)}${'😀'.repeat(5)}`, note: {} } };
+  for (const change of [{ op: 'put', table: 'x'.repeat(2_100_000), row: { id: 'a' } }, cut]) {
+    const space = new Space(cloudStorage(...statements), tables);
+    space.push(parseMutations(JSON.stringify([{ client: 'c1', id: 1, changes: [change] }])));
+    const [held] = space.held();
+    expect(held?.reason.length).toBeLessThanOrEqual(1000);
+    expect(held?.reason.isWellFormed()).toBe(true);
+  }
 });

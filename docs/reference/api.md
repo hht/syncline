@@ -15,11 +15,12 @@ Opens (or creates) a local database, creates tables and adds columns according t
 | Option | Description |
 |---|---|
 | `name` | Database name; the file is `<name>.db`. One per app |
-| `owner` | Optional. Who the private space belongs to (logged-in user ID). If different from the owner recorded in the database, clears the previous user's private data and local-only tables, keeping shared spaces. If no owner was recorded, records this one; if omitted, records and clears nothing. If the previous user has pending writes, clearing is blocked and opening fails (`PendingWrites`, with `owner` set to the previous user and `count` set to the number of pending writes; thrown by `openSyncline` on mobile, recorded as the private space's `downloadError` on web). Have the previous user log in and finish syncing before switching users, or pass `discardPending` to drop them. Check `status().pending` before logging out, and call `sync()` first if non-zero |
+| `owner` | Optional. Who the private space belongs to (logged-in user ID). If different from the owner recorded in the database, clears the previous user's private data and local-only tables, keeping shared spaces. If no owner was recorded, records this one; if omitted, records and clears nothing. If the previous user has pending writes, clearing is blocked and opening fails (`PendingWrites`, with `owner` set to the previous user and `count` set to the number of pending writes): `openSyncline` still returns, recording the error as the private space's `downloadError` and rejecting `sync()` and `resync()` with it; the database is closed, so open it again (for example with `discardPending`). Have the previous user log in and finish syncing before switching users, or pass `discardPending` to drop them. Check `status().pending` before logging out, and call `sync()` first if non-zero |
 | `discardPending` | Optional. Drops pending writes from the previous user when switching users (see `owner`). Ignored by `syncOnce` |
 | `schema` | Synced tables: `{ tableName: drizzleTable }` |
 | `localOnly` | Optional. Local-only tables: `{ tableName: drizzleTable }`, not synced |
-| `url` | Private space sync URL (`https://`), used for both WebSocket and HTTP downloads. Must not contain query parameters or `#` (Syncline appends parameters that the cloud expects; extra parameters cause `openSyncline` to throw) |
+| `url` | Private space sync URL (`https://`), used for both WebSocket and HTTP downloads. Must not contain query parameters or `#` (Syncline appends parameters that the cloud expects). An `http://` URL, query parameters, or `#` fail the space with `downloadError` and reject `sync()` |
+| `allowCleartext` | Optional. Accepts `http://` sync URLs for the private space and shared spaces, sending tokens and rows unencrypted; for local development only (such as `wrangler dev`) |
 | `token` | `() => Promise<string>`, called before each connection. Return a fresh token when approaching expiration |
 | `validation` | Optional. `Map<DrizzleTable, StandardSchema>`, validated during writes |
 | `readOnly` | Optional. Synced tables writable only by the cloud (array of Drizzle tables). Read-only to devices; local writes modifying them throw and roll back the entire transaction. Identical to cloud `readOnly` |
@@ -40,10 +41,10 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 | `write(body): Promise<T>` | Executes a local write. `body(tx)` runs in a local transaction, where `tx` is a read-write Drizzle database instance |
 | `onChange(listener): () => void` | Invoked after synced tables or local-only tables change, providing modified table names (`ReadonlySet<string>`) |
 | `tablesOf(sql): Promise<string[]>` | Lists tables read by a query without executing it |
-| `onHeld(listener): () => void` | Invoked when local writes are held by the cloud, providing `{ reason, changes }[]` |
+| `onHeld(listener): () => void` | Invoked when local writes are held by the cloud, providing `{ reason, changes }[]` (`reason` is cut to 1,000 characters) |
 | `status(): SyncStatus` | Current sync status |
 | `onStatus(listener): () => void` | Invoked whenever sync status changes |
-| `sync({ signal }?): Promise<void>` | Syncs immediately, waiting until caught up and all local writes are confirmed (succeeds immediately if already up to date). Fails on errors or when `signal` aborts; fails immediately if the cloud previously rejected pushed writes with 1007 |
+| `sync({ signal }?): Promise<void>` | Syncs immediately, waiting until caught up and all local writes are confirmed (succeeds immediately if already up to date). Fails on errors or when `signal` aborts; fails immediately if the cloud rejected pushed writes with 1007 since sync last restarted (see 1007 in [Limits](limits.md)) |
 | `resync({ signal, discardPending }?): Promise<void>` | Re-downloads synced tables from scratch, replacing local copies (used when local data is corrupted). Keeps pending writes and pushes them as usual after re-downloading. When `discardPending: true`, drops pending writes as well (used when uploads are permanently rejected with 1007) |
 | `reconnect(): void` | Reconnects immediately and re-invokes `token`. Call when credentials change (updating permissions and visible scopes for shared spaces), such as inside Firebase's `onIdTokenChanged` |
 | `shared(name, { schema, url, token?, owner? })` | Opens a read-only shared space in the same database, with its own `status`, `onStatus`, `sync`, `resync`, and `reconnect`. The cloud determines visible rows based on token (defaults to private space token if omitted). If `owner` (logged-in user) differs from last time, clears previously viewed rows |
@@ -95,7 +96,7 @@ Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)
 | `writeQuota` | Token-bucket rate limit on pushed writes from devices: `{ rate, burst }`. Refills `rate` rows per second up to `burst` rows (counted as row changes); closes the connection with 1013 when exceeded. Unlimited if omitted; see [Limits](limits.md) |
 | `dailyWrites` | Maximum number of billed SQLite row writes from client pushes per UTC day (including indexes and commit log; server writes do not count). Closes the connection with 1013 when reached, resuming the next day. Unlimited if omitted; see [Limits](limits.md) |
 | `connections` | Maximum concurrent connections (positive integer), default 32; see [Limits](limits.md). Increase for users with many devices |
-| `exports` | Exporters: name → `Exporter` (`position()`, `write(chunk)`) |
+| `exports` | Exporters: name → `Exporter` (`position()`, `write(chunk)`). An exporter added by a deploy receives a space's full snapshot the next time that space's object starts, or on its next write. After point-in-time recovery, exporters re-export (with `reset`) only on the space's next write |
 | `exportDelay` | Delay after writes before exporting, default 60,000 ms |
 | `exportBudget` | Maximum export duration per alarm, default 600,000 ms. If an exporter does not respond within this budget, the attempt fails and is rescheduled with backoff |
 

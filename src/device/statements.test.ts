@@ -159,3 +159,9 @@ test('transaction rolled back by SQLite inside local write (OR ROLLBACK on confl
   await device.write(async (execute) => execute("INSERT OR ROLLBACK INTO note (id) VALUES ('z')", []));
   expect(notes()).toEqual([{ id: 'dup' }, { id: 'z' }]);
 });
+
+test('reads fail on integers beyond the JS safe range at both ends, including the 64-bit minimum (whose absolute value overflows)', async () => {
+  const { device } = opened();
+  for (const sql of ['SELECT 9007199254740992', 'SELECT -9223372036854775807 - 1'])
+    await expect(device.query(sql, [])).rejects.toThrow('outside JS safe integer range');
+});

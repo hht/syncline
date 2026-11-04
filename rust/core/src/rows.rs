@@ -50,9 +50,7 @@ impl Room {
 }
 
 fn too_many(rows: i64) -> String {
-    format!(
-        "write modifies more than {rows} rows, or primary keys (plus referenced columns read back by cascade delete) exceed {WRITE_KEY_BYTES} bytes; split into smaller writes"
-    )
+    format!("write modifies more than {rows} rows, or primary keys exceed {WRITE_KEY_BYTES} bytes; split into smaller writes")
 }
 
 /// A table: local columns and primary key
@@ -108,12 +106,22 @@ impl Rows {
                     parent: foreign_key.parent.clone(),
                     to: foreign_key.to.clone(),
                 };
-                if !rows.tables.contains_key(&reference.parent) {
+                let Some(target) = rows.tables.get(&reference.parent) else {
                     return Err(Error::Failed(format!(
                         "{}.{} references {}, which is not a synced table in this space: foreign keys can only reference synced tables in the same space",
                         reference.table,
                         reference.columns.join(","),
                         reference.parent
+                    )));
+                };
+                // Offline devices cannot keep any other column unique, so a row referencing one by value would have no single parent.
+                if reference.to.len() != target.key.len() || !target.key.iter().all(|column| reference.to.contains(column)) {
+                    return Err(Error::Failed(format!(
+                        "{}.{} references {}.{}, which is not its primary key: foreign keys must reference the parent table's primary key",
+                        reference.table,
+                        reference.columns.join(","),
+                        reference.parent,
+                        reference.to.join(",")
                     )));
                 }
                 rows.parents.entry(reference.table.clone()).or_default().push(reference.clone());

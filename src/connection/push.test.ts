@@ -1,4 +1,4 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { Space } from '../cloud/space.ts';
 import { parseMutations } from '../common/parse.ts';
@@ -128,6 +128,24 @@ test('non-finite floats (NaN, Infinity) serialize to null in JSON: recognized wi
   expect(parseMutations(pushed)).toEqual([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'note', row: { id: 'n1', x: null, y: null } }] },
   ]);
+});
+
+test('REAL values beyond the JS safe integer range push and land unchanged', async () => {
+  const ddl = 'CREATE TABLE reading (id TEXT PRIMARY KEY, at REAL)';
+  const reading = sqliteTable('reading', { id: text().primaryKey(), at: real() });
+  const device = new Device(deviceStorage(ddl), [reading]);
+  await write(device, (tx) =>
+    tx.insert(reading).values([
+      { id: 'r1', at: 2 ** 53 },
+      { id: 'r2', at: 1e16 },
+      { id: 'r3', at: -1e18 },
+    ]),
+  );
+  const space = new Space(cloudStorage(ddl), [reading]);
+  space.push(parseMutations(JSON.stringify(device.private.pending(500_000))));
+  expect(space.pull({ cookie: null }, 1_000_000)).toMatchObject({
+    patch: [{ op: 'clear' }, { row: { id: 'r1', at: 2 ** 53 } }, { row: { id: 'r2', at: 1e16 } }, { row: { id: 'r3', at: -1e18 } }],
+  });
 });
 
 test('pushes pending mutations accumulated across multiple restarts and clients in a single batch', async () => {

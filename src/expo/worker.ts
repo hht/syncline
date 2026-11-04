@@ -17,10 +17,19 @@ import { Shell } from './shell.ts';
 
 /** Message from page: call tagged with instance ID (core inputs plus open and close). */
 export type HostMessage = { instance: number; call: { type: string; id?: number } & Record<string, unknown> };
-/** Message to page: batched replies/notifications for an instance, or unhandled errors serialized from the Worker. */
-export type WorkerMessage = { instance: number; received: Received[] } | { type: 'error'; error: ReturnType<typeof serializeError> };
+/** Message to page: batched replies/notifications for an instance, unhandled errors serialized from the Worker, or a core panic. */
+export type WorkerMessage =
+  | { instance: number; received: Received[] }
+  | { type: 'error' | 'broken'; error: ReturnType<typeof serializeError> };
 
 const post = (message: WorkerMessage) => self.postMessage(message);
+
+/**
+ * Reports an unhandled error to the page; a WebAssembly trap is a Rust panic, after which the core is unusable, so the page discards
+ * this Worker (as native hosts deliver broken on panic). Other errors are only reported.
+ */
+const unhandled = (error: unknown) =>
+  post({ type: error instanceof WebAssembly.RuntimeError ? 'broken' : 'error', error: serializeError(error) });
 
 /**
  * Forwards unhandled errors to the page.
@@ -32,14 +41,13 @@ const post = (message: WorkerMessage) => self.postMessage(message);
  * @see https://html.spec.whatwg.org/multipage/webappapis.html#unhandled-promise-rejections
  */
 function forwardErrors() {
-  const forward = (error: unknown) => post({ type: 'error', error: serializeError(error) });
   self.addEventListener('error', (event) => {
     event.preventDefault();
-    forward(event.error ?? event.message);
+    unhandled(event.error ?? event.message);
   });
   self.addEventListener('unhandledrejection', (event) => {
     event.preventDefault();
-    forward(event.reason);
+    unhandled(event.reason);
   });
 }
 
@@ -115,6 +123,7 @@ async function handle(instance: number, call: HostMessage['call']) {
       reply();
       begin?.();
     } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) throw error;
       reply(error);
     }
     return;
@@ -126,5 +135,5 @@ async function handle(instance: number, call: HostMessage['call']) {
 /** Serializes open, close, and core calls sequentially in arrival order; unhandled errors report to the page while processing continues. */
 let queue = Promise.resolve();
 self.onmessage = ({ data: { instance, call } }: MessageEvent<HostMessage>) => {
-  queue = queue.then(() => handle(instance, call)).catch((error: unknown) => post({ type: 'error', error: serializeError(error) }));
+  queue = queue.then(() => handle(instance, call)).catch(unhandled);
 };

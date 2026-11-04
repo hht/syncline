@@ -48,6 +48,7 @@ type Fetch = (
 export type ConnectionOptions = {
   url: string;
   token: () => Promise<string>;
+  allowCleartext?: boolean;
   socket?: (url: string, protocols: string[]) => WebSocket;
   fetch?: Fetch;
   schedule?: Schedule;
@@ -113,7 +114,8 @@ export class Device {
     this.#random = random ?? Math.random;
     this.#attached.set(channel, attachment);
     try {
-      this.#calls.now({ type: 'connect', channel, url: attachment.options.url });
+      const { url, allowCleartext } = attachment.options;
+      this.#calls.now({ type: 'connect', channel, url, ...(allowCleartext && { allowCleartext }) });
     } catch (error) {
       this.#attached.delete(channel);
       throw error;

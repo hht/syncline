@@ -12,12 +12,13 @@ test('rejects real/float bucket columns when constructing rules (real string rep
   expect(() => new Buckets([scored], { r: { scored: { by: ['score'] } } })).toThrow('bucket columns must be integer or text');
 });
 
-test('rejects subscriptions violating rules (unknown rule, mismatched parameter count/type, or JSON size exceeding limit); sorts and deduplicates valid buckets', () => {
+test('rejects subscriptions violating rules (unknown rule, mismatched parameter count/type, a bucket or the JSON exceeding its size limit); sorts and deduplicates valid buckets', () => {
   const buckets = new Buckets([program, day], { org: { day: { by: ['program_id'] } } });
   expect(() => buckets.subscribe([['nobody']])).toThrow('Unknown bucket rule');
   expect(() => buckets.subscribe([['org', 7]])).toThrow('Invalid parameters in subscription bucket');
   expect(() => buckets.subscribe([['org']])).toThrow('Invalid parameters in subscription bucket');
-  expect(() => buckets.subscribe([['org', 'x'.repeat(9000)]])).toThrow('exceeds 8192 bytes');
+  expect(() => buckets.subscribe([['org', 'x'.repeat(300)]])).toThrow('exceeds 256 bytes');
+  expect(() => buckets.subscribe(Array.from({ length: 40 }, (_, n) => ['org', `${n}`.padEnd(200, 'x')]))).toThrow('exceeds 8192 bytes');
   expect(
     buckets.subscribe([
       ['org', 'b'],

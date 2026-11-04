@@ -119,3 +119,23 @@ test('aborts fetch when core cancels request mid-stream on disconnect and drops 
   expect(signal()?.aborted).toBe(true);
   expect(received).toEqual([]);
 });
+
+test('after close, inputs no longer reach the core: calls are answered "local database is closed", other inputs are dropped', () => {
+  const inputs: string[] = [];
+  const delivered: unknown[] = [];
+  const closed = new Shell(
+    {
+      control(text: string) {
+        inputs.push(text);
+        return '[]';
+      },
+    },
+    {},
+    (instruction) => delivered.push(instruction),
+  );
+  closed.close();
+  closed.send({ type: 'query', id: 3 });
+  closed.send({ type: 'token', request: 1, token: 't' });
+  expect(inputs).toEqual([]);
+  expect(delivered).toEqual([{ type: 'reply', id: 3, error: { message: 'local database is closed' } }]);
+});

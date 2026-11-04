@@ -122,11 +122,12 @@ test('after reset (cookie empty, still connected): notification on connection no
   expect(await catalog.receive({ base: null, reset: true })).toBe(true);
   await catalog.notified({ ...p2, base: null as never }, false);
   await catalog.notified(p2, false);
-  expect(programs()).toEqual([]);
+  // Rows stay visible until the full pull lands; neither notification is applied.
+  expect(programs()).toEqual([{ id: 'p1', status: 'published' }]);
   expect(catalog.behind()).toBe(true);
 });
 
-test('no interference with private space: shared space does not touch pending writes or private tables, private space does not touch shared tables; resync only clears its own tables', async () => {
+test('no interference with private space: shared space does not touch pending writes or private tables, private space does not touch shared tables; resync keeps its rows visible until the full pull lands', async () => {
   const { space, storage, device, catalog, publish, programs } = setup();
   publish('p1');
   await pullRest(catalog, space);
@@ -138,7 +139,8 @@ test('no interference with private space: shared space does not touch pending wr
   expect(changed).toEqual([['workout'], ['program']]);
 
   await catalog.resync();
-  expect(programs()).toEqual([]);
+  expect(programs()).toHaveLength(2);
+  expect(catalog.behind()).toBe(true);
   expect(drizzle(storage).select().from(workout).all()).toEqual([{ id: 'w1', program_id: 'p1' }]);
   expect(device.private.pending()).toHaveLength(1);
   expect(() => device.shared('again', [program])).toThrow('same name as an existing synced');

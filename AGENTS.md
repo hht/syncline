@@ -39,7 +39,7 @@ Dependency direction is enforced by gate `depcruise`; rules and rationale live i
 | Changing the protocol or `model/` | [Models and model checking](docs/internals/model.md) |
 | Changing integrator-visible behavior or numbers | [API](docs/reference/api.md), [Limits](docs/reference/limits.md) |
 
-Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision: present a comparison table, and update the architecture decisions once settled. Write integrator documentation ([README](README.md) and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
+Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision (presented as in Reporting), and update the architecture decisions once settled. Write integrator documentation ([README](README.md) and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
 
 Code standards not covered by automated gates and enforced by pre-commit review:
 - Write identifiers, file names, and branch names in simple English. Write all comments, strings, error messages, test names, and documentation in English.
@@ -80,6 +80,7 @@ The single check entrypoint is `pnpm check` (identical to the local git hook); w
 ## Reporting
 
 - Summarize first, then suggest next steps.
+- Every decision left to the user comes with a comparison table of the options (what each changes, its cost and risk, and which of the four properties it affects) and a recommendation with its reason.
 - Back every conclusion with evidence (source `file:line`, official documentation link, or measurement); mark unverified inferences as "inferred / unverified". Point out flawed premises directly.
 - Use `handoff` when switching sessions, writing the handoff to `HANDOFF.md` at the repository root (overwritten each time, never committed); read it first in the new session.
 

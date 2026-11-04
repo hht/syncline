@@ -85,6 +85,8 @@ function open<S extends Schema>(options: OpenOptions<S>) {
     },
     token,
   );
+  // A database that could not open (e.g. PendingWrites) is closed, so the app can open the name again (e.g. with discardPending).
+  client.opening.catch(() => close().catch(() => undefined));
   return instance;
 }
 

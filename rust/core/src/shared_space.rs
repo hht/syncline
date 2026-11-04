@@ -59,6 +59,8 @@ pub struct SharedSpace {
     name: String,
     /// Declared tables (tables created matching declarations on open)
     tables: Vec<Table>,
+    /// Who the space is opened for: a different stored owner clears the previous owner's rows on open
+    owner: Option<String>,
     /// Available only after open: database columns are read only after table creation
     synced: Option<SyncedTables>,
     stage: Stage,
@@ -77,10 +79,11 @@ pub struct SharedSpace {
 impl SharedSpace {
     /// Creates a shared space with name (scopes cookies and staged chunks in database) and synced tables. Cookie and pull requests can be inspected before open; intake requires open.
     #[must_use]
-    pub fn new(name: &str, tables: Vec<Table>) -> Self {
+    pub fn new(name: &str, tables: Vec<Table>, owner: Option<String>) -> Self {
         SharedSpace {
             name: name.to_owned(),
             tables,
+            owner,
             synced: None,
             stage: Stage::new(name),
             wanted: None,
@@ -95,7 +98,7 @@ impl SharedSpace {
     ///
     /// # Errors
     /// Table declaration conflicts with existing database tables; database read/write error.
-    pub fn open(&mut self, db: &Connection, effects: &mut Effects, retired: &HashSet<String>, owner: Option<&str>) -> Result<(), Error> {
+    pub fn open(&mut self, db: &Connection, effects: &mut Effects, retired: &HashSet<String>) -> Result<(), Error> {
         tables::define(db, &self.tables)?;
         let synced = SyncedTables::new(db, &self.tables, &self.name, retired)?;
         let names: Vec<String> = synced.declaration().keys().cloned().collect();
@@ -109,13 +112,13 @@ impl SharedSpace {
             }
             self.synced()?.upgrade(host.0, host.1)
         })?;
-        if let Some(owner) = owner {
+        if let Some(owner) = self.owner.clone() {
             let stored = owner::stored(db, &self.name)?;
-            if stored.as_deref() != Some(owner) {
+            if stored.as_deref() != Some(owner.as_str()) {
                 if stored.is_some() {
                     owner::securely(host, |host| host.0, |host| self.reset(host))?;
                 }
-                owner::record(db, &self.name, owner)?;
+                owner::record(db, &self.name, &owner)?;
             }
         }
         savepoint::commit(host, parts, |host| {
@@ -155,12 +158,14 @@ impl SharedSpace {
         Ok(self.stage.last(db)?.is_some())
     }
 
-    /// Resync: discards tables, cookie, and staged chunks for this space, then pulls from scratch (read-only, no pending writes to preserve)
+    /// Resync: discards cookie, staged chunks, and target for this space, then pulls from scratch (read-only, no pending writes to preserve);
+    /// rows stay visible until the full pull lands, swapped in from shadow tables
     ///
     /// # Errors
     /// Database read/write error.
     pub fn resync(&mut self, db: &Connection, effects: &mut Effects) -> Result<(), Error> {
-        self.reset(&mut (db, effects))
+        self.wanted = None;
+        self.clear(&mut (db, effects))
     }
 
     /// Local cookie and incarnation of local data
@@ -200,16 +205,20 @@ impl SharedSpace {
         Ok(())
     }
 
-    /// Reset (requested by user or after owner change): also clears target position
+    /// Owner change: wipes the rows the previous owner could see right away, then pulls from scratch with no target
     fn reset(&mut self, host: &mut Host<'_>) -> Result<(), Error> {
         self.wanted = None;
-        self.clear(host)
-    }
-
-    /// Drops tables, cookie, and staged chunks for this space, then pulls from scratch (preserves target: if cloud rejected position, new incarnation announced by shard must still be reached)
-    fn clear(&self, host: &mut Host<'_>) -> Result<(), Error> {
         savepoint::commit(host, parts, |host| {
             self.synced()?.write(host.0, &Op::Clear, host.1)?;
+            self.clear_cookie(host.0)?;
+            self.unstage(host.0)
+        })
+    }
+
+    /// Drops cookie and staged chunks for this space, then pulls from scratch; rows stay visible until the full pull lands, swapped in from
+    /// shadow tables (preserves target: if cloud rejected position, new incarnation announced by shard must still be reached)
+    fn clear(&self, host: &mut Host<'_>) -> Result<(), Error> {
+        savepoint::commit(host, parts, |host| {
             self.clear_cookie(host.0)?;
             self.unstage(host.0)
         })

@@ -170,7 +170,7 @@ export class Commits {
         bytes += size;
       },
       finish: (revise = (keys) => keys) => {
-        for (const at of writtenVersions) this.#revise(at, revise);
+        total += writtenVersions.reduce((grown, at) => this.#revise(at, revise, grown), 0);
         insert(revise(part), true);
         if (this.#chunkRows !== undefined) this.#open = open;
         return head;
@@ -185,11 +185,17 @@ export class Commits {
     return row;
   }
 
-  /** Reads back a written segment and passes it to revise; skips update if unchanged to minimize write billing. */
-  #revise(version: number, revise: (keys: Keys) => Keys) {
+  /**
+   * Reads back a written segment and passes it to revise, adding to its cumulative bytes what revise added to it and to earlier segments
+   * (grown, returned with this segment's growth added); skips update if unchanged to minimize write billing.
+   */
+  #revise(version: number, revise: (keys: Keys) => Keys, grown: number) {
     const text = String(this.#query('SELECT keys FROM _syncline_commit WHERE version = ?', version)[0]?.keys);
     const revised = JSON.stringify(revise(keysOf(text)));
-    if (revised !== text) this.#query('UPDATE _syncline_commit SET keys = ? WHERE version = ?', revised, version);
+    const total = grown + utf8Bytes(revised) - utf8Bytes(text);
+    if (revised !== text || total !== 0)
+      this.#query('UPDATE _syncline_commit SET keys = ?, bytes = bytes + ? WHERE version = ?', revised, total, version);
+    return total;
   }
 
   /** Returns the most recently recorded daily writes (including the commit row itself), or undefined if no device writes exist. */

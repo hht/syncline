@@ -89,13 +89,20 @@ function reportedIn(run: () => void) {
   return reported;
 }
 
-test('fails queries and sync on Worker load failure, marks downloadError on status, and recreates Worker on next open', async () => {
+test.each([
+  { failure: 'Worker load failure', fail: (failed: FakeWorker) => failed.onerror?.({ message: '' }), message: 'Syncline worker error' },
+  {
+    failure: 'core panic in the Worker',
+    fail: (failed: FakeWorker) => failed.onmessage?.({ data: { type: 'broken', error: { message: 'unreachable' } } }),
+    message: 'Syncline core panicked: unreachable',
+  },
+])('fails queries and sync on $failure, marks downloadError on status, and recreates Worker on next open', async ({ fail, message }) => {
   const space = open(async () => 'valid');
   const first = worker();
   const syncing = space.sync().catch((error: Error) => error);
-  first.onerror?.({ message: '' });
-  expect((await syncing) as Error).toEqual(expect.objectContaining({ message: expect.stringContaining('Syncline worker error') }));
-  expect(space.status().downloadError?.message).toContain('Syncline worker error');
+  fail(first);
+  expect((await syncing) as Error).toEqual(expect.objectContaining({ message: expect.stringContaining(message) }));
+  expect(space.status().downloadError?.message).toContain(message);
   expect(first.terminated).toBe(true);
 
   open(async () => 'valid');

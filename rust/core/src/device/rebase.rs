@@ -11,7 +11,7 @@ use crate::declaration::{Declaration, without_retired};
 use crate::effects::Effects;
 use crate::error::Error;
 use crate::recorder::Recorder;
-use crate::upload_queue::{Mutation, UploadQueue};
+use crate::upload_queue::{Mutation, Pending, UploadQueue};
 use std::collections::HashSet;
 
 impl Device {
@@ -30,20 +30,9 @@ impl Device {
         let result = self.commit(|device| {
             // Reads pending writes once: shared across revert and replay (change does not mutate upload queue)
             let pending = UploadQueue::all(device.db.connection())?;
-            if revert {
-                for write in pending.iter().rev() {
-                    if let Err(error) = device.db.revert(&write.changeset) {
-                        let error = Error::from(error);
-                        if error.is_transient() {
-                            return Err(error);
-                        }
-                        revert_failed = Some(error.to_string());
-                        return Err(Error::Failed("failed to revert pending writes".to_owned()));
-                    }
-                    for row in changeset::parse(&write.changeset)? {
-                        device.effects.touch(row.table());
-                    }
-                }
+            if revert && let Some(cause) = device.revert(&pending)? {
+                revert_failed = Some(cause);
+                return Err(Error::Failed("failed to revert pending writes".to_owned()));
             }
             change(device)?;
             let Device {
@@ -71,6 +60,24 @@ impl Device {
             }
             (Err(error), None) => Err(error),
         }
+    }
+
+    /// Reverts pending writes in reverse order, returning the cause if one cannot be reverted (local rows conflict with it); transient
+    /// storage errors propagate.
+    pub(super) fn revert(&mut self, pending: &[Pending]) -> Result<Option<String>, Error> {
+        for write in pending.iter().rev() {
+            if let Err(error) = self.db.revert(&write.changeset) {
+                let error = Error::from(error);
+                if error.is_transient() {
+                    return Err(error);
+                }
+                return Ok(Some(error.to_string()));
+            }
+            for row in changeset::parse(&write.changeset)? {
+                self.effects.touch(row.table());
+            }
+        }
+        Ok(None)
     }
 }
 

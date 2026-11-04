@@ -81,4 +81,6 @@ pub enum Job {
     Resync { channel: String, attempt: u64, discard: bool },
     /// Verify a range of checksums (private space caught up).
     Verify { attempt: u64 },
+    /// Open a shared space again after its opening failed (table creation or upgrade).
+    Reopen { channel: String },
 }

@@ -150,8 +150,13 @@ impl Client {
             }
             Input::End { id, write, commit } => self.end(id, write, commit),
             Input::Validated { write, invalid, error } => self.validated(write, invalid, error),
-            Input::Connect { id, channel, url } => {
-                let connected = self.connect(&channel, &url, jobs, now);
+            Input::Connect {
+                id,
+                channel,
+                url,
+                allow_cleartext,
+            } => {
+                let connected = self.connect(&channel, &url, allow_cleartext, jobs, now);
                 self.reply(id, connected.map(|()| Json::Null));
             }
             Input::Shared { id, name, tables, owner } => {

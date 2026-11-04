@@ -18,13 +18,18 @@ use rusqlite::types::Value;
 /// # Errors
 /// Returns `Error::Invalid` on declaration mismatch, or `Error::Sql` if reading the database fails.
 pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<Option<Row>, Error> {
-    // JSON columns also read json_valid: per RFC 8259, matches what JS JSON.parse accepts.
+    // JSON columns also read json_valid: per RFC 8259, matches what JS JSON.parse accepts, except that json_valid stops reading at a NUL
+    // character (where JSON.parse rejects the text), so text containing one is invalid.
     let selected: Vec<String> = table
         .columns
         .iter()
         .map(|column| {
             let name = quote(&column.name);
-            if column.json { format!("{name}, json_valid({name})") } else { name }
+            if column.json {
+                format!("{name}, json_valid({name}) AND instr({name}, char(0)) = 0")
+            } else {
+                name
+            }
         })
         .collect();
     let sql = format!(

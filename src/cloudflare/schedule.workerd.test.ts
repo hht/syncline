@@ -1,4 +1,6 @@
+import { runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
+import { lease } from './schedule.ts';
 import { alarmAfter, object, online, squat } from './test-space.ts';
 
 test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix', async () => {
@@ -27,4 +29,19 @@ test('supports recurring tasks that reschedule themselves in scheduled callbacks
   expect(await object(name).fired()).toEqual(['recurring']);
   await alarmAfter(object(name), 7 * 86_400_000);
   expect(await object(name).fired()).toEqual(['recurring', 'recurring']);
+});
+
+test('an actor reset during a chore keeps it scheduled: once the lease expires, the alarm runs it to completion', async () => {
+  const { name, phone } = await online(1);
+  await object(name).hangExports(true);
+  phone.push(squat);
+  await phone.next();
+  const running = alarmAfter(object(name), 60_000).catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await runInDurableObject(object(name), (_, state) => state.abort('Reset')).catch(() => undefined);
+  await running;
+  await object(name).hangExports(false);
+  expect(await object(name).alarmAt()).not.toBeNull();
+  await alarmAfter(object(name), lease);
+  expect(await object(name).exported()).toHaveLength(1);
 });

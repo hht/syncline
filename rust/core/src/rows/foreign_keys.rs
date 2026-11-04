@@ -12,16 +12,14 @@ use rusqlite::{Connection, params};
 impl Rows {
     /// Deletes a set of rows in a table, cascading downward to referencing rows, deducting quota for each deleted row; missing rows are no-ops.
     /// Cascades delete in batches by foreign key (among: one statement per batch per child table, querying via foreign key index):
-    /// each batch counts rows to delete and bytes of returned columns (primary key and next-level referenced columns),
-    /// rejecting if remaining quota is exceeded, deleting only if it fits.
-    /// Non-primary-key referenced columns read back are not deducted from quota, but accumulated into the pre-count comparison.
+    /// each batch counts rows to delete and bytes of their primary keys (which child references target), rejecting if remaining quota
+    /// is exceeded, deleting only if it fits.
     /// Batches of deleted rows are pushed to a stack rather than recursing (deep self-referencing chains could overflow stack).
     pub(super) fn delete(&self, db: &Connection, table: &str, keys: &[Row], room: &mut Room) -> Result<(), Error> {
-        let mut retained = 0.0;
         let key = &self.tables[table].key;
         let mut first = Vec::new();
         for (condition, values) in among(key, keys) {
-            first.extend(self.removed(db, table, &condition, values, room, &mut retained)?);
+            first.extend(self.removed(db, table, &condition, values, room)?);
         }
         let mut deleted = vec![(table.to_owned(), first)];
         while let Some((name, rows)) = deleted.pop() {
@@ -38,7 +36,7 @@ impl Rows {
                     })
                     .collect();
                 for (condition, values) in among(&child.columns, &parents) {
-                    let children = self.removed(db, &child.table, &condition, values, room, &mut retained)?;
+                    let children = self.removed(db, &child.table, &condition, values, room)?;
                     if !children.is_empty() {
                         deleted.push((child.table.clone(), children));
                     }
@@ -48,49 +46,26 @@ impl Rows {
         Ok(())
     }
 
-    /// Deletes rows in name matching condition, deducting quota, returning their primary keys and next-level referenced columns; retained tracks cumulative bytes of read-back non-primary-key referenced columns
-    fn removed(
-        &self,
-        db: &Connection,
-        name: &str,
-        condition: &str,
-        values: String,
-        room: &mut Room,
-        retained: &mut f64,
-    ) -> Result<Vec<Row>, Error> {
+    /// Deletes rows in name matching condition, deducting quota, returning their primary keys.
+    fn removed(&self, db: &Connection, name: &str, condition: &str, values: String, room: &mut Room) -> Result<Vec<Row>, Error> {
         let key = &self.tables[name].key;
-        let mut kept = key.clone();
-        for child in self.children.get(name).into_iter().flatten() {
-            for column in &child.to {
-                if !kept.contains(column) {
-                    kept.push(column.clone());
-                }
-            }
-        }
-        let referenced: Vec<String> = kept.iter().filter(|column| !key.contains(column)).cloned().collect();
         let counting = format!(
-            "SELECT count(*), total(bytes), total(referenced) FROM (SELECT {} AS bytes, {} AS referenced FROM {} WHERE {condition} LIMIT ?)",
-            sized_by(&kept),
-            if referenced.is_empty() {
-                "0".to_owned()
-            } else {
-                sized_by(&referenced)
-            },
+            "SELECT count(*), total(bytes) FROM (SELECT {} AS bytes FROM {} WHERE {condition} LIMIT ?)",
+            sized_by(key),
             quote(name)
         );
-        let (rows, bytes, referenced_bytes): (i64, f64, f64) = db
+        let (rows, bytes): (i64, f64) = db
             .prepare_cached(&counting)?
-            .query_row(params![values, room.rows + 1], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            .query_row(params![values, room.rows + 1], |row| Ok((row.get(0)?, row.get(1)?)))?;
         #[expect(clippy::cast_precision_loss, reason = "quota is within exact f64 range")]
         let left = room.bytes as f64;
-        if rows > room.rows || bytes + *retained > left {
+        if rows > room.rows || bytes > left {
             return Err(Error::Reject(too_many(room.max_rows)));
         }
-        *retained += referenced_bytes;
-        let sql = format!("DELETE FROM {} WHERE {condition} RETURNING {}", quote(name), quote_all(&kept));
-        let rows = returning(db, &sql, vec![Value::Text(values)], &kept)?;
+        let sql = format!("DELETE FROM {} WHERE {condition} RETURNING {}", quote(name), quote_all(key));
+        let rows = returning(db, &sql, vec![Value::Text(values)], key)?;
         for row in &rows {
-            room.take(&row.pick(key))?;
+            room.take(row)?;
         }
         Ok(rows)
     }

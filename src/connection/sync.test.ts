@@ -1,11 +1,12 @@
 import { expect, test } from 'vitest';
 import { receiveTimeout } from '../expo/shell.ts';
 import { flush } from '../test/test-drive.ts';
+import { captureReported } from '../test/test-errors.ts';
 import { rustLimits } from '../test/test-rust.ts';
 import { write } from '../test/test-schema.ts';
 import { failOnce, injectedError } from '../test/test-storage.ts';
 import type { Connection } from '../test/test-sync.ts';
-import { expectConnected, idle, ids, note, setup } from './test-status.ts';
+import { expectConnected, idle, ids, note, setup, writeOversized } from './test-status.ts';
 
 // Manual sync: sync() triggers immediate sync until caught up; resync() re-downloads full space (preserving pending unless discardPending).
 
@@ -66,6 +67,21 @@ test.for([
     connection.stop();
   },
 );
+
+test('resync({ discardPending: true }) reverts the discarded writes but keeps synced rows visible until the full snapshot lands', async () => {
+  const { network, device, connection, run, notes } = setup();
+  connection.start();
+  await run();
+  network.breakOne();
+  await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
+  const resynced = connection.resync({ discardPending: true });
+  await flush();
+  expect(notes()).toEqual(ids.map((id) => ({ id })));
+  await run();
+  await resynced;
+  expect(notes()).toEqual(ids.map((id) => ({ id })));
+  connection.stop();
+});
 
 test('resync(): dedupes pushed mutations on server when resyncing before confirmation, achieving eventual consistency', async () => {
   const { network, device, connection, run, notes, space } = setup();
@@ -143,5 +159,20 @@ test('during resync(): waiting sync() calls await completion without premature f
   await expect(Promise.all([connection.resync(), run()])).rejects.toThrow(injectedError);
   await retried(connection, run);
   expect(connection.status()).toMatchObject({ connected: true });
+  connection.stop();
+});
+
+test('read error during a pull while connected: reported, then the pull retries with backoff until caught up, so sync() resolves', async () => {
+  const reported = captureReported();
+  const { server, storage, connection, run, notes } = setup();
+  connection.start();
+  await run();
+  failOnce(storage, 'SELECT client FROM _syncline_pending GROUP BY client');
+  writeOversized(server);
+  await run();
+  expect(reported).toEqual([expect.stringMatching(injectedError)]);
+  expect(connection.status()).toMatchObject({ connected: true, downloading: false, downloadError: undefined });
+  expect(notes()).toHaveLength(ids.length + 10);
+  await connection.sync();
   connection.stop();
 });

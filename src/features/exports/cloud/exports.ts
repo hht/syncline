@@ -74,6 +74,11 @@ export type ExportOptions = { exports?: Record<string, Exporter>; exportDelay?: 
  */
 type Context = { poll: Space['poll']; by: (name: string, at: number) => void; reserved: string; events: Events };
 
+/** The object's key-value storage, holding the exporter names known to the previous start under exportersKey. */
+type Kv = { get<T>(key: string): T | undefined; put(key: string, value: unknown): void };
+
+const exportersKey = 'syncline:exporters';
+
 /** Scheduled task: executes a step, returning true if unfinished; reschedules on error using exponential backoff. */
 type Chore = { run: () => Promise<boolean>; retry: { base: number; max: number }; failed: (error: unknown) => void };
 
@@ -94,6 +99,19 @@ export class Exports {
     this.#delay = exportDelay;
     this.#budget = exportBudget;
     this.#prefix = `${context.reserved}export:`;
+  }
+
+  /**
+   * Schedules exporters added since the previous start (such as by a deploy), which otherwise wait for the next write; the known names
+   * are rewritten only when the set changes (starts are frequent; a row write is billed). An empty space (no commits) only records
+   * them: there is nothing to export, and its first write schedules every exporter.
+   */
+  started(empty: boolean, kv: Kv) {
+    const names = Object.keys(this.#exports);
+    const known = new Set(kv.get<string[]>(exportersKey));
+    const added = names.filter((name) => !known.has(name));
+    if (!empty) for (const name of added) this.#context.by(this.#prefix + name, Date.now() + this.#delay);
+    if (added.length > 0 || known.size !== names.length) kv.put(exportersKey, names);
   }
 
   /** Schedules export after writes (including sync scope adjustments on open): schedules each exporter at latest exportDelay from now (batching writes); does not advance tasks currently in backoff. */

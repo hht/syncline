@@ -62,12 +62,9 @@ impl Client {
 
     /// Claims a shared space, queuing table creation and upgrades.
     pub(super) fn shared(&mut self, name: &str, tables: Vec<Table>, owner: Option<String>) -> Result<(), Failure> {
-        self.device.declare_shared(name, tables)?;
+        self.device.declare_shared(name, tables, owner)?;
         self.opened.insert(name.to_owned(), Opened::Pending);
-        self.enqueue(Task::OpenShared {
-            name: name.to_owned(),
-            owner,
-        });
+        self.enqueue(Task::OpenShared { name: name.to_owned() });
         Ok(())
     }
 
@@ -100,7 +97,14 @@ impl Client {
     /// Establishes sync for a space and reports initial status (sync started by subsequent `Start` call):
     /// private spaces attach a schema handshake; shared spaces must already be claimed and queue table creation
     /// (which must not be created inside an open local write savepoint), with connection awaiting completion.
-    pub(super) fn connect(&mut self, channel: &str, url: &str, jobs: &mut Vec<Job>, now: f64) -> Result<(), Failure> {
+    pub(super) fn connect(
+        &mut self,
+        channel: &str,
+        url: &str,
+        allow_cleartext: bool,
+        jobs: &mut Vec<Job>,
+        now: f64,
+    ) -> Result<(), Failure> {
         if self.connections.contains_key(channel) {
             return Err(Failure::new(format!("space is already syncing: {channel}")));
         }
@@ -114,7 +118,7 @@ impl Client {
             )
         };
         let mut ctx = self.context(jobs, now);
-        let connection = Connection::new(&mut ctx, channel, url, handshake, opened)?;
+        let connection = Connection::new(&mut ctx, channel, url, allow_cleartext, handshake, opened)?;
         connection.announce(ctx.out);
         self.connections.insert(channel.to_owned(), connection);
         Ok(())

@@ -139,7 +139,7 @@ impl Recorder {
 /// Changed values must be transferable to JS: integers within safe JS integer range, not BLOB (rows are uploaded via JSON; synced tables do not store BLOB)
 fn transferable(table: &str, value: &Value) -> Result<(), Error> {
     match value {
-        Value::Integer(integer) if integer.abs() > MAX_SAFE_INTEGER => Err(Error::Failed(format!(
+        Value::Integer(integer) if integer.unsigned_abs() > MAX_SAFE_INTEGER.unsigned_abs() => Err(Error::Failed(format!(
             "integer in table {table} exceeds safe JS integer range: {integer}"
         ))),
         Value::Blob(_) => Err(Error::Failed(format!("changeset for {table} contains unsupported field type 4"))),

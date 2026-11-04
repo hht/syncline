@@ -89,10 +89,23 @@ pub struct Connection {
 
 impl Connection {
     /// Synchronization for a space (not yet started); handshake is present only for private space. Fails if sync URL contains query string or fragment: pull parameters are appended dynamically and cloud does not recognize other query parameters.
+    /// Fails if sync URL is not HTTPS (HTTP needs `allow_cleartext`): native networking runs on rustls, outside the platform cleartext policies.
     ///
     /// # Errors
-    /// Sync URL contains query string or fragment.
-    pub fn new(ctx: &mut Context, channel: &str, url: &str, handshake: Option<Handshake>, opened: Opened) -> Result<Self, Failure> {
+    /// Sync URL contains query string or fragment, or is not HTTPS (HTTP needs `allow_cleartext`).
+    pub fn new(
+        ctx: &mut Context,
+        channel: &str,
+        url: &str,
+        allow_cleartext: bool,
+        handshake: Option<Handshake>,
+        opened: Opened,
+    ) -> Result<Self, Failure> {
+        if !(url.starts_with("https://") || allow_cleartext && url.starts_with("http://")) {
+            return Err(Failure::new(format!(
+                "sync URL must start with https:// (http:// needs allowCleartext): {url}"
+            )));
+        }
         if url.contains('?') || url.contains('#') {
             return Err(Failure::new(format!("sync URL must not contain query string or fragment: {url}")));
         }

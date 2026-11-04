@@ -49,6 +49,8 @@ class SharedSimulation {
   readonly #cloud: SharedCloud;
   /** Expected visible rows for each subscription and version cookie under that version's bucket rules. */
   readonly #history = new Map<string, Row[]>();
+  /** Rows each device showed at its last landed cookie: a resync or reset drops the cookie but keeps them visible until the full pull lands. */
+  readonly #lastLanded = new Map<number, Row[]>();
   readonly #storages = [0, 1, 2].map(() => deviceStorage(createProgram));
   /** Active owner logged into each device: switching owners clears previously visible rows. */
   readonly owners: string[] = [];
@@ -110,7 +112,11 @@ class SharedSimulation {
     this.#devices[index]?.close();
     this.#network.disconnect(index);
     // Same user restarting: acquires same token as before crash (may have resubscribed prior).
-    if (this.owners[index] !== owner) this.#cloud.subscriptions[index] = owner;
+    if (this.owners[index] !== owner) {
+      this.#cloud.subscriptions[index] = owner;
+      // Switching owners wipes the rows the previous owner could see.
+      this.#lastLanded.delete(index);
+    }
     const device = new Device(this.storage(index), []);
     const mirror = device.shared('catalog', [program], owner);
     this.#devices[index] = device;
@@ -234,12 +240,13 @@ class SharedSimulation {
     await flush();
     this.#observe();
     this.#record();
-    // Asserts Consistent from model/Shared.tla: local rows match landed subscription at cookie version.
+    // Asserts Consistent from model/Shared.tla: local rows match landed subscription at cookie version; without a cookie, rows stay as last landed.
     for (const [index, mirror] of this.mirrors.entries()) {
       const cookie = mirror.cookie();
       const landed = this.#landed(index);
-      const expected = cookie ? this.#history.get(`${landed}:${formatCookie(cookie)}`) : [];
+      const expected = cookie ? this.#history.get(`${landed}:${formatCookie(cookie)}`) : (this.#lastLanded.get(index) ?? []);
       if (!expected) throw new Error(`device ${index} cookie is not an emitted version: ${JSON.stringify(cookie)} (${landed})`);
+      this.#lastLanded.set(index, expected);
       expect(this.rows(index), `device ${index} (${landed}) at ${cookie?.version ?? 'not synced'}`).toEqual(expected);
       if (this.#network.live(index) > 1) throw new Error(`device ${index} has ${this.#network.live(index)} concurrent active connections`);
     }

@@ -12,7 +12,7 @@ import { write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 import { heartbeat } from './test-connection.ts';
-import { chunkLimit, createDraft, createNote, draft, expectConnected, idle, note, setup, url } from './test-status.ts';
+import { chunkLimit, createDraft, createNote, draft, expectConnected, idle, note, setup, url, writeOversized } from './test-status.ts';
 
 // Sync status: tracks connection, download, and upload state, delivering updates to subscribers.
 
@@ -146,9 +146,7 @@ test('oversized notice: cloud delivers hint, device catches up via HTTP pull wit
   await run();
   expect(connection.status()).toMatchObject({ connected: true });
   const accepted = network.accepted.size;
-  server.mutate((tx) => {
-    for (let n = 0; n < 10; n += 1) tx.insert(note, { id: `note-${'x'.repeat(30)}-${n}` });
-  });
+  writeOversized(server);
   await run();
   expect(events.filter(({ type }) => type === 'connection.closed')).toEqual([]);
   expect([network.accepted.size, notes()]).toEqual([

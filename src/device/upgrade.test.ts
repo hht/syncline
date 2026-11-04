@@ -96,7 +96,7 @@ test('pre-upgrade write rejected because row referenced in same write is missing
   ]);
 });
 
-test('undeclared tables do not stall sync: rows preserved, later overwrites earlier, delete takes effect, cleared on reset; rows restored after upgrading schema', async () => {
+test('undeclared tables do not stall sync: rows preserved, later overwrites earlier, delete takes effect, replaced by the full pull after resync; rows restored after upgrading schema', async () => {
   const exercise = sqliteTable('exercise', { id: text().primaryKey(), name: text() });
   const cloud = cloudStorage(createWorkout, 'CREATE TABLE exercise (id TEXT PRIMARY KEY, name TEXT)');
   const space = new Space(cloud, [workout, exercise]);
@@ -121,11 +121,14 @@ test('undeclared tables do not stall sync: rows preserved, later overwrites earl
     { id: 'e3', name: 'deadlift' },
   ]);
 
-  // Cleared together on resync, redelivered on subsequent full pull
+  // Replaced together when the full pull after resync lands
   const stale = deviceStorage(createWorkout);
   const reset = new Device(stale, tables);
   await reset.private.receive(pulled(space, reset));
   await reset.private.resync(true);
+  space.mutate((tx) => tx.delete(exercise, { id: 'e1' }));
+  space.mutate((tx) => tx.delete(exercise, { id: 'e3' }));
+  await reset.private.receive(pulled(space, reset));
   stale.sql.exec('CREATE TABLE exercise (id TEXT PRIMARY KEY, name TEXT)');
   new Device(stale, [workout, exercise]);
   expect(drizzle(stale).select().from(exercise).all()).toEqual([]);

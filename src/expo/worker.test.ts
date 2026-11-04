@@ -9,12 +9,21 @@ vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
   default: async () => undefined,
   Files: {
     install: async () => ({
-      open: () => ({ open: () => '[]', control: () => '[]', free: () => undefined }),
+      open: () => ({
+        // A call of type panic traps like a Rust panic does in WebAssembly.
+        open: (options: string) => trapOn(options),
+        control: (input: string) => trapOn(input),
+        free: () => undefined,
+      }),
       remove: (name: string) => removed.push(name),
     }),
   },
 }));
 vi.mock('../../rust/target/web/syncline_wasm_bg.wasm', () => ({ default: '' }));
+const trapOn = vi.hoisted(() => (text: string) => {
+  if (text.includes('panic')) throw new WebAssembly.RuntimeError('unreachable');
+  return '[]';
+});
 
 const posted: unknown[] = [];
 const scope = Object.assign(new EventTarget(), {
@@ -61,4 +70,13 @@ test('rejects deleting database while open in another instance; deletes file aft
     received: [{ type: 'reply', id: 1 }],
   });
   expect(removed).toEqual(['worker-test']);
+});
+
+test('a core panic (WebAssembly trap) marks the Worker broken, whether opening or handling a call', async () => {
+  await call(4, { type: 'open', id: 1, name: 'worker-panic', options: {} });
+  expect(await call(4, { type: 'panic', id: 2 })).toEqual({ type: 'broken', error: expect.objectContaining({ message: 'unreachable' }) });
+  expect(await call(5, { type: 'open', id: 1, name: 'worker-panic', options: { panic: true } })).toEqual({
+    type: 'broken',
+    error: expect.objectContaining({ message: 'unreachable' }),
+  });
 });

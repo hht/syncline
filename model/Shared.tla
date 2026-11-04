@@ -261,7 +261,7 @@ Chunks(req, pl, p, clear) ==
                         cont(IF e = t /\ More(pl, p) THEN nr ELSE [pl EXCEPT !.at = Done, !.p = e])) : e \in pl.p..t}
     IN {final} \cup (IF chunks < MaxChunks THEN scans \cup tails ELSE {})
 
-\* Start a plan from device cookie c and landed subscription o, computed at position p under subscription N: full pull if cookie is missing, belongs to another incarnation, is below log floor (returns reset in the implementation, prompting the device to clear and full-pull from scratch), or subscription dropped buckets; watermark h takes any version between start (log floor for full pull) and p. The model evaluates against current log floor (cached copies computed before truncation had a lower floor in the implementation and could serve incremental pulls)
+\* Start a plan from device cookie c and landed subscription o, computed at position p under subscription N: full pull if cookie is missing, belongs to another incarnation, is below log floor (returns reset in the implementation, prompting the device to drop its cookie and full-pull from scratch, keeping rows until the pull lands), or subscription dropped buckets; watermark h takes any version between start (log floor for full pull) and p. The model evaluates against current log floor (cached copies computed before truncation had a lower floor in the implementation and could serve incremental pulls)
 Start(req, p, N) ==
     LET e == EraOf(p)
         t == VerOf(p)
@@ -269,7 +269,7 @@ Start(req, p, N) ==
     IN IF full THEN UNION {Chunks(req, Plan(e, -1, h, N, N, 0, h), p, TRUE) : h \in LowOf(e)..t}
        ELSE UNION {Chunks(req, Plan(e, VerOf(req.c), h, req.o, N, 0, VerOf(req.c)), p, FALSE) : h \in VerOf(req.c)..t}
 
-\* Fresh response computed at position p under subscription N for request: restarts plan if resumed plan is from another incarnation or its subscription is not N; performs a full pull if any version in the plan falls below log floor (the implementation returns reset, causing device to clear and full-pull)
+\* Fresh response computed at position p under subscription N for request: restarts plan if resumed plan is from another incarnation or its subscription is not N; performs a full pull if any version in the plan falls below log floor (the implementation returns reset, causing device to drop its cookie and full-pull, keeping rows until the pull lands)
 FreshAt(req, p, N) ==
     IF req.kind = "start" \/ req.plan.e # EraOf(p) \/ req.plan.N # N THEN Start(req, p, N)
     ELSE IF \E v \in {req.plan.h, req.plan.p} \cup (IF req.plan.f = -1 THEN {} ELSE {req.plan.f}) : v < LowOf(EraOf(p))
@@ -355,11 +355,17 @@ SubChange ==
     /\ UNCHANGED <<dTables, dCookie, dSub, dHeard, dStale, dStage, dNext, dWant, dInflight>>
 
 \* ---------------------------------------------------------------- Connection
-\* Shard pushes unseen position v to this connection: notice chained onto previously pushed position (same incarnation, no intermediate rule changes, previous position at or above log floor), or hint
+\* No version after base up to the log floor touches a row in subscription sb: truncating them leaves notices from base complete
+QuietTo(e, base, sb) == ~\E i \in (VerOf(base) + 1)..LowOf(e) : \E k \in LogAt(e, i).keys : Touches(e, i, k, sb)
+
+\* Shard pushes unseen position v to this connection: notice chained onto previously pushed position (same incarnation, no intermediate rule changes,
+\* and no version truncated since that position touched the subscription), or hint. The implementation builds each round from the log only at or
+\* above the floor and delivers every round to the shard in order, so a connection's pushed position falls below the floor only across rounds
+\* irrelevant to it: it pushes such notices without checking the floor
 Push(v) ==
     /\ dConn /\ v \in Points /\ v > cPushed
     /\ \E m \in {Hint(v, cSub)} \cup
-               (IF EraOf(v) = EraOf(cPushed) /\ ~RuleIn(EraOf(v), VerOf(cPushed), VerOf(v)) /\ VerOf(cPushed) >= LowOf(EraOf(v))
+               (IF EraOf(v) = EraOf(cPushed) /\ ~RuleIn(EraOf(v), VerOf(cPushed), VerOf(v)) /\ QuietTo(EraOf(v), cPushed, cSub)
                 THEN {Notice(cPushed, v, OpsSince(cPushed, v, cSub), cSub)} ELSE {}) :
            chan' = Append(chan, m)
     /\ cPushed' = v

@@ -18,32 +18,45 @@ struct Step {
 }
 
 /// Internal schema versions: version n corresponds to item n.
-const STEPS: &[Step] = &[Step {
-    up: &[
-        // Pending local writes: each mutation and its changeset in local commit order
-        "CREATE TABLE _syncline_pending (seq INTEGER PRIMARY KEY, client TEXT NOT NULL, id INTEGER NOT NULL, changes TEXT NOT NULL, changeset BLOB NOT NULL)",
-        // Cursor per space (private space uses empty string): shared spaces also record incarnation, landed subscription fingerprint (sub), and landed subscription; refetch triggers a full pull for private spaces (preserving cookie and pending writes)
-        "CREATE TABLE _syncline_cookie (version INTEGER NOT NULL, nonce INTEGER NOT NULL, space TEXT NOT NULL, incarnation INTEGER, refetch INTEGER NOT NULL DEFAULT 0, sub TEXT, landed TEXT)",
-        // Staged chunks from multi-chunk pulls: next cursor token, seen head, and whether final chunk was staged as intermediate (model/Shared.tla); shared spaces also record subscription hash (sub, discarded if response subscription differs); cleared when cookie changes
-        "CREATE TABLE _syncline_stage (seq INTEGER PRIMARY KEY, next TEXT NOT NULL, space TEXT NOT NULL, seen INTEGER, final INTEGER NOT NULL, sub TEXT)",
-        // Staged row modifications deduplicated by primary key: only latest operation per row is kept; key is canonical primary key, row is full row for put or key for del; kind covers clear (empty tbl/key), range (key is JSON range), and drop (key empty, row is dropped columns or NULL for whole table); applied before row ops at landing. Whole tables write to shadow tables
-        "CREATE TABLE _syncline_staged (space TEXT NOT NULL, tbl TEXT NOT NULL, key TEXT NOT NULL, kind TEXT NOT NULL, row TEXT, PRIMARY KEY (space, tbl, key)) WITHOUT ROWID",
-        // Unknown rows belonging to tables not yet declared locally (newer cloud deployments), keyed by canonical primary key; restored when local declaration adds the table
-        "CREATE TABLE _syncline_unknown (seq INTEGER PRIMARY KEY, name TEXT NOT NULL, row TEXT NOT NULL, space TEXT NOT NULL, key TEXT NOT NULL)",
-        "CREATE UNIQUE INDEX _syncline_unknown_key ON _syncline_unknown (space, name, key)",
-        // Columns present at last open for each synced table: missing columns restored from _extra
-        "CREATE TABLE _syncline_columns (name TEXT PRIMARY KEY, columns TEXT NOT NULL)",
-        // Owner identity per space (authenticated user), cleared on user switch
-        "CREATE TABLE _syncline_owner (space TEXT PRIMARY KEY, owner TEXT NOT NULL)",
-        // Synced tables declared at last open per space: triggers full refetch if a table left sync during app downgrade and re-enters
-        "CREATE TABLE _syncline_declared (space TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (space, name))",
-        // Online checksum state: timestamp of last complete verification round, repair status after mismatch, next range start (next cursor from cloud to resume across app restarts), range row limit (halved on concurrent local modification), start of day window and spent row budget, and JSON ranges scheduled for repair
-        "CREATE TABLE _syncline_verified (space TEXT PRIMARY KEY, at INTEGER NOT NULL, repaired INTEGER NOT NULL, next TEXT, rows INTEGER, day INTEGER NOT NULL DEFAULT 0, spent INTEGER NOT NULL DEFAULT 0, ranges TEXT)",
-        // Verified cloud space identity: recorded on initial sync, cleared on owner switch
-        "CREATE TABLE _syncline_identity (space TEXT PRIMARY KEY, identity TEXT NOT NULL)",
-    ],
-    down: &[],
-}];
+const STEPS: &[Step] = &[
+    Step {
+        up: &[
+            // Pending local writes: each mutation and its changeset in local commit order
+            "CREATE TABLE _syncline_pending (seq INTEGER PRIMARY KEY, client TEXT NOT NULL, id INTEGER NOT NULL, changes TEXT NOT NULL, changeset BLOB NOT NULL)",
+            // Cursor per space (private space uses empty string): shared spaces also record incarnation, landed subscription fingerprint (sub), and landed subscription; refetch triggers a full pull for private spaces (preserving cookie and pending writes)
+            "CREATE TABLE _syncline_cookie (version INTEGER NOT NULL, nonce INTEGER NOT NULL, space TEXT NOT NULL, incarnation INTEGER, refetch INTEGER NOT NULL DEFAULT 0, sub TEXT, landed TEXT)",
+            // Staged chunks from multi-chunk pulls: next cursor token, seen head, and whether final chunk was staged as intermediate (model/Shared.tla); shared spaces also record subscription hash (sub, discarded if response subscription differs); cleared when cookie changes
+            "CREATE TABLE _syncline_stage (seq INTEGER PRIMARY KEY, next TEXT NOT NULL, space TEXT NOT NULL, seen INTEGER, final INTEGER NOT NULL, sub TEXT)",
+            // Staged row modifications deduplicated by primary key: only latest operation per row is kept; key is canonical primary key, row is full row for put or key for del; kind covers clear (empty tbl/key), range (key is JSON range), and drop (key empty, row is dropped columns or NULL for whole table); applied before row ops at landing. Whole tables write to shadow tables
+            "CREATE TABLE _syncline_staged (space TEXT NOT NULL, tbl TEXT NOT NULL, key TEXT NOT NULL, kind TEXT NOT NULL, row TEXT, PRIMARY KEY (space, tbl, key)) WITHOUT ROWID",
+            // Unknown rows belonging to tables not yet declared locally (newer cloud deployments), keyed by canonical primary key; restored when local declaration adds the table
+            "CREATE TABLE _syncline_unknown (seq INTEGER PRIMARY KEY, name TEXT NOT NULL, row TEXT NOT NULL, space TEXT NOT NULL, key TEXT NOT NULL)",
+            "CREATE UNIQUE INDEX _syncline_unknown_key ON _syncline_unknown (space, name, key)",
+            // Columns present at last open for each synced table: missing columns restored from _extra
+            "CREATE TABLE _syncline_columns (name TEXT PRIMARY KEY, columns TEXT NOT NULL)",
+            // Owner identity per space (authenticated user), cleared on user switch
+            "CREATE TABLE _syncline_owner (space TEXT PRIMARY KEY, owner TEXT NOT NULL)",
+            // Synced tables declared at last open per space: triggers full refetch if a table left sync during app downgrade and re-enters
+            "CREATE TABLE _syncline_declared (space TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (space, name))",
+            // Online checksum state: timestamp of last complete verification round, repair status after mismatch, next range start (next cursor from cloud to resume across app restarts), range row limit (halved on concurrent local modification), start of day window and spent row budget, and JSON ranges scheduled for repair
+            "CREATE TABLE _syncline_verified (space TEXT PRIMARY KEY, at INTEGER NOT NULL, repaired INTEGER NOT NULL, next TEXT, rows INTEGER, day INTEGER NOT NULL DEFAULT 0, spent INTEGER NOT NULL DEFAULT 0, ranges TEXT)",
+            // Verified cloud space identity: recorded on initial sync, cleared on owner switch
+            "CREATE TABLE _syncline_identity (space TEXT PRIMARY KEY, identity TEXT NOT NULL)",
+        ],
+        down: &[],
+    },
+    Step {
+        // Keys the cookie by space: SQLite sessions skip tables without a primary key, so the local write check missed writes to it.
+        // Keeps the first row of a space duplicated by such a write (the one read before, written by Syncline). Older releases use the keyed table unchanged, so nothing to undo.
+        up: &[
+            "CREATE TABLE _syncline_cookie_keyed (version INTEGER NOT NULL, nonce INTEGER NOT NULL, space TEXT NOT NULL PRIMARY KEY, incarnation INTEGER, refetch INTEGER NOT NULL DEFAULT 0, sub TEXT, landed TEXT)",
+            "INSERT OR IGNORE INTO _syncline_cookie_keyed SELECT version, nonce, space, incarnation, refetch, sub, landed FROM _syncline_cookie ORDER BY rowid",
+            "DROP TABLE _syncline_cookie",
+            "ALTER TABLE _syncline_cookie_keyed RENAME TO _syncline_cookie",
+        ],
+        down: &[],
+    },
+];
 
 /// Upgrades or downgrades internal tables to the version required by code within a transaction (must not be called inside an active transaction).
 ///
@@ -117,6 +130,25 @@ mod tests {
         assert_eq!(tables(&db), first);
         let versions: i64 = db.query_row("SELECT count(*) FROM _syncline_schema", [], |row| row.get(0)).unwrap();
         assert_eq!(versions, i64::try_from(STEPS.len()).unwrap());
+    }
+
+    #[test]
+    fn upgrade_keys_cookie_by_space_keeping_the_first_row_of_a_duplicated_space() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE _syncline_schema (version INTEGER PRIMARY KEY, down TEXT NOT NULL); INSERT INTO _syncline_schema VALUES (1, '[]')")
+            .unwrap();
+        for sql in STEPS[0].up {
+            db.execute_batch(sql).unwrap();
+        }
+        db.execute_batch("INSERT INTO _syncline_cookie (version, nonce, space) VALUES (1, 1, ''), (2, 2, ''), (5, 1, 'feed')")
+            .unwrap();
+        prepare(&db).unwrap();
+        assert_eq!(cookie(&db, "").unwrap(), Some(Cookie { version: 1, nonce: 1 }));
+        assert_eq!(cookie(&db, "feed").unwrap(), Some(Cookie { version: 5, nonce: 1 }));
+        assert!(
+            db.execute("INSERT INTO _syncline_cookie (version, nonce, space) VALUES (3, 3, '')", [])
+                .is_err()
+        );
     }
 
     #[test]

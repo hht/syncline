@@ -1,11 +1,12 @@
 //! HTTP pulls: spawns a thread per request, sends synchronously, reads body to completion, and delivers result to sync thread.
 //! Aborted requests discard results before delivery.
 //! `timeout_per_read` triggers failure when no data arrives within the deadline (resetting timer on each socket read, matching web streaming timeouts).
-//! Connect timeout shares this duration. HTTP 4xx and 5xx deliver status code and body normally (interpreted by sync core).
+//! Address resolution and connect timeouts share this duration (resolution is otherwise unbounded, and no core deadline covers a pull). HTTP 4xx and 5xx deliver status code and body normally (interpreted by sync core).
 //! TLS uses ureq rustls (ring); certificates use the platform verifier on Apple platforms and bundled `WebPki` elsewhere.
 //! Requests send `Accept-Encoding: gzip` and responses are decompressed automatically.
 //! What it should not know: request payload schemas or retry backoff strategies.
 //! @see <https://docs.rs/ureq/3.5.0/ureq/config/struct.ConfigBuilder.html#method.timeout_per_read>
+//! @see <https://docs.rs/ureq/3.5.0/ureq/config/struct.ConfigBuilder.html#method.timeout_resolve>
 
 use crate::host::Event;
 use std::collections::HashMap;
@@ -40,6 +41,7 @@ pub fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .tls_config(ureq::tls::TlsConfig::builder().root_certs(roots).build())
         .http_status_as_error(false)
+        .timeout_resolve(stall)
         .timeout_connect(stall)
         .timeout_per_read(stall)
         .timeout_per_write(stall)
@@ -129,6 +131,11 @@ mod tests {
         };
         let result = send(&agent(), request);
         (result, server.join().unwrap())
+    }
+
+    #[test]
+    fn address_resolution_fails_after_the_receive_timeout() {
+        assert_eq!(agent().config().timeouts().resolve, Some(Duration::from_secs(30)));
     }
 
     #[test]

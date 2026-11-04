@@ -100,6 +100,13 @@ test('throws on sync URL containing query string or hash: rejected by cloud pull
     expect(() => new Connection(device.private, { url: address, token: async () => 't' })).toThrow('must not contain query string');
 });
 
+test('throws on a cleartext sync URL unless allowCleartext: the native network stack sits outside the platform cleartext policy', () => {
+  const device = new Device(deviceStorage(createNote), tables);
+  const cleartext = url.replace('https://', 'http://');
+  expect(() => new Connection(device.private, { url: cleartext, token: async () => 't' })).toThrow('must start with https://');
+  expect(() => new Connection(device.private, { url: cleartext, token: async () => 't', allowCleartext: true })).not.toThrow();
+});
+
 test('defaults to global fetch without this binding: prevents Illegal invocation in browsers', async () => {
   const calls: unknown[] = [];
   vi.stubGlobal('fetch', function (this: unknown) {

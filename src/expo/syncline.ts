@@ -64,8 +64,10 @@ export type OpenOptions<S extends Schema> = {
   localOnly?: Schema;
   /** Retired tables and columns ("table.column") permanently removed from sync and dropped on open. */
   retired?: string[];
-  /** Private space sync endpoint URL (starting with https), used for both WebSocket and HTTP downloads. Must not contain query parameters or '#' (throws on open if present). */
+  /** Private space sync endpoint URL (HTTPS), used for both WebSocket and HTTP downloads. Must not contain query parameters or '#'; otherwise the space fails with downloadError. */
   url: string;
+  /** Accepts HTTP sync URLs (private and shared spaces), sending tokens and rows in cleartext; for local development only. */
+  allowCleartext?: boolean;
   /** Authentication token getter called before connecting. */
   token: () => Promise<string>;
   validation?: Validation;

@@ -83,3 +83,9 @@ export function setup(quota?: Quota) {
   const notes = () => drizzle(storage).select().from(note).orderBy(note.id).all();
   return { cloud, space, server, network, storage, device, state, connection, seen, serverErrors, run, notes, events };
 }
+
+/** Server write too large for a notification: connected devices get a hint and pull over HTTP. */
+export const writeOversized = (server: ReturnType<typeof setup>['server']) =>
+  server.mutate((tx) => {
+    for (let n = 0; n < 10; n += 1) tx.insert(note, { id: `note-${'x'.repeat(30)}-${n}` });
+  });

@@ -75,7 +75,7 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Shard connects late-arriving rounds from an older incarnation by version and pushes cross-incarnation notices (`MCSharedLate`: S1)
 - Return incremental instead of full pulls when cookie is earlier than log floor after truncation (`MCSharedTrunc`: S1)
 - Continue reading when mid-pull plan versions are earlier than log floor after truncation (`MCSharedTrunc`: S1)
-- Shards push notices even when previous pushed version is earlier than log floor (`MCSharedTrunc`: S1)
+- Shards push notices even when a version truncated since the previous pushed version touched the subscription (`MCSharedTrunc`: S1)
 - Do not drop target when landed incarnation differs from target incarnation (`MCLiveSharedLate`: S2; device continues pulling with a target from another incarnation)
 - Shard pushes hint for late-arriving older incarnation round without pushing queried head version (`MCLiveSharedLate`: S2; after device lands on old incarnation, shard assumes head was pushed and stops pushing, stalling device on old incarnation)
 - When notices received before catch-up differ in incarnation from queried head, stop querying and do not push head version (`MCLiveSharedLate`: S2)

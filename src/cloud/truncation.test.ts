@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Chunk } from '../common/protocol.ts';
+import { day, program, rules, schema } from '../test/test-catalog.ts';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, install, pulled, tables, upload, workout, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
@@ -117,4 +118,16 @@ test('truncation step cuts at exact version reaching target without exceeding it
   expect(sql('SELECT version FROM _syncline_commit')).toEqual([{ version: head }]);
   expect(Number(sql('SELECT version FROM _syncline_low')[0]?.version)).toBe(head - 1);
   expect(commits.truncate(0, 0)).toBe(false);
+});
+
+test('a shared write split across commits records the byte size of each segment as stored, after buckets are added to its keys', () => {
+  const cloud = cloudStorage(...schema);
+  const space = new Space(cloud, [program, day], { shared: { buckets: rules } });
+  space.mutate((tx) => {
+    for (let index = 0; index < 9000; index += 1) tx.upsert(program, { id: `${'k'.repeat(150)}${index}`, status: 'published' });
+  });
+  const rows = query(cloud, 'SELECT bytes, length(CAST(keys AS BLOB)) AS stored FROM _syncline_commit WHERE version > 0 ORDER BY version');
+  expect(rows.length).toBeGreaterThan(1);
+  let total = 0;
+  expect(rows.map(({ bytes }) => Number(bytes))).toEqual(rows.map(({ stored }) => (total += Number(stored))));
 });

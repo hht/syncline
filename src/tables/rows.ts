@@ -78,9 +78,15 @@ export class Rows {
       for (const foreignKey of foreignKeysOf(table)) {
         const reference = { table: tableName(table), ...foreignKey };
         // Target table must exist in the synced tables for this space.
-        if (!this.#tables.has(reference.parent))
+        const target = this.#tables.get(reference.parent);
+        if (!target)
           throw new Error(
             `Foreign key ${reference.table}.${reference.columns.join(',')} references ${reference.parent}, which is not a synced table in this space; foreign keys must target synced tables in the same space`,
+          );
+        // Offline devices cannot keep any other column unique, so a row referencing one by value would have no single parent.
+        if (reference.to.length !== target.key.length || !target.key.every((column) => reference.to.includes(column)))
+          throw new Error(
+            `Foreign key ${reference.table}.${reference.columns.join(',')} references ${reference.parent}.${reference.to.join(',')}, which is not its primary key; foreign keys must reference the parent table's primary key`,
           );
         this.#parents.set(reference.table, [...(this.#parents.get(reference.table) ?? []), reference]);
         this.#children.set(reference.parent, [...(this.#children.get(reference.parent) ?? []), reference]);
@@ -155,25 +161,20 @@ export class Rows {
    * Counts pending rows and bytes before deleting to reject oversized operations before allocating memory.
    */
   delete(query: Query, table: string, keys: Record<string, Value>[], changed: Changed, readback?: Readback) {
-    // Cumulative byte length of referenced non-primary key columns read during delete traversal.
-    let retained = 0;
-    // Deletes matching rows in table and cascades to child references.
+    // Deletes matching rows in table, returning their primary keys (which child references target) to cascade further.
     const removed = (name: string, condition: string, values: string) => {
       const { key } = this.#tables.get(name) as { key: string[] };
-      const kept = [...new Set([...key, ...(this.#children.get(name) ?? []).flatMap((child) => child.to)])];
-      const referenced = kept.filter((column) => !key.includes(column));
       const [counted] = query(
-        `SELECT count(*) AS rows, total(bytes) AS bytes, total(referenced) AS referenced FROM (SELECT ${sizedBy(kept)} AS bytes, ${referenced.length > 0 ? sizedBy(referenced) : '0'} AS referenced FROM ${quote(name)} WHERE ${condition} LIMIT ?)`,
+        `SELECT count(*) AS rows, total(bytes) AS bytes FROM (SELECT ${sizedBy(key)} AS bytes FROM ${quote(name)} WHERE ${condition} LIMIT ?)`,
         values,
         changed.room.rows + 1,
       );
-      if (Number(counted?.rows) > changed.room.rows || Number(counted?.bytes) + retained > changed.room.bytes)
+      if (Number(counted?.rows) > changed.room.rows || Number(counted?.bytes) > changed.room.bytes)
         throw new Reject(tooMany(changed.maxRows));
-      retained += Number(counted?.referenced);
-      const returning = readback ? `${quoteAll(kept)}, ${readback.columns(name)}` : quoteAll(kept);
+      const returning = readback ? `${quoteAll(key)}, ${readback.columns(name)}` : quoteAll(key);
       const rows = query(`DELETE FROM ${quote(name)} WHERE ${condition} RETURNING ${returning}`, values) as Record<string, Value>[];
       for (const row of rows) changed(name, keyOf(key, row), readback?.before(row));
-      return rows.map((row) => Object.fromEntries(kept.map((column) => [column, row[column] as Value])));
+      return rows.map((row) => keyOf(key, row));
     };
     const { key } = this.#tables.get(table) as { key: string[] };
     const deleted: [string, Record<string, Value>[]][] = [

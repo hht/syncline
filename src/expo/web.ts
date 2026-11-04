@@ -23,7 +23,7 @@ let nextInstance = 0;
 const instances = new Map<number, Client>();
 
 /**
- * Handles unrecoverable Worker failure (worker script load error, asset missing after redeployment, or unparseable message).
+ * Handles unrecoverable Worker failure (worker script load error, asset missing after redeployment, unparseable message, or core panic).
  *
  * Fails all pending calls across active instances with the error and marks downloadError on sync status to prevent indefinite stalls.
  * Discards the broken Worker and instances so subsequent calls instantiate a fresh Worker.
@@ -40,7 +40,10 @@ function post(message: HostMessage) {
   if (!worker) {
     worker = new Worker(new URL('./worker.ts', import.meta.url));
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
-      if ('type' in data) return report(deserializeError(data.error));
+      if ('type' in data)
+        return data.type === 'broken'
+          ? broken(new Error(`Syncline core panicked: ${data.error.message}`))
+          : report(deserializeError(data.error));
       instances.get(data.instance)?.receive(data.received);
     };
     worker.onerror = (event) => broken(new Error(`Syncline worker error: ${event.message || 'failed to load'}`));

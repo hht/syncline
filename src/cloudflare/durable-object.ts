@@ -49,7 +49,11 @@ type ChoreContext = {
 /** Pluggable cloud features: checksum computes range verification digests; chores registers background maintenance tasks like exports. */
 export type Features = {
   checksum?: SpaceChecksum;
-  chores?: (context: ChoreContext) => { written(): void; chore(name: string, started: number): Chore | undefined };
+  chores?: (context: ChoreContext) => {
+    started(empty: boolean, kv: Pick<SyncKvStorage, 'get' | 'put'>): void;
+    written(): void;
+    chore(name: string, started: number): Chore | undefined;
+  };
 };
 
 /** Reads request body up to limit bytes, returning undefined if limit is exceeded. */
@@ -115,6 +119,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
       reserved,
       events: this.#events,
     });
+    this.#chores?.started(this.#space.head().version === 0, ctx.storage.kv);
     // Notifies chores when schema evolution commits on startup.
     if (this.#space.evolvedFrom) this.#chores?.written();
     // Re-arms the alarm to recover scheduled times if the actor restarted before arming.
