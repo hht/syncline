@@ -66,10 +66,12 @@ test('retired columns and tables: physically removed on open (including indexes 
   expect(storage.sql.exec('SELECT id, note FROM workout').toArray()).toEqual([{ id: 'w1', note: 'box squat' }]);
 });
 
-test('declaring retired names: throws on open', () => {
-  expect(() => new Device(deviceStorage(createWorkout), [workoutWithReps], { retired: ['workout.reps'] })).toThrow(
-    'retired names (workout.reps)',
-  );
+test.for([
+  { declared: 'synced column', synced: [workoutWithReps], localOnly: [], retired: 'workout.reps' },
+  { declared: 'local-only column', synced: [tag], localOnly: [workoutWithReps], retired: 'workout.reps' },
+  { declared: 'local-only table', synced: [tag], localOnly: [workoutWithReps], retired: 'workout' },
+])('declaring retired names ($declared): throws on open', ({ synced, localOnly, retired }) => {
+  expect(() => new Device(deviceStorage(createWorkout), synced, { localOnly, retired: [retired] })).toThrow(`retired names (${retired})`);
 });
 
 test('app rolls back to not recognizing tag and upgrades back: changes during rollback (including deletes) untracked, refetched entirely after upgrade, pending writes preserved and acknowledged as usual', async () => {

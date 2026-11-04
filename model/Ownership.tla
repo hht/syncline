@@ -23,9 +23,9 @@
 (* space records, keeping shared spaces; a table turning local-only from a *)
 (* shared space is wiped first; a shared space's owner switch wipes its    *)
 (* tables and the ones it recorded last time, even if its open then fails. *)
-(* Retired tables stay retired in every later release and no space        *)
-(* declares them, though local-only use may reuse their names; P's open    *)
-(* drops the synced ones (the app's own tables are left alone).            *)
+(* Retired tables stay retired in every later release and neither a space  *)
+(* nor local-only use declares them again; P's open drops the synced ones  *)
+(* (the app's own tables are left alone).                                  *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 
@@ -70,7 +70,7 @@ Redeclared(s, D, rec) == [t \in Tables |-> IF t \in D THEN s ELSE IF rec[t] = s 
 \* Private space opens for user u (None: owner omitted) with declaration D, local-only tables L, and retired tables R: upgrade (drop
 \* retired synced tables, redeclare, wiping returning tables), then claim
 OpenPrivate(u, D, L, R) ==
-    /\ phase = "closed" /\ sessions < MaxSessions /\ retired \subseteq R /\ D \cap R = {}
+    /\ phase = "closed" /\ sessions < MaxSessions /\ retired \subseteq R /\ (D \cup L) \cap R = {}
     /\ LET gone == {t \in R : synced[t]}
            back == Returning(P, D, record, content)
            \* A table turning local-only leaves the space recording it; rows a shared space pulled for its owner go first

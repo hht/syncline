@@ -90,15 +90,14 @@ class Simulation {
     const open = names.filter((name) => !retired.includes(name));
     // The private space declares few tables, so shared spaces often declare tables no space synced yet
     const synced = this.#subset(open, 0.25);
-    // Local-only tables may reuse retired names
     const localOnly = this.#subset(
-      names.filter((name) => !synced.includes(name)),
+      open.filter((name) => !synced.includes(name)),
       0.4,
     );
     // Retired names resolve to the stored table whatever their case
     const spelled = retired.map((name) => (this.#random() < 0.5 ? name : upper(name)));
     const into = this.#random() < 0.2 ? this.#pick([synced, localOnly]) : undefined;
-    const [misused, refusal] = (into && this.#misused(retired, into === synced, [...synced, ...localOnly])) ?? [];
+    const [misused, refusal] = (into && this.#misused(retired, [...synced, ...localOnly])) ?? [];
     if (misused) into?.push(misused);
     this.steps.push(`openPrivate(${owner}, [${synced}], local [${localOnly}], retired [${spelled}])`);
     const opening = () =>
@@ -133,11 +132,11 @@ class Simulation {
     return { schema: schema.filter(({ name }) => !String(name).startsWith('_syncline')), rows };
   }
 
-  /** A name the private space refuses, and why: a retired one (synced tables only), one differing from a stored table only by case, or a non-table's. */
-  #misused(retired: string[], synced: boolean, declared: string[]) {
+  /** A name the private space refuses, and why: a retired one, one differing from a stored table only by case, or a non-table's. */
+  #misused(retired: string[], declared: string[]) {
     const stored = names.filter((name) => !retired.includes(name) && !declared.includes(name));
     return this.#pick([
-      ...(synced ? retired.flatMap((name) => [name, upper(name)]) : []).map((name) => [name, 'retired names']),
+      ...retired.flatMap((name) => [name, upper(name)]).map((name) => [name, 'retired names']),
       ...[...stored.map(upper), 'shelf', 'NOTES'].map((name) => [name, 'is stored as']),
       ...['Shelf', 'notes'].map((name) => [name, `primary key of ${name} changed`]),
     ]) as [string, string];

@@ -202,12 +202,6 @@ impl Recorder {
             .stop(id)?
             .ok_or_else(|| Error::Failed("recording of this replay has already ended".to_owned()))
     }
-
-    /// Local-only table declarations
-    #[must_use]
-    pub fn local_only(&self) -> &[Table] {
-        &self.local_only
-    }
 }
 
 #[cfg(test)]

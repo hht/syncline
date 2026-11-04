@@ -13,7 +13,6 @@ use crate::owner;
 use crate::recorder::Recorder;
 use crate::stage::Stage;
 use crate::synced_tables::SyncedTables;
-use crate::tables;
 use crate::upload_queue::UploadQueue;
 use crate::verifier::Verifier;
 use std::collections::HashMap;
@@ -88,20 +87,11 @@ impl Device {
     /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
     fn upgrade(&mut self) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();
-        let mut foreign = foreign(self.db.connection(), &self.local_only)?;
-        // Retiring drops them outright
-        foreign.retain(|name| !self.retired.contains(name));
+        let foreign = foreign(self.db.connection(), &self.local_only)?;
         let wipes = !returning(self.db.connection(), "", &names)?.is_empty() || !foreign.is_empty();
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
-            // A local-only table may reuse a retired name: it is defined only now that retiring dropped the synced table
-            let reused = device
-                .recorder
-                .local_only()
-                .iter()
-                .filter(|table| device.retired.iter().any(|name| name.eq_ignore_ascii_case(&table.name)));
-            tables::redefine(db, reused)?;
             for name in &foreign {
                 wipe(db, &mut device.effects, name)?;
             }

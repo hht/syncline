@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, tables } from '../test/test-schema.ts';
@@ -31,21 +31,3 @@ test.for(['admin', 'public'])(
     await expect(device.shared('catalog', [program], owner).opened()).resolves.toBeUndefined();
   },
 );
-
-test.for([
-  { stored: 'turning local-only from a shared space', storage: catalogSynced },
-  { stored: 'never synced under the name', storage: async () => deviceStorage(createWorkout, 'CREATE TABLE course (id TEXT PRIMARY KEY)') },
-])('local-only table reusing a retired name ($stored) takes writes right away', async ({ storage: stored }) => {
-  const storage = await stored();
-  const device = new Device(storage, tables, { owner: 'alice', localOnly: [course], retired: ['course'] });
-  await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
-  expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
-});
-
-test('local-only table reusing a retired name under another shape or case opens and takes writes right away', async () => {
-  const storage = await catalogSynced();
-  const reshaped = sqliteTable('Course', { code: integer().primaryKey() });
-  const device = new Device(storage, tables, { owner: 'alice', localOnly: [reshaped], retired: ['course'] });
-  await device.write(async (execute) => execute('INSERT INTO Course (code) VALUES (1)', []));
-  expect(storage.sql.exec('SELECT code FROM Course').toArray()).toEqual([{ code: 1 }]);
-});

@@ -13,10 +13,12 @@ use crate::unknown_rows::{UnknownRows, clear_table};
 use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 
-/// Ensures synced tables do not collide with local-only tables and do not declare retired names, ignoring case as SQLite names do.
+/// Ensures synced tables do not collide with local-only tables, and neither declares retired names (a name that meant another table
+/// in an earlier release would make what a device holds under it depend on the releases it went through), ignoring case as SQLite names do.
 pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &HashSet<String>) -> Result<(), Error> {
     let revived: Vec<String> = synced
         .iter()
+        .chain(local_only)
         .flat_map(|table| {
             std::iter::once(table.name.clone()).chain(table.columns.iter().map(|column| format!("{}.{}", table.name, column.name)))
         })
@@ -24,7 +26,7 @@ pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &HashSet<St
         .collect();
     if !revived.is_empty() {
         return Err(Error::Failed(format!(
-            "synced tables and columns contain retired names ({}): retired names cannot return to sync; choose a different name",
+            "declared tables and columns contain retired names ({}): retired names cannot be declared again; choose a different name",
             revived.join(", ")
         )));
     }
