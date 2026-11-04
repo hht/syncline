@@ -252,3 +252,22 @@ test('internal table downgrade clears stage but leaves shadow table mid-pull: sh
   await reopened.private.receive(last(null, undefined, 1, [{ op: 'clear' }, putWorkout('w2', 'two')]));
   expect(workouts(storage)).toEqual([{ id: 'w2', note: 'two' }]);
 });
+
+const plan = sqliteTable('plan', { id: text().primaryKey() });
+
+test.for([
+  { left: 'turning local-only', localOnly: [plan], app: [] },
+  { left: 'then dropped by the app', localOnly: [], app: ['DROP TABLE plan'] },
+])('a table leaving sync mid full pull ($left) keeps no rows of the previous owner in its shadow table', async ({ localOnly, app }) => {
+  const storage = deviceStorage(createWorkout);
+  const synced = new Device(storage, [workout, plan], { owner: 'alice' });
+  await synced.private.receive(
+    chunk(null, undefined, 'n1', [{ op: 'clear' }, { op: 'put', table: 'plan', key: { id: 'p1' }, row: { id: 'p1' } }]),
+  );
+  expect(shadows(storage)).toContain('_syncline_shadow_plan');
+  synced.close();
+  new Device(storage, tables, { owner: 'alice', localOnly }).close();
+  for (const sql of app) storage.sql.exec(sql);
+  new Device(storage, tables, { owner: 'bob', localOnly, discardPending: true }).close();
+  expect(shadows(storage)).toEqual([]);
+});

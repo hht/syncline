@@ -71,7 +71,7 @@ impl Device {
 
     /// Completes initialization: upgrades tables, claims owner, and discards stale staged chunks.
     fn settle_open(&mut self, owner: Option<&str>, discard_pending: bool) -> Result<(), Error> {
-        self.upgrade()?;
+        self.upgrade(owner)?;
         self.claim(owner, discard_pending)?;
         self.commit(|device| {
             // Shadow tables exist only during chunked pulls and match their synced tables: if deployment changed synced tables or rolled back, discard partial pull and restart from scratch
@@ -83,12 +83,16 @@ impl Device {
         })
     }
 
-    /// Upgrades local tables to current declaration: drops retired columns and the retired tables a space records, wipes (securely) and fully refetches re-declared tables, and restores newly declared columns from `_extra`.
+    /// Upgrades local tables to current declaration: drops retired columns and the retired tables a space records, wipes and fully refetches re-declared tables, and restores newly declared columns from `_extra`;
+    /// runs securely when it wipes tables or `owner` switches the private owner.
     /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
-    fn upgrade(&mut self) -> Result<(), Error> {
+    fn upgrade(&mut self, owner: Option<&str>) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();
         let foreign = foreign(self.db.connection(), &self.local_only)?;
-        let wipes = !returning(self.db.connection(), "", &names)?.is_empty() || !foreign.is_empty();
+        // Upgrading drops tables and shadow tables the previous owner's rows may sit in, before the claim wipes the rest securely
+        let stored = owner::stored(self.db.connection(), "")?;
+        let switching = owner.is_some_and(|owner| stored.as_deref().is_some_and(|stored| stored != owner));
+        let wipes = switching || !returning(self.db.connection(), "", &names)?.is_empty() || !foreign.is_empty();
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
@@ -129,7 +133,7 @@ impl Device {
         }
     }
 
-    /// Sets the owner of this space: clears previous owner data (including database files) on user switch, allowing same user to continue; ignored if owner is None.
+    /// Sets the owner of this space: clears previous owner data (zeroing it in the database file) on user switch, allowing same user to continue; ignored if owner is None.
     /// Returns [`Error::PendingWrites`] if unuploaded writes remain and `discard_pending` is false.
     fn claim(&mut self, owner: Option<&str>, discard_pending: bool) -> Result<(), Error> {
         let Some(owner) = owner else { return Ok(()) };

@@ -1,7 +1,7 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Device } from '../test/test-device.ts';
-import { createWorkout, tables } from '../test/test-schema.ts';
+import { createWorkout, tables, workout } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 
 // Tables leaving sync are wiped where no later owner switch could reach them; whatever the app does with the name afterwards must not
@@ -39,4 +39,26 @@ test('retiring a table that was local-only at the last open keeps its local writ
   local.close();
   new Device(storage, tables, { owner: 'alice', retired: ['course'] }).close();
   expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
+});
+
+const plan = sqliteTable('plan', { id: text().primaryKey(), note: text() });
+const planSecret = 'alice plan payload'.repeat(20);
+const planRow = { op: 'put', table: 'plan', key: { id: 'p1' }, row: { id: 'p1', note: planSecret } } as const;
+
+test.for([
+  {
+    left: 'turning local-only mid full pull',
+    pull: { base: null, next: 'n1', patch: [{ op: 'clear' } as const, planRow] },
+    options: { localOnly: [plan] },
+  },
+  { left: 'undeclared mid full pull', pull: { base: null, next: 'n1', patch: [{ op: 'clear' } as const, planRow] }, options: {} },
+  { left: 'retired', pull: { ...synced, patch: [planRow] }, options: { retired: ['plan'] } },
+])('a table leaving sync on the open that switches owner ($left): previous owner rows zeroed in db file', async ({ pull, options }) => {
+  const storage = deviceStorage(createWorkout);
+  const alice = new Device(storage, [workout, plan], { owner: 'alice' });
+  await alice.private.receive(pull);
+  alice.close();
+  new Device(storage, tables, { owner: 'bob', discardPending: true, ...options }).close();
+  const image = new TextDecoder('utf-8', { fatal: false }).decode(storage.image());
+  expect(image.includes('alice plan payload')).toBe(false);
 });

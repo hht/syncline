@@ -176,6 +176,25 @@ pub fn wipe_orphans(db: &rusqlite::Connection, effects: &mut Effects, local_only
     Ok(())
 }
 
+/// Drops the shadow tables of tables no space records, on a private owner switch: no pull will claim them, and their rows (a partial pull
+/// for the previous owner) would outlive the switch, even after the table itself is gone (turned local-only, or dropped by the app).
+///
+/// # Errors
+/// Database read/write error.
+pub fn drop_orphan_shadows(db: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let names: Vec<String> = db
+        .prepare(
+            "SELECT table_name FROM (SELECT substr(name, length('_syncline_shadow_') + 1) AS table_name FROM sqlite_schema \
+             WHERE type = 'table' AND name GLOB '_syncline_shadow_*') WHERE table_name NOT IN (SELECT name FROM _syncline_declared)",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for name in names {
+        drop_shadow(db, &name)?;
+    }
+    Ok(())
+}
+
 /// Deletes every row of synced table `name` and its shadow table (a partial pull of it).
 ///
 /// # Errors

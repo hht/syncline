@@ -1,4 +1,4 @@
-//! Who owns space data (the signed-in user): one database per app; when a different user signs in, previous user data is wiped completely without remaining in the database file so the next user cannot see it;
+//! Who owns space data (the signed-in user): one database per app; when a different user signs in, previous user data is wiped and zeroed in the database file so the next user cannot see it (content deleted before the switch is left as SQLite leaves it);
 //! the same user opening it again resumes normal usage. Private and shared spaces track ownership independently.
 //! What it should not know: which data to clear.
 
