@@ -106,6 +106,7 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Leave another space's record of a table a space declares (`MCOwnership`: `Exact`: the old space takes it back without refetching)
 - Wipe only the declared tables on a shared space owner switch, not the ones it recorded last time (`MCOwnership`: `NoLeak`)
 - Drop every retired table that was ever synced, not only the ones a space records (`MCOwnership`: `LocalKept`)
+- Keep the cookie of a space whose table the app dropped and declaring recreated, as the space still records it (`MCOwnership`: `Exact`)
 
 ## Mutations that do not trigger a violation
 

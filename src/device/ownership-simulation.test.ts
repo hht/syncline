@@ -10,12 +10,12 @@ import { deviceStorage } from '../test/test-storage.ts';
 
 // Ownership simulation: a random seed picks the actions of model/Ownership.tla (opening the private space with any owner,
 // declaration, local-only tables, and retired tables; opening shared spaces, some failing after their owner switch; pulls;
-// local-only writes; closing) and drives the Rust device with them. Declarations also misuse names: synced tables declaring
-// retired ones, names differing from a stored table only by case, and a view's or a virtual table's; opening must refuse them at
-// the layer they belong to, leaving the database untouched when the private space refuses and the other spaces working when a
-// shared one does. Row ids carry the space and owner they came from, so after every step the rows each table holds are checked
-// against the model: the same sources as the reference state, `NoLeak` and `Exact` on the rows themselves, and a cookie exactly
-// where the model keeps one.
+// local-only writes; closing; the app dropping a table while closed) and drives the Rust device with them. Declarations also
+// misuse names: synced tables declaring retired ones, names differing from a stored table only by case, and a view's or a
+// virtual table's; opening must refuse them at the layer they belong to, leaving the database untouched when the private space
+// refuses and the other spaces working when a shared one does. Row ids carry the space and owner they came from, so after every
+// step the rows each table holds are checked against the model: the same sources as the reference state, `NoLeak` and `Exact`
+// on the rows themselves, and a cookie exactly where the model keeps one.
 // @see https://apple.github.io/foundationdb/testing.html
 
 const names = ['a', 'b', 'c'];
@@ -57,7 +57,8 @@ class Simulation {
 
   async step() {
     if (this.#model.phase === 'closed') {
-      this.#openPrivate();
+      if (this.#random() < 0.15) this.#externalDrop(this.#pick(names) as string);
+      else this.#openPrivate();
       return this.check();
     }
     const taken = new Set([...this.#model.taken(), ...[...this.#declared.values()].flat()]);
@@ -206,6 +207,14 @@ class Simulation {
     this.steps.push(`localWrite(${name}) ${id}`);
     await (this.#device as Device).write(async (execute) => execute(`INSERT INTO ${name} (id) VALUES (?)`, [id]));
     this.#model.localWrite(name);
+  }
+
+  /** The app drops a table and recreates it as its own (as declaring it would), so misused names still meet a stored table. */
+  #externalDrop(name: string) {
+    this.steps.push(`externalDrop(${name})`);
+    this.#storage.sql.exec(`DROP TABLE IF EXISTS ${name}`);
+    this.#storage.sql.exec(`CREATE TABLE ${name} (id TEXT PRIMARY KEY)`);
+    this.#model.externalDrop(name);
   }
 
   #close() {

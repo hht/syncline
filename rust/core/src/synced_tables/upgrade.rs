@@ -6,7 +6,7 @@ use super::SyncedTables;
 use crate::effects::Effects;
 use crate::error::Error;
 use crate::protocol::Op;
-use crate::sql::{json_path, quote};
+use crate::sql::{column_names, json_path, quote};
 use crate::staged_write::SyncedTable;
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
@@ -55,7 +55,8 @@ impl SyncedTables {
     }
 }
 
-/// Synced table upgrade: `before` is the list of columns recorded on previous open, or None if newly added table.
+/// Synced table upgrade: `before` is the list of columns recorded on previous open, or None if newly added table; a table without `_extra`
+/// is new as well (the app dropped it and declaring recreated it).
 fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<String>>, effects: &mut Effects) -> Result<(), Error> {
     let record = || {
         db.execute(
@@ -66,7 +67,8 @@ fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<Strin
             ],
         )
     };
-    let Some(before) = before else {
+    let extra = column_names(db, &table.name)?.iter().any(|column| column == "_extra");
+    let Some(before) = before.filter(|_| extra) else {
         db.execute(&format!("ALTER TABLE {} ADD COLUMN _extra TEXT", quote(&table.name)), [])?;
         record()?;
         return Ok(());

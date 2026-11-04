@@ -1,11 +1,11 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, tables, workout } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 
 // Tables leaving sync are wiped where no later owner switch could reach them; whatever the app does with the name afterwards must not
-// keep the database from opening.
+// keep the database from opening, and a synced table it drops comes back in full.
 
 const program = sqliteTable('program', { id: text().primaryKey() });
 const course = sqliteTable('course', { id: text().primaryKey() });
@@ -61,4 +61,31 @@ test.for([
   new Device(storage, tables, { owner: 'bob', discardPending: true, ...options }).close();
   const image = new TextDecoder('utf-8', { fatal: false }).decode(storage.image());
   expect(image.includes('alice plan payload')).toBe(false);
+});
+
+const planPut = (id: string, extra: Record<string, unknown> = {}) =>
+  ({ op: 'put', table: 'plan', key: { id }, row: { id, note: null, ...extra } }) as const;
+
+test.for([
+  { dropped: 'while the private space declares it', before: [workout, plan], between: null, shared: false },
+  { dropped: 'after it left sync', before: [workout, plan], between: tables, shared: false },
+  { dropped: 'while a shared space declares it', before: tables, between: null, shared: true },
+])('a synced table the app drops $dropped is pulled in full when declared again', async ({ before, between, shared }) => {
+  const storage = deviceStorage(createWorkout);
+  const open = (declared: SQLiteTable[]) => {
+    const device = new Device(storage, shared ? tables : declared, { owner: 'alice' });
+    return { device, mirror: shared ? device.shared('team', [plan], 'admin') : device.private };
+  };
+  const first = open(before);
+  await first.mirror.receive({ ...synced, patch: [planPut('p1')] });
+  first.device.close();
+  if (between) open(between).device.close();
+  storage.sql.exec('DROP TABLE plan');
+  const { mirror } = open(before);
+  if ('opened' in mirror) await mirror.opened();
+  const { cookie, refetch } = mirror.pullRequest();
+  expect(cookie === null || refetch === true).toBe(true);
+  // Rows carry columns this release does not declare: they go to `_extra`
+  await mirror.receive({ base: cookie, cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [{ op: 'clear' }, planPut('p2', { more: 1 })] });
+  expect(storage.sql.exec('SELECT id FROM plan').toArray()).toEqual([{ id: 'p2' }]);
 });

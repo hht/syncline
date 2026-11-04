@@ -1,6 +1,6 @@
 //! Schema evolution on device open: permanently drops retired columns and the retired tables a space still records,
-//! and wipes then fully refetches tables re-declared after leaving sync or taken over from another space (cloud does not record drops during
-//! rollback periods, and the rows may belong to a previous owner).
+//! and wipes then fully refetches tables re-declared after leaving sync, taken over from another space, or dropped by the app (cloud does not
+//! record drops during rollback periods, the rows may belong to a previous owner, or they are gone).
 //! Shared by private and shared spaces.
 //! What it should not know: how refetches are executed, or how pending writes are reverted and replayed.
 
@@ -152,7 +152,7 @@ pub fn foreign(db: &rusqlite::Connection, local_only: &[String]) -> rusqlite::Re
     Ok(found)
 }
 
-/// Wipes tables that were synced (they carry `_extra`) but no space declares any more and are not `local_only`, with their shadow tables:
+/// Wipes tables that carry `_extra` (synced, and not dropped by the app since) but no space declares any more and are not `local_only`, with their shadow tables:
 /// their rows belong to whoever synced them, so an owner switch must not leave them readable. Any space that declares one later finds it
 /// [`returning`] and pulls it from scratch. Only ordinary tables are inspected: a virtual table whose module this connection lacks cannot be read.
 ///
@@ -228,9 +228,10 @@ pub fn declared(db: &rusqlite::Connection, space: &str) -> rusqlite::Result<Vec<
         .collect()
 }
 
-/// Tables in `names` that `space` did not declare last time and now does, and that either were synced before (they carry `_extra`):
-/// they left sync without being retired, or come from another space, so their rows may have missed deletes and may belong to a previous
-/// owner; or hold rows anyway (written while local-only), which would never upload.
+/// Tables in `names` that `space` takes over now: it did not record them last time, or the app dropped them since (declaring recreated
+/// them without `_extra`); and that either were synced before (`_syncline_columns` keeps recording them after they leave sync), so their
+/// rows may have missed deletes, belong to a previous owner, or be gone; or hold rows anyway (written while local-only), which would never
+/// upload.
 ///
 /// # Errors
 /// Database read error.
@@ -238,12 +239,17 @@ pub fn returning(db: &rusqlite::Connection, space: &str, names: &[String]) -> ru
     let before = declared(db, space)?;
     let mut back = Vec::new();
     for name in names {
-        if before.contains(name) {
+        let columns = column_names(db, name)?;
+        if before.contains(name) && columns.iter().any(|column| column == "_extra") {
             continue;
         }
-        let columns = column_names(db, name)?;
+        let synced = || {
+            db.query_row("SELECT EXISTS (SELECT 1 FROM _syncline_columns WHERE name = ?)", [name], |row| {
+                row.get(0)
+            })
+        };
         let filled = || db.query_row(&format!("SELECT EXISTS (SELECT 1 FROM {})", quote(name)), [], |row| row.get(0));
-        if !columns.is_empty() && (columns.iter().any(|column| column == "_extra") || filled()?) {
+        if !columns.is_empty() && (synced()? || filled()?) {
             back.push(name.clone());
         }
     }

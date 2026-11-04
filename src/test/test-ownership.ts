@@ -20,7 +20,10 @@ export class Ownership {
   readonly owner = new Map<string, string>();
   /** Owning space of each table, or None. */
   readonly record = new Map<string, string>();
+  /** Table was synced at some point (`_syncline_columns` records it). */
   readonly synced = new Map<string, boolean>();
+  /** Table carries `_extra` (lost when the app drops it). */
+  readonly extra = new Map<string, boolean>();
   readonly content = new Map<string, Set<string>>();
   readonly cookie = new Map<string, boolean>();
   /** Space holds rows of the tables it does not declare (pulled since its last owner switch). */
@@ -43,6 +46,7 @@ export class Ownership {
     for (const t of tables) {
       this.record.set(t, None);
       this.synced.set(t, false);
+      this.extra.set(t, false);
       this.content.set(t, new Set());
     }
     for (const s of [P, ...shared]) {
@@ -60,9 +64,11 @@ export class Ownership {
     return tagOf(s, this.ownerOf(s));
   }
 
-  /** Tables a space takes over on open: synced before but not recorded for it, or never synced but holding rows. */
+  /** Tables a space takes over on open: synced before but not recorded for it, or recreated since, or never synced but holding rows. */
   #returning(s: string, D: Set<string>, record: Map<string, string>, content: Map<string, Set<string>>) {
-    return new Set([...D].filter((t) => record.get(t) !== s && (this.synced.get(t) || (content.get(t) as Set<string>).size > 0)));
+    return new Set(
+      [...D].filter((t) => !(record.get(t) === s && this.extra.get(t)) && (this.synced.get(t) || (content.get(t) as Set<string>).size > 0)),
+    );
   }
 
   /** Records after space s declares D: its old records dropped, D recorded for s. */
@@ -80,19 +86,21 @@ export class Ownership {
     const wiped1 = new Map(this.#tables.map((t) => [t, back.has(t) || foreign.has(t) ? new Set<string>() : this.content.get(t)]));
     const isSwitch = u !== None && ![None, u].includes(this.privOwner);
     const who = u === None ? this.privOwner : u;
-    const orphans = this.#tables.filter((t) => this.synced.get(t) && rec1.get(t) === None && !L.has(t));
+    const orphans = this.#tables.filter((t) => this.extra.get(t) && rec1.get(t) === None && !L.has(t));
     const cleared = new Set(isSwitch ? [...D, ...L, ...orphans] : []);
     const kept = !isSwitch && back.size === 0 && (this.cookie.get(P) as boolean);
     const restored = new Set([...D].filter((t) => !back.has(t) && this.unknown.get(P) && !this.synced.get(t)));
     const leaving = this.#tables.filter(
       (t) =>
-        !D.has(t) && !L.has(t) && !this.synced.get(t) && [...(this.content.get(t) as Set<string>)].some((tag) => spaceOf(tag) === Local),
+        !D.has(t) && !L.has(t) && !this.extra.get(t) && [...(this.content.get(t) as Set<string>)].some((tag) => spaceOf(tag) === Local),
     );
+    const stays = (flag: Map<string, boolean>, t: string) => (flag.get(t) && !gone.has(t)) || D.has(t);
     for (const t of this.#tables) {
       const rows = wiped1.get(t) as Set<string>;
       this.content.set(t, cleared.has(t) || gone.has(t) ? new Set() : restored.has(t) ? new Set([...rows, tagOf(P, who)]) : rows);
       this.record.set(t, rec1.get(t) as string);
-      this.synced.set(t, (this.synced.get(t) && !gone.has(t)) || D.has(t));
+      this.synced.set(t, stays(this.synced, t));
+      this.extra.set(t, stays(this.extra, t));
     }
     this.cookie.set(P, kept);
     this.unknown.set(P, !isSwitch && (this.unknown.get(P) as boolean));
@@ -137,6 +145,7 @@ export class Ownership {
       this.content.set(t, back.has(t) || dropped.has(t) ? new Set() : restored.has(t) ? new Set([...rows, tag]) : rows);
       this.record.set(t, redeclared.get(t) as string);
       this.synced.set(t, (this.synced.get(t) as boolean) || D.has(t));
+      this.extra.set(t, (this.extra.get(t) as boolean) || D.has(t));
     }
     this.cookie.set(s, kept);
     this.decl.set(s, new Set(D));
@@ -153,6 +162,12 @@ export class Ownership {
 
   localWrite(t: string) {
     (this.content.get(t) as Set<string>).add(tagOf(Local, this.privOwner));
+  }
+
+  /** The app drops a table while the database is closed. */
+  externalDrop(t: string) {
+    this.content.set(t, new Set());
+    this.extra.set(t, false);
   }
 
   close() {
