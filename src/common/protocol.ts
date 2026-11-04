@@ -89,7 +89,7 @@ export type Checksum = { parts: ChecksumPart[]; sum: number; rows: number; next?
  * Origin metadata identifying the space instance, subscription digest, and incarnation.
  * Mismatched space triggers account switch errors; mismatched incarnation triggers full rebuild resyncs.
  */
-export type Origin = { space?: string; sub?: string; incarnation?: number };
+type Origin = { space?: string; sub?: string; incarnation?: number };
 
 /**
  * Connection advice from cloud to device.
@@ -146,13 +146,6 @@ export const overQuota = 1013;
 
 /** Character size threshold for chunking HTTP pull patches. */
 export const chunkLimit = 1_000_000;
-
-/**
- * Baseline conservative network throughput in bytes per second for sizing socket messages and heartbeats.
- * Derived from GPRS CS-1 coding rates.
- * @see https://en.wikipedia.org/wiki/General_Packet_Radio_Service#Coding_schemes_and_speeds
- */
-export const slowestRate = 1_000;
 
 /**
  * Maximum UTF-8 byte length for a single WebSocket message.

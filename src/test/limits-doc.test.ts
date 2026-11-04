@@ -22,7 +22,7 @@ import {
   writeKeyBytes,
   writeRows,
 } from '../common/limits.ts';
-import { chunkLimit, pushMutations, slowestRate, socketLimit } from '../common/protocol.ts';
+import { chunkLimit, pushMutations, socketLimit } from '../common/protocol.ts';
 import { receiveTimeout as shellReceiveTimeout } from '../expo/shell.ts';
 import { rangeChars, rangeParts } from '../features/checksum/cloud/checksums.ts';
 import { rangeRows } from '../features/checksum/common/checksum.ts';
@@ -31,8 +31,20 @@ import { rustLimits } from './test-rust.ts';
 
 // Documentation limits for integrators match code constants: each statement is computed dynamically from constants; modifying constants without updating documentation fails. Device-side values are read from the Rust core.
 
-const { pushLimit, receiveTimeout, pingAfter, pongWithin, baseDelay, maxDelay, maxRowBytes, batch, rowsPerDay, interval, askAgainAfter } =
-  rustLimits();
+const {
+  pushLimit,
+  receiveTimeout,
+  pingAfter,
+  pongWithin,
+  slowestRate,
+  baseDelay,
+  maxDelay,
+  maxRowBytes,
+  batch,
+  rowsPerDay,
+  interval,
+  askAgainAfter,
+} = rustLimits();
 
 const limits = readFileSync(new URL('../../docs/reference/limits.md', import.meta.url), 'utf8');
 

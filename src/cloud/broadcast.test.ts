@@ -1,5 +1,4 @@
 import { expect, test, vi } from 'vitest';
-import { parseMessage, parsePoke } from '../common/parse.ts';
 import { expired, socketLimit } from '../common/protocol.ts';
 import { program } from '../test/test-catalog.ts';
 import { captureReported } from '../test/test-errors.ts';
@@ -48,7 +47,7 @@ test('catch-up: sends hint without closing socket when device cookie is older th
   expect(behind.closed).toEqual([]);
   expect(hinted(behind)).toEqual(space().head());
   expect(events).toEqual([]);
-  await catalog.notified(parseMessage(behind.sent.at(-1) ?? ''), false);
+  await catalog.notified(JSON.parse(behind.sent.at(-1) ?? ''), false);
   expect(catalog.behind()).toBe(true);
   await pullAll();
   expect(catalog.behind()).toBe(false);
@@ -89,7 +88,7 @@ test('drops retransmitted or late rounds not newer than known version without pu
   const sent = socket.sent.length;
   await shard().notify(late);
   expect(socket.sent.length).toBe(sent);
-  for (const message of socket.sent) expect(await catalog.receive(parsePoke(message))).toBe(true);
+  for (const message of socket.sent) expect(await catalog.receive(JSON.parse(message))).toBe(true);
   expect(programs().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3']);
   const reconnected = await connect();
   expect(last(reconnected)).toMatchObject({ cookie: catalog.cookie(), patch: [] });
@@ -100,10 +99,10 @@ test('detects mismatched subscription on device when tokens change: catch-up car
   const socket = await connect('admin');
   expect(socket.closed).toEqual([]);
   expect(last(socket)).toMatchObject({ sub: subscriptions.admin.sub });
-  expect(await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false)).toBe(true);
+  expect(await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false)).toBe(true);
   expect(catalog.behind()).toBe(true);
   await commit('p2');
-  expect(await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false)).toBe(true);
+  expect(await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false)).toBe(true);
   expect(programs().map(({ id }) => id)).toEqual(['p1']);
 });
 
@@ -118,7 +117,7 @@ test('pushes hint when deployment updates bucket rules with unkeyed changes, pro
   expect(hinted(socket)).toEqual(space.head());
   const late = await connect();
   expect(hinted(late)).toEqual(space.head());
-  expect(await catalog.notified(parseMessage(late.sent.at(-1) ?? ''), false)).toBe(true);
+  expect(await catalog.notified(JSON.parse(late.sent.at(-1) ?? ''), false)).toBe(true);
   expect(catalog.behind()).toBe(true);
   expect(space.pullShared(catalog.pullRequest(), subscriptions.public)).not.toHaveProperty('reset');
 });
@@ -161,7 +160,7 @@ test('queries head and pushes hints instead of notifications when round base is 
   await shard().notify(space().round(64_000, base));
   expect(asked).toEqual(['latest']);
   expect(hinted(socket)).toEqual(space().head());
-  expect(await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false)).toBe(true);
+  expect(await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false)).toBe(true);
   expect(catalog.behind()).toBe(true);
 });
 

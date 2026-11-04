@@ -1,7 +1,7 @@
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
 import { type Cookie, expired, ping, pullNeeded, socketLimit } from '../common/protocol.ts';
-import { Handshake, schemaHeader, schemaMismatch, schemaPrefix } from '../tables/declaration.ts';
+import { type Declaration, schemaFingerprint, schemaHeader, schemaMismatch, schemaPrefix } from '../tables/declaration.ts';
 import { connect, connectAll, object, online, pull, pullResponse, put, space, squat, url } from './test-space.ts';
 import type { TestSpace } from './test-worker.ts';
 
@@ -274,10 +274,8 @@ test('handles schema fingerprints: serves pull on match, returns 412 on mismatch
   const name = space();
   const refused = await pullResponse(name, null, undefined, { [schemaHeader]: '0000000000000000' });
   expect(refused.status).toBe(412);
-  const cloud = await refused.text();
-  const handshake = new Handshake({});
-  expect(handshake.judge(cloud)).toBeUndefined();
-  expect((await pullResponse(name, null, undefined, { [schemaHeader]: handshake.fingerprint() })).status).toBe(200);
+  const cloud = JSON.parse(await refused.text()) as { declaration: Declaration };
+  expect((await pullResponse(name, null, undefined, { [schemaHeader]: schemaFingerprint(cloud.declaration) })).status).toBe(200);
   const { cookie } = await pull(name, null);
   const device = await connect(name, cookie, undefined, {}, [`${schemaPrefix}0000000000000000`]);
   expect(await device.next()).toEqual({ close: schemaMismatch });

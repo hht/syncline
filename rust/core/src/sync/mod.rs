@@ -41,7 +41,8 @@ pub const INVALID_PUSH: u16 = 1007;
 pub const OVER_QUOTA: u16 = 1013;
 /// Maximum bytes per WebSocket message (UTF-8).
 pub const SOCKET_LIMIT: f64 = 24_000.0;
-/// Slowest assumed network speed in bytes per second.
+/// Slowest assumed network speed in bytes per second, from GPRS CS-1 coding rates.
+/// @see <https://en.wikipedia.org/wiki/General_Packet_Radio_Service#Coding_schemes_and_speeds>
 pub const SLOWEST_RATE: f64 = 1_000.0;
 pub const PING: &str = "ping";
 pub const PONG: &str = "pong";

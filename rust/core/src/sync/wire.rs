@@ -138,4 +138,48 @@ mod tests {
         // Messages over connection must carry a cookie: intermediate chunks do not qualify.
         assert!(message(r#"{"base":null,"next":"n","patch":[]}"#).is_err());
     }
+
+    fn last(patch: &str) -> String {
+        format!(r#"{{"base":null,"cookie":{{"version":1,"nonce":1}},"lmids":{{}},"patch":[{patch}]}}"#)
+    }
+
+    #[test]
+    fn accepts_only_sqlite_primitives_as_values() {
+        let put = |value: &str| format!(r#"{{"op":"put","table":"note","key":{{"id":"n1"}},"row":{{"id":"n1","body":{value}}}}}"#);
+        for value in [r#""squat""#, "null", "1.5"] {
+            assert!(pulled(&last(&put(value))).is_ok(), "{value}");
+        }
+        for value in [r#"{"nested":1}"#, "[1]", "true"] {
+            assert!(pulled(&last(&put(value))).is_err(), "{value}");
+        }
+        assert!(pulled(&last(r#"{"op":"del","table":"note","key":{"id":[1]}}"#)).is_err());
+    }
+
+    #[test]
+    fn allows_clear_at_the_start() {
+        assert!(
+            pulled(&last(
+                r#"{"op":"clear"},{"op":"put","table":"note","key":{"id":"n1"},"row":{"id":"n1"}}"#
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn drops_ranges_only_over_key_columns_and_never_with_columns() {
+        let drop = |range: &str| format!(r#"{{"op":"drop","table":"note","range":{range}}}"#);
+        for range in [r#"{"key":["id"],"after":{"id":"a"},"until":{"id":"b"}}"#, r#"{"key":["id"]}"#] {
+            assert!(pulled(&last(&drop(range))).is_ok(), "{range}");
+        }
+        for range in [
+            r#"{"key":[]}"#,
+            r#"{"after":{"id":"a"}}"#,
+            r#"{"key":["id"],"after":{"id":[1]}}"#,
+            r#"{"key":["id"],"until":"b"}"#,
+        ] {
+            assert!(pulled(&last(&drop(range))).is_err(), "{range}");
+        }
+        let both = r#"{"op":"drop","table":"note","range":{"key":["id"]},"columns":["x"]}"#;
+        assert!(pulled(&last(both)).is_err());
+    }
 }

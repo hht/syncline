@@ -105,7 +105,7 @@ test('identical schemas match cloud fingerprint without round trip regardless of
     new Space(cloudStorage(createNote), [noteWithStars], { retired: ['note.title'] }),
   );
   const device = new Device(deviceStorage(createNote), [noteWithStars]);
-  expect(server.schemaConflict(device.private.handshake().fingerprint())).toBeUndefined();
+  expect(server.schemaConflict(device.private.fingerprint())).toBeUndefined();
 });
 
 const createBare = 'CREATE TABLE note (id TEXT PRIMARY KEY)';

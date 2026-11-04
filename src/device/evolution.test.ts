@@ -133,19 +133,19 @@ test('rollback and upgrade with full refetch when cloud did PITR: pending writes
 });
 
 test('schema carried by connection: declared columns (type, non-null, primary key, foreign keys) plus extra columns in db (app rollback to release with fewer columns); excludes retired columns', async () => {
-  // Compare fingerprints: fingerprint computed from device declaration matches expected schema (Rust fingerprint matches cloud, guarded by cloud accepting handshake everywhere)
+  // The fingerprint the device core computes from its declaration matches the one the cloud computes for the expected schema
   const expected = (columns: Record<string, string>) =>
     schemaFingerprint({ workout: { columns, key: ['id'], references: [] }, tag: declare([tag]).tag as Declaration[string] });
   const { storage } = await synced();
   const rolledBack = new Device(storage, [workout, tag]);
-  expect(rolledBack.private.handshake().fingerprint()).toBe(expected({ id: 'text!', note: 'text', reps: 'integer' }));
+  expect(rolledBack.private.fingerprint()).toBe(expected({ id: 'text!', note: 'text', reps: 'integer' }));
   const retiring = new Device((await synced()).storage, [workout, tag], { retired: ['workout.reps'] });
-  expect(retiring.private.handshake().fingerprint()).toBe(expected({ id: 'text!', note: 'text' }));
+  expect(retiring.private.fingerprint()).toBe(expected({ id: 'text!', note: 'text' }));
 });
 
 test('app rolled back to release with fewer columns, cloud column is non-null with default: extra column in db treated as non-null, compatible with cloud (local insert fills default)', () => {
   const withStars = sqliteTable('workout', { id: text().primaryKey(), note: text(), stars: integer().notNull().default(0) });
   const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, stars INTEGER DEFAULT 0)');
   const rolledBack = new Device(storage, [workout]);
-  expect(rolledBack.private.handshake().judge(JSON.stringify({ declaration: declare([withStars]), retired: [] }))).toBeUndefined();
+  expect(rolledBack.private.judge(JSON.stringify({ declaration: declare([withStars]), retired: [] }))).toBeUndefined();
 });

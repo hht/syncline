@@ -174,7 +174,7 @@ test('both apply paths produce identical results: random changes applied staged 
       () => ({ op: 'drop', table: 'later', ...(next() < 0.5 && { columns: ['n'] }) }) as Op,
       () => ({ op: 'drop', table: 'workout' }) as Op,
       () => ({ op: 'drop', table: pick(next, ['workout', 'later']), range: rangeOf(next) }) as Op,
-      () => ({ op: 'clear' }) as Op,
+      // No clear: the cloud sends it only first in a chunk, which merged into one patch would put it midway (restarts are tested above)
     ])();
   };
   const snapshot = (storage: ReturnType<typeof deviceStorage>) => [

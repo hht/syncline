@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest';
-import { slowestRate, socketLimit } from '../common/protocol.ts';
+import { socketLimit } from '../common/protocol.ts';
 import { flush, withFakeTimers } from '../test/test-drive.ts';
+import { rustLimits } from '../test/test-rust.ts';
 import { workout, write } from '../test/test-schema.ts';
 import { heartbeat, pingsAfterUpload, pingsIn, pullsBeforeReconnect, receiveTimesOut, reconnect } from './test-connection.ts';
 
@@ -14,7 +15,7 @@ test('heartbeat: suppresses ping during large push batch upload based on slowest
     const bytes = new TextEncoder().encode(sockets[0]?.sent[0]).length;
     expect(sockets[0]?.sent).toHaveLength(1);
     // At 1 KB/s, takes ~300s: incoming messages during upload do not trigger premature pings or disconnects.
-    const done = (bytes / slowestRate) * 1000;
+    const done = (bytes / rustLimits().slowestRate) * 1000;
     vi.advanceTimersByTime(done - 10_000);
     message('pong');
     vi.advanceTimersByTime(10_000 - 1);
@@ -102,7 +103,7 @@ test('heartbeat: awaits upload estimate for retransmitted batch even if catch-up
     expect(sockets[0]?.sent).toHaveLength(2);
     const [big = '', small = ''] = sockets[0]?.sent ?? [];
     const bytes = new TextEncoder().encode(big).length + new TextEncoder().encode(small).length;
-    pingsIn(sockets[0]?.sent ?? [], (bytes / slowestRate) * 1000 + 25_000);
+    pingsIn(sockets[0]?.sent ?? [], (bytes / rustLimits().slowestRate) * 1000 + 25_000);
     connection.stop();
   }));
 

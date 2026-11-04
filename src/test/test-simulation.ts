@@ -1,6 +1,5 @@
 import { join } from 'node:path';
 import { expect } from 'vitest';
-import { parsePoke } from '../common/parse.ts';
 import { protocolVersion } from '../common/version.ts';
 import { SimulatedCloud } from './test-cloud.ts';
 import { decided, WriteLedger } from './test-commits.ts';
@@ -226,7 +225,7 @@ class Simulation {
       // Prior verification round finishes first (invalidated connections abort cleanly).
       await this.#resume();
       const checksum = String(next() ?? '');
-      await device.private.receive(parsePoke(this.#cloud.server.pull({ ...device.private.pullRequest(), checksum })));
+      await device.private.receive(JSON.parse(this.#cloud.server.pull({ ...device.private.pullRequest(), checksum })));
       let done = false;
       const verified = device.private.verify().finally(() => {
         done = true;

@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { expect } from 'vitest';
 import { bearer, type Change, type Chunk, type Cookie, type Poke, subprotocol } from '../common/protocol.ts';
-import { type PullRequest, pullBody, pullURL } from '../common/pull-url.ts';
+import { type PullRequest, pullURL } from '../common/pull-url.ts';
 import { inbox } from './test-socket.ts';
 
 // Shared across platform tests: connects private space clients via the test Worker entry point (WebSocket and HTTP pull), and writes for client c1.
@@ -64,7 +64,7 @@ export function pullResponse(
 ) {
   return exports.default.fetch(pullURL(url), {
     method: 'POST',
-    body: pullBody({ cookie, ...(cursor === undefined ? {} : { cursor }), ...request }),
+    body: JSON.stringify({ cookie, ...(cursor === undefined ? {} : { cursor }), ...request }),
     headers: { ...headers, Authorization: `Bearer ${token(name)}` },
   });
 }

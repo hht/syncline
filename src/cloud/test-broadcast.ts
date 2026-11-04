@@ -1,6 +1,5 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { expect } from 'vitest';
-import { parseMessage, parsePoke } from '../common/parse.ts';
 import type { Hint, Poke } from '../common/protocol.ts';
 import { admin, createProgram, program, pullRest, viewer } from '../test/test-catalog.ts';
 import { Device } from '../test/test-device.ts';
@@ -79,13 +78,13 @@ export async function setup() {
   };
 }
 
-export const last = (socket: RecordingSocket) => parsePoke(socket.sent.at(-1) ?? '') as Poke;
+export const last = (socket: RecordingSocket) => JSON.parse(socket.sent.at(-1) ?? '') as Poke;
 /** Returns the cookie from the last message sent to the socket when that message is a hint. */
-export const hinted = (socket: RecordingSocket) => (parseMessage(socket.sent.at(-1) ?? '') as Hint).hint;
+export const hinted = (socket: RecordingSocket) => (JSON.parse(socket.sent.at(-1) ?? '') as Hint).hint;
 
 /** Receives the last message (a hint) on the device, pulls to catch up, and verifies that subsequent writes push notifications chaining onto the device cookie. */
 export async function catchesUp({ catalog, commit, pullAll }: Awaited<ReturnType<typeof setup>>, socket: RecordingSocket) {
-  await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false);
+  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
   expect(catalog.behind()).toBe(true);
   await pullAll();
   await commit('p3');

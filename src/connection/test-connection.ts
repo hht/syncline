@@ -1,6 +1,5 @@
 import { expect, vi } from 'vitest';
 import { Space } from '../cloud/space.ts';
-import { slowestRate } from '../common/protocol.ts';
 import { Device } from '../test/test-device.ts';
 import { flush } from '../test/test-drive.ts';
 import { rustLimits } from '../test/test-rust.ts';
@@ -116,4 +115,4 @@ export function pingsIn(sent: string[], ms: number) {
 
 /** Pings after push at index finishes under slowest transfer rate plus 25s idle window. */
 export const pingsAfterUpload = (sent: string[], index: number) =>
-  pingsIn(sent, (new TextEncoder().encode(sent[index]).length / slowestRate) * 1000 + 25_000);
+  pingsIn(sent, (new TextEncoder().encode(sent[index]).length / rustLimits().slowestRate) * 1000 + 25_000);

@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest';
-import { parsePullBody, parsePullRequest, pullBody, pullURL } from './pull-url.ts';
+import { parsePullBody, parsePullRequest, pullURL } from './pull-url.ts';
 
 // Pull requests: shared space requests are encoded in the URL, private space requests in POST bodies, both validated at cloud boundaries.
 
-test('round-trips private space pull bodies and rejects duplicate tables, non-objects, empty table names, or unrepresentable bounds in ranges', () => {
+test('parses private space pull bodies and rejects duplicate tables, non-objects, empty table names, or unrepresentable bounds in ranges', () => {
   const ranges = [{ table: 'set', after: { workoutId: 'w1', index: 0 } }, { table: 'workout', until: { id: 'w4' } }, { table: 'gone' }];
   const request = {
     cookie: { version: 3, nonce: 7 },
@@ -15,8 +15,8 @@ test('round-trips private space pull bodies and rejects duplicate tables, non-ob
     clients: ['a.b', 'c'],
     earliest: { 'a.b': 2, c: 1 },
   };
-  expect(parsePullBody(pullBody(request))).toEqual(request);
-  expect(parsePullBody(pullBody({ cookie: null }))).toEqual({ cookie: null });
+  expect(parsePullBody(JSON.stringify(request))).toEqual(request);
+  expect(parsePullBody(JSON.stringify({ cookie: null }))).toEqual({ cookie: null });
   for (const bad of [
     [{ table: 'a' }, { table: 'a' }],
     'not array',

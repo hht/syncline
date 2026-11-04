@@ -80,10 +80,6 @@ export function parsePullRequest(url: URL): QueryRequest {
   };
 }
 
-/** Serializes a private space HTTP pull request body to JSON. */
-export const pullBody = ({ cookie, cursor, refetch, checksum, checksumRows, ranges, clients, earliest }: PullRequest) =>
-  JSON.stringify({ cookie, cursor, refetch, checksum, checksumRows, ranges, clients, earliest });
-
 // Parses table ranges requested for rescan, allowing at most one entry per table.
 function rangesOf(value: unknown): PullRange[] {
   if (!Array.isArray(value)) invalid('Pull ranges', value);

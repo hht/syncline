@@ -1,5 +1,4 @@
 import { expect, test } from 'vitest';
-import { parseMessage } from '../common/parse.ts';
 import { program } from '../test/test-catalog.ts';
 import type { RecordingSocket } from '../test/test-sockets.ts';
 import type { Space } from './space.ts';
@@ -21,7 +20,7 @@ async function rebuiltAndNotified({ rebuild, shard }: Awaited<ReturnType<typeof 
 
 /** Processes the last message on the socket: recognizes the prior incarnation, pulls from scratch, and resets to hold only p9 from the new incarnation. */
 async function landsOnNewIncarnation({ catalog, pullAll, programs }: Awaited<ReturnType<typeof setup>>, socket: RecordingSocket) {
-  await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false);
+  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
   expect(catalog.behind()).toBe(true);
   await pullAll();
   await pullAll();
@@ -71,7 +70,7 @@ test('device already in new incarnation bounds pulls when receiving messages fro
   await pullAll();
   expect(programs().map(({ id }) => id)).toEqual(['p9']);
   const socket = await connect();
-  await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false);
+  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
   for (let pulls = 0; pulls < 3 && catalog.behind(); pulls += 1) await pullAll();
   expect(catalog.behind()).toBe(false);
   expect(programs().map(({ id }) => id)).toEqual(['p9']);
@@ -86,7 +85,7 @@ test('device cookie in prior incarnation with version higher than new incarnatio
   await shard().notify(rebuild().round(64_000));
   const socket = await connect();
   expect(socket.closed).toEqual([]);
-  await catalog.notified(parseMessage(socket.sent.at(-1) ?? ''), false);
+  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
   expect(catalog.behind()).toBe(true);
   await pullAll();
   await pullAll();

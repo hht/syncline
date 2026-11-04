@@ -34,6 +34,7 @@ pub fn documented() -> serde_json::Value {
         "receiveTimeout": RECEIVE_TIMEOUT,
         "pingAfter": crate::sync::heartbeat::PING_AFTER,
         "pongWithin": crate::sync::heartbeat::PONG_WITHIN,
+        "slowestRate": crate::sync::SLOWEST_RATE,
         "baseDelay": crate::sync::backoff::BASE_DELAY,
         "maxDelay": crate::sync::backoff::MAX_DELAY,
         "batch": crate::checksum::BATCH,

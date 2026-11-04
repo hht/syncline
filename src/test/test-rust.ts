@@ -64,6 +64,7 @@ type Limits = Record<
   | 'receiveTimeout'
   | 'pingAfter'
   | 'pongWithin'
+  | 'slowestRate'
   | 'baseDelay'
   | 'maxDelay'
   | 'batch'

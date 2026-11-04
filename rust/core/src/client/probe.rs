@@ -5,29 +5,28 @@
 //! What it should not know: how connections receive messages over network.
 
 use super::{Client, Waiter};
+use crate::declaration::{Handshake, fingerprint};
 use crate::sync::Job;
 use crate::sync::connection::Opened;
 use crate::sync::error::Failure;
 use crate::sync::mirror::Mirror;
+use crate::sync::wire;
 use serde::Deserialize;
 use serde_json::Value as Json;
 
 /// Injected test probe events.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
-// Pointers are 32-bit on wasm, size difference below threshold
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(clippy::large_enum_variant, reason = "test-only variant discarded immediately after receipt")
-)]
 pub enum Probe {
+    /// Pull result as the cloud sends it, parsed at the boundary like a pulled HTTP response.
     Receive {
         channel: String,
-        pulled: crate::protocol::Pulled,
+        pulled: String,
     },
+    /// Message as the cloud sends it, parsed at the boundary like one heard over WebSocket.
     Heard {
         channel: String,
-        message: crate::protocol::Heard,
+        message: String,
         pulling: bool,
     },
     Resync {
@@ -66,7 +65,12 @@ pub enum Inspect {
     Pending {
         limit: Option<f64>,
     },
-    Declaration,
+    /// Fingerprint the private space sends before the cloud returns its schema.
+    Fingerprint,
+    /// Compatibility of the private space with a cloud schema (body of schemaConflict), judged by a fresh handshake.
+    Judge {
+        cloud: String,
+    },
 }
 
 impl Client {
@@ -89,15 +93,23 @@ impl Client {
                 .and_then(json),
             Inspect::PendingCount => Mirror("").pending_count(device).map(Json::from),
             Inspect::Pending { limit } => device.pending(limit).map_err(Failure::from).and_then(json),
-            Inspect::Declaration => json(device.declaration()),
+            Inspect::Fingerprint => json(fingerprint(device.declaration())),
+            Inspect::Judge { cloud } => Handshake::new(device.declaration().clone())
+                .judge(&cloud)
+                .map_err(Failure::new)
+                .and_then(json),
         }
     }
 
     /// Dispatches queued probe when its turn arrives.
     pub(super) fn probe(&mut self, id: u64, probe: Probe, jobs: &mut Vec<Job>, now: f64) {
         let result = match probe {
-            Probe::Receive { channel, pulled } => Mirror(&channel).receive(&mut self.device, &pulled, now).map(Json::from),
-            Probe::Heard { channel, message, pulling } => Mirror(&channel).heard(&mut self.device, message, pulling, now).map(Json::from),
+            Probe::Receive { channel, pulled } => wire::pulled(&pulled)
+                .map_err(Failure::new)
+                .and_then(|pulled| Mirror(&channel).receive(&mut self.device, &pulled, now).map(Json::from)),
+            Probe::Heard { channel, message, pulling } => wire::message(&message)
+                .map_err(Failure::new)
+                .and_then(|message| Mirror(&channel).heard(&mut self.device, message, pulling, now).map(Json::from)),
             Probe::Resync { channel, discard_pending } => Mirror(&channel).resync(&mut self.device, discard_pending).map(|()| Json::Null),
             Probe::Verify => return self.verify(Waiter::Reply(id), jobs, now),
             Probe::Opened { channel } => match self.opened.get(&channel) {

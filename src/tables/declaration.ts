@@ -1,5 +1,4 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { isNames, isObject } from '../common/parse.ts';
 import type { Change } from '../common/protocol.ts';
 import { foldCase } from '../common/sql.ts';
 import { longFingerprintOf } from './fingerprint.ts';
@@ -7,7 +6,7 @@ import { keyColumns } from './keys.ts';
 import { storageTypeOf } from './validation.ts';
 
 /**
- * Schema declaration, wire representation, and compatibility checking for synced tables.
+ * Schema declaration and wire representation for synced tables; the device core judges compatibility against them.
  * Tables and columns used by devices must exist in the cloud sync schema with matching types, primary keys, and foreign keys.
  * Columns nullable on the device cannot be declared non-null on the cloud.
  * Additional cloud tables or columns are stored locally in _extra or _syncline_unknown.
@@ -33,8 +32,6 @@ type TableShape = { columns: Record<string, string>; key: string[]; references: 
 export type Declaration = Record<string, TableShape>;
 /** Incompatibility result: retired references require app updates; ahead references wait for cloud deployment. */
 export type Incompatibility = { kind: 'retired' | 'ahead'; names: string[] };
-// Full schema containing synced declarations and permanently retired names.
-type Schema = { declaration: Declaration; retired: string[] };
 
 /** Schema incompatibility error thrown by the client handshake. */
 export class SchemaMismatch extends Error {
@@ -67,47 +64,6 @@ export function schemaFingerprint(declaration: Declaration) {
       references,
     ]);
   return longFingerprintOf(JSON.stringify(tables));
-}
-
-/**
- * Client handshake managing schema fingerprints and compatibility checks.
- * Initiates connections with the local schema fingerprint and switches to the cloud fingerprint once verified compatible.
- */
-export class Handshake {
-  readonly #declaration: Declaration;
-  readonly #own: string;
-  #accepted: string | undefined;
-
-  constructor(declaration: Declaration) {
-    this.#declaration = declaration;
-    this.#own = schemaFingerprint(declaration);
-  }
-
-  fingerprint() {
-    return this.#accepted ?? this.#own;
-  }
-
-  /** Evaluates compatibility against cloud schema JSON; stores cloud fingerprint if compatible or returns incompatibility details. */
-  judge(cloud: string) {
-    const { declaration, retired } = parseSchema(cloud);
-    const found = incompatibility(declaration, new Set(retired), this.#declaration);
-    if (!found) this.#accepted = schemaFingerprint(declaration);
-    return found;
-  }
-}
-
-const isTable = (table: unknown) =>
-  isObject(table) &&
-  isObject(table.columns) &&
-  Object.values(table.columns).every((type) => typeof type === 'string') &&
-  isNames(table.key) &&
-  isNames(table.references);
-
-function parseSchema(text: string): Schema {
-  const value: unknown = JSON.parse(text);
-  if (!isObject(value) || !isObject(value.declaration) || !Object.values(value.declaration).every(isTable) || !isNames(value.retired))
-    throw new Error(`Malformed cloud schema: ${text.slice(0, 200)}`);
-  return { declaration: value.declaration as Declaration, retired: value.retired };
 }
 
 /** Validates that declared tables and columns do not include retired names (ignoring case, as SQLite names do), throwing if revived. */
@@ -168,47 +124,6 @@ export function declare(tables: SQLiteTable[]): Declaration {
       ];
     }),
   );
-}
-
-/**
- * Checks compatibility of a device declaration against cloud tables and retired names.
- * Retired references take precedence over ahead mismatches.
- */
-export function incompatibility(cloud: Declaration, retired: ReadonlySet<string>, device: Declaration): Incompatibility | undefined {
-  const found = Object.entries(device).flatMap(([name, table]) => problemsOf(name, table, cloud[name], retired));
-  const used = found.filter(([, kind]) => kind === 'retired').map(([path]) => path);
-  if (used.length > 0) return { kind: 'retired', names: used };
-  const ahead = found.filter(([, kind]) => kind === 'ahead').map(([path]) => path);
-  return ahead.length > 0 ? { kind: 'ahead', names: ahead } : undefined;
-}
-
-// Identifies compatibility issues for a single table and its columns.
-function problemsOf(name: string, table: TableShape, synced: TableShape | undefined, retired: ReadonlySet<string>) {
-  const problems: [string, Incompatibility['kind']][] = [];
-  if (retired.has(name)) problems.push([name, 'retired']);
-  else if (!synced || !sameTable(synced, table)) problems.push([name, 'ahead']);
-  for (const [column, type] of Object.entries(table.columns)) {
-    const path = `${name}.${column}`;
-    if (retired.has(path)) problems.push([path, 'retired']);
-    else if (synced && !fits(synced.columns[column], type)) problems.push([path, 'ahead']);
-  }
-  return problems;
-}
-
-// Compares primary keys and foreign keys for columns declared on the device.
-function sameTable(cloud: Declaration[string], device: Declaration[string]) {
-  const references = cloud.references.filter((reference) =>
-    reference
-      .split('>')[0]
-      ?.split(',')
-      .every((column) => column in device.columns),
-  );
-  return cloud.key.join() === device.key.join() && references.join() === device.references.join();
-}
-
-// Checks whether a device column definition fits within the cloud column constraints.
-function fits(cloud: string | undefined, device: string) {
-  return cloud !== undefined && cloud.replace('!', '') === device.replace('!', '') && (!cloud.endsWith('!') || device.endsWith('!'));
 }
 
 /**

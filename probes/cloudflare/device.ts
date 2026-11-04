@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { bearer, type Chunk, type Op, type Poke, subprotocol } from '../../src/common/protocol.ts';
-import { pullBody, pullURL } from '../../src/common/pull-url.ts';
+import { pullURL } from '../../src/common/pull-url.ts';
 import { untilJson, wranglerBin } from './deploy.ts';
 
 /**
@@ -17,7 +17,7 @@ export async function pull(url: string, token: string): Promise<Poke> {
     const result = (await untilJson(pullURL(url), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: pullBody({ cookie: null, ...(cursor !== undefined && { cursor }) }),
+      body: JSON.stringify({ cookie: null, ...(cursor !== undefined && { cursor }) }),
     })) as Poke | Chunk;
     patch.push(...result.patch);
     if ('cookie' in result) return { ...result, patch };

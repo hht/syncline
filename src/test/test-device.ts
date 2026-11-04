@@ -8,7 +8,7 @@ import type { Execute } from '../expo/remote-database.ts';
 import { type Delivered, type Network, type Schedule, Shell, timeout } from '../expo/shell.ts';
 import type { SyncStatus } from '../expo/status.ts';
 import type { Held } from '../expo/syncline.ts';
-import { type Declaration, Handshake, readOnlyOf } from '../tables/declaration.ts';
+import { type Incompatibility, readOnlyOf } from '../tables/declaration.ts';
 import { deviceDefinitions, tableName } from '../tables/table-definitions.ts';
 import { checkDeclared, type Validation, Validator } from '../tables/validation.ts';
 import { Calls, call, type Database, type rustStorage } from './test-rust.ts';
@@ -214,11 +214,11 @@ export class Mirror {
   }
 
   async receive(poke: Poke | Chunk | Reset): Promise<boolean> {
-    return (await this.calls.probe({ type: 'receive', channel: this.channel, pulled: poke })) as boolean;
+    return (await this.calls.probe({ type: 'receive', channel: this.channel, pulled: JSON.stringify(poke) })) as boolean;
   }
 
   async notified(message: Poke | Hint, pulling: boolean): Promise<boolean> {
-    return (await this.calls.probe({ type: 'heard', channel: this.channel, message, pulling })) as boolean;
+    return (await this.calls.probe({ type: 'heard', channel: this.channel, message: JSON.stringify(message), pulling })) as boolean;
   }
 
   async resync(discardPending = false): Promise<void> {
@@ -251,15 +251,14 @@ export class Shared extends Mirror {
 
 /** Private space mirror on device. */
 class Private extends Mirror {
-  readonly #handshake: Handshake;
-
-  constructor(db: Database, calls: Calls, channel: string, attach: Attach) {
-    super(db, calls, channel, attach);
-    this.#handshake = new Handshake(this.inspect({ type: 'declaration' }) as Declaration);
+  /** Fingerprint the device sends before the cloud returns its schema. */
+  fingerprint() {
+    return this.inspect({ type: 'fingerprint' }) as string;
   }
 
-  handshake() {
-    return this.#handshake;
+  /** Compatibility with a cloud schema (body of schemaConflict) as the device judges it; undefined if compatible. */
+  judge(cloud: string) {
+    return (this.inspect({ type: 'judge', cloud }) as Incompatibility | null) ?? undefined;
   }
 
   cookie(): Cookie | null {
