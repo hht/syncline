@@ -104,8 +104,8 @@ Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)
 |---|---|
 | `mutate(write)` | Server write, executed synchronously |
 | `held({ limit?, after? })` | Returns held writes: `{ client, id, reason, version, at, changes }[]`. `changes` contains the raw pushed payload (may not be valid recognized changes if the device had defects; typed as `unknown`). Default page size is 100 entries; `after` is the `version` of the last entry from the previous page |
-| `resubmit(client, id, changes?)` | Resubmits a held write. Throws if no longer held, if `changes` is omitted while the original changes cannot be recognized, or if it touches read-only tables |
-| `schedule(name, at)`, `unschedule(name)` | Custom scheduling: invokes `scheduled(name)` no later than `at`, unless a task resetting the object delays it (see [Limits](limits.md)). Names must not start with `syncline:` |
+| `resubmit(client, id, changes?)` | Resubmits a held write (`changes` replaces the original changes; `[]` discards the write). Throws if no longer held, if the changes (given, or the original ones when omitted) cannot be recognized, including text with lone surrogates, or if it touches read-only tables |
+| `schedule(name, at)`, `unschedule(name)` | Custom scheduling: invokes `scheduled(name)` no later than `at`, unless a task resetting the object delays it (see [Limits](limits.md)). Names must not start with `syncline:` and must be well-formed text (no lone surrogates) |
 | `scheduled` | Override this (`protected override scheduled = (name) => …`) to handle custom scheduled callbacks |
 
 Alarms are managed by Syncline (sharing a single alarm between exports and custom schedules); do not override `alarm()` or call `setAlarm` directly. The same applies to `mutate`, `schedule`, `unschedule`, and `scheduled` on `SynclineSharedSpace`.

@@ -5,7 +5,7 @@ import type { Op } from '../../../common/protocol.ts';
 import { captureReported } from '../../../test/test-errors.ts';
 import { createWorkout, tables, workout } from '../../../test/test-schema.ts';
 import { cloudStorage, restoredStorage } from '../../../test/test-storage.ts';
-import { exportChunk } from './exports.ts';
+import { Exports, exportChunk } from './exports.ts';
 
 // Exports (cross-DO aggregation, analytics, etc.): each exporter resumes from stored destination position, receiving current values of mutated rows; advances only on successful write, restarting from scratch if history changes.
 
@@ -123,4 +123,9 @@ test('point-in-time recovery during incremental export (restoring to completed v
     done: true,
     patch: [{ op: 'clear' }, { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'w1' } }],
   });
+});
+
+test('an exporter name that is not well-formed text throws on construction: stored as-is and read back replaced, its task would never match its own row', () => {
+  const exporter = { position: async () => undefined, write: async () => undefined };
+  expect(() => new Exports({ reserved: 'syncline:' } as never, { exports: { 'cut\uD800': exporter } })).toThrow('well-formed');
 });

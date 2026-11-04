@@ -1,5 +1,7 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import fc from 'fast-check';
 import { expect, test } from 'vitest';
+import { ValidationError } from '../tables/validation.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
 
@@ -43,3 +45,32 @@ function pushedSince(space: Space, base: ReturnType<Space['head']>) {
   if (!('cookie' in pulled)) throw new Error('Expected pull to complete in a single chunk');
   return pulled;
 }
+
+const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
+/** Text built from UTF-16 code units, including lone surrogates, which uniform code point sampling almost never yields. */
+const text16 = fc.string({
+  unit: fc.oneof(fc.constantFrom('\uD800', '\uDBFF', '\uDC00', '\uDFFF'), fc.string({ unit: 'binary', minLength: 1, maxLength: 1 })),
+  maxLength: 6,
+});
+
+test('server writes store any text exactly, or throw ValidationError exactly when it holds a lone surrogate', () => {
+  const write = fc.constantFrom('insert', 'upsert', 'update');
+  fc.assert(
+    fc.property(write, text16, text16, (kind, id, body) => {
+      const storage = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)');
+      const space = new Space(storage, [note]);
+      space.mutate((tx) => tx.insert(note, { id: 'base', body: 'x' }));
+      const row = kind === 'update' ? { id: 'base', body } : { id, body };
+      const malformed = !row.id.isWellFormed() || !row.body.isWellFormed();
+      try {
+        space.mutate((tx) => tx[kind](note, row));
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        expect(malformed).toBe(true);
+        return;
+      }
+      expect(malformed).toBe(false);
+      expect(storage.sql.exec('SELECT id, body FROM note WHERE id = ?', row.id).toArray()).toEqual([row]);
+    }),
+  );
+});

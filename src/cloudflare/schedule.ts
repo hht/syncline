@@ -66,6 +66,8 @@ export class Schedule {
   /** Schedules an integrator chore due no later than at epoch ms, re-arming the alarm. */
   own(name: string, at: number) {
     this.#check(name);
+    // SQLite stores a lone surrogate as-is and reads it back replaced, so the entry would never match its own row again.
+    if (!name.isWellFormed()) throw new Error(`Schedule name must be well-formed text (no lone surrogates): ${name}`);
     this.by(name, at);
     void this.arm();
   }

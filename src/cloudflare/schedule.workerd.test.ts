@@ -5,13 +5,15 @@ import { lease } from './schedule.ts';
 import { fannedOut } from './test-shared.ts';
 import { alarmAfter, object, online, squat } from './test-space.ts';
 
-test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix', async () => {
+test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix and lone surrogates', async () => {
   const { name, phone } = await online(1);
   const hour = 3_600_000;
   await object(name).remind('weekly', Date.now() + hour);
   await object(name).remind('dropped', Date.now() + hour);
   await object(name).forget('dropped');
   await expect(() => object(name).remind('syncline:export:stats', Date.now())).rejects.toThrow('syncline:');
+  // Stored as-is and read back replaced, such a name would never match its own row again.
+  await expect(() => object(name).remind('cut\uD800', Date.now())).rejects.toThrow('well-formed');
   phone.push(squat);
   await phone.next();
   expect(Number(await object(name).alarmAt()) - Date.now()).toBeLessThanOrEqual(60_000);

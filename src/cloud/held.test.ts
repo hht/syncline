@@ -129,12 +129,15 @@ test('push held and connection drops before poke arrives: reconnect catch-up con
   expect(tablet.held).toEqual([]);
 });
 
-test('resubmit after remediation: re-executing held write after restoring parent row succeeds, unholds write, and syncs to both devices; throwing continues hold', async () => {
+test('resubmit after remediation: re-executing held write after restoring parent row succeeds, unholds write, and syncs to both devices; throwing (including on replacement text with a lone surrogate) continues hold', async () => {
   const { cloud, space, phone, tablet, exercises, uploadHeld, pullAll, events } = await setup();
   const { client, id } = await uploadHeld();
   expect(events).toContainEqual({ type: 'write.held', client, id, reason: expect.stringContaining('missing parent') });
 
   expect(() => space.resubmit(client, id)).toThrow('missing parent');
+  expect(() => space.resubmit(client, id, [{ op: 'put', table: 'exercise', row: { id: 'e\uD800', workout_id: null } }])).toThrow(
+    'Malformed',
+  );
   expect(space.held()).toHaveLength(1);
   space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'restored' }));
   const poke = space.resubmit(client, id);

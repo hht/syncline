@@ -15,6 +15,7 @@ The sections below cover sizes, durations, trade-offs and known behaviors, and c
 | Indexes | Unique indexes, partial indexes, and expression-based indexes are not supported; default values support only constants | Throws on opening the database |
 | Primary key for a synced row | 512 bytes encoded as JSON (UTF-8; carried in the resume position of chunked downloads, and placed in URLs for shared spaces) | Local writes throw `ValidationError` and roll back entirely; the cloud holds pushed writes; server writes throw `ValidationError` |
 | Single row | Synced columns total 1,900,000 bytes (DO rows cap at 2 MB, leaving headroom) | Local writes throw `ValidationError` and roll back entirely; Syncline splits its own internal stored values in 2 MB chunks |
+| Text values | Well-formed UTF-16: no lone surrogates (SQLite stores one as-is and reads it back replaced, so the row could never be matched again) | Local writes throw and roll back entirely; the cloud holds pushed writes; server writes throw `ValidationError` (values given as SQL expressions or filled in by `$defaultFn` are not checked); schedule and exporter names throw |
 
 ### Writes and uploads
 

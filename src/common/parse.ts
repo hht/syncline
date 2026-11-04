@@ -38,10 +38,11 @@ export function cookie(value: unknown): Cookie {
   return { version: value.version, nonce: value.nonce };
 }
 
-const isValue = (value: unknown) => value === null || typeof value === 'string' || Number.isFinite(value);
+// Text must be well-formed: SQLite stores a lone surrogate as-is and reads it back replaced, so a key holding one is never found again.
+const isValue = (value: unknown) => value === null || (typeof value === 'string' ? value.isWellFormed() : Number.isFinite(value));
 export const isValues = (value: unknown): value is Record<string, Value> => isObject(value) && Object.values(value).every(isValue);
 
-// Downstream row change: primary key and row values must be SQLite primitives (null, string, finite number) for direct binding.
+// Downstream row change: primary key and row values must be SQLite primitives (null, well-formed string, finite number) for direct binding.
 function op(value: unknown): Op {
   if (!isObject(value)) invalid('Op', value);
   if (value.op === 'clear') return { op: 'clear' };

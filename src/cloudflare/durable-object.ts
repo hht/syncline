@@ -180,7 +180,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
 
   /** Resubmits a held write after fixing data or code; defaults to the original changes if `changes` is omitted. Clears the held entry and notifies online devices on success, or throws if still unexecutable or no longer held. */
   protected readonly resubmit = (client: string, id: number, changes?: Change[]) =>
-    this.#afterWrite(() => this.#server.resubmit(client, id, ...(changes ? [changes] : [])));
+    this.#afterWrite(() => this.#server.resubmit(client, id, ...(changes === undefined ? [] : [changes])));
 
   /**
    * Executes due background upkeep chores, pluggable tasks, and integrator callbacks when an alarm fires.

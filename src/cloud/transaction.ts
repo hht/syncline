@@ -1,6 +1,7 @@
-import { and, eq, type InferInsertModel, type InferSelectModel, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, type InferInsertModel, type InferSelectModel, is, SQL, sql } from 'drizzle-orm';
 import { getTableConfig, type SQLiteAsyncDatabase, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { type Key, primaryKey } from '../tables/keys.ts';
+import { ValidationError } from '../tables/validation.ts';
 
 /**
  * Executes server writes (imports, payment webhooks, etc., without going through a device) on space tables.
@@ -23,6 +24,22 @@ export type Transaction = {
   /** Does nothing if the row does not exist. */
   delete<T extends SQLiteTable>(table: T, key: Partial<InferSelectModel<T>>): void;
 };
+
+/**
+ * Throws if a column value about to be stored is text that is not well-formed: SQLite stores a lone surrogate as-is and reads it back
+ * replaced, so the row would never match itself again. Checks the values Drizzle binds; SQL expressions are not inspected.
+ */
+function wellFormed(table: SQLiteTable, row: Record<string, unknown>) {
+  const issues = Object.entries(getTableColumns(table))
+    .filter(([field, column]) => {
+      const value = row[field];
+      if (value === undefined || value === null || is(value, SQL)) return false;
+      const bound: unknown = column.mapToDriverValue(value);
+      return typeof bound === 'string' && !bound.isWellFormed();
+    })
+    .map(([field]) => ({ path: [field], message: 'text contains a lone surrogate' }));
+  if (issues.length > 0) throw new ValidationError(getTableConfig(table).name, issues);
+}
 
 /** Identifies row location: table name, caller-provided primary key (for deletions), RETURNING fields for stored keys, and Drizzle where condition. */
 function locate(table: SQLiteTable, value: Record<string, unknown>) {
@@ -85,12 +102,14 @@ export function transaction(
     },
     insert: (table: SQLiteTable, row: Record<string, unknown>) => {
       flush();
+      wellFormed(table, row);
       const located = locate(table, row);
       for (const written of db.insert(table).values(row).onConflictDoNothing().returning(located.stored).all())
         changed(located.name, written);
     },
     upsert: (table: SQLiteTable, row: Record<string, unknown>) => {
       flush();
+      wellFormed(table, row);
       const target = primaryKey(table).map(([, column]) => column);
       const located = locate(table, row);
       prior(table, located);
@@ -99,6 +118,7 @@ export function transaction(
     },
     update: (table: SQLiteTable, row: Record<string, unknown>) => {
       flush();
+      wellFormed(table, row);
       const located = locate(table, row);
       prior(table, located);
       for (const written of db.update(table).set(row).where(located.where).returning(located.stored).all()) changed(located.name, written);

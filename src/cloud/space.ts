@@ -266,7 +266,8 @@ export class Space {
     // Re-executes only currently held writes: re-executing unheld or previously resubmitted writes would overwrite newer changes.
     if (!this.#held.has(client, id))
       throw new Error(`Held write not found for client ${client} at mutation ID ${id}; provide an existing held mutation ID.`);
-    changes ??= parseChanges(this.#held.changes(client, id));
+    // Replacement changes cross the same boundary as pushed ones; an empty list discards the held write.
+    changes = Array.isArray(changes) && changes.length === 0 ? [] : parseChanges(changes ?? this.#held.changes(client, id));
     // Resubmitted writes enforce read-only table rules: client mutations cannot modify read-only tables; use mutate instead.
     const readOnly = readOnlyIn(changes, this.#readOnly);
     if (readOnly) throw new Error(`Table ${readOnly} is read-only and cannot be modified by resubmitted client mutations.`);

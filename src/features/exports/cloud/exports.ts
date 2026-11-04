@@ -94,6 +94,9 @@ export class Exports {
   readonly #prefix: string;
 
   constructor(context: Context, { exports = {}, exportDelay = defaultExportDelay, exportBudget = defaultExportBudget }: ExportOptions) {
+    // Each name becomes a schedule entry: SQLite stores a lone surrogate as-is and reads it back replaced, so that entry would never match its row.
+    const malformed = Object.keys(exports).find((name) => !name.isWellFormed());
+    if (malformed !== undefined) throw new Error(`Exporter name must be well-formed text (no lone surrogates): ${malformed}`);
     this.#context = context;
     this.#exports = exports;
     this.#delay = exportDelay;
