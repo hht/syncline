@@ -88,10 +88,20 @@ pub fn define<'a>(db: &Connection, tables: impl IntoIterator<Item = &'a Table>) 
         db.execute_batch("PRAGMA auto_vacuum = INCREMENTAL")?;
     }
     let tx = db.unchecked_transaction()?;
+    redefine(&tx, tables)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Same as [`define`], inside the caller's transaction.
+///
+/// # Errors
+/// See [`define`].
+pub fn redefine<'a>(db: &Connection, tables: impl IntoIterator<Item = &'a Table>) -> Result<(), Error> {
     for table in tables {
-        define_table(&tx, table)?;
-        for index in missing_indexes(&tx, table)? {
-            tx.execute_batch(&format!(
+        define_table(db, table)?;
+        for index in missing_indexes(db, table)? {
+            db.execute_batch(&format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                 quote(&index.name),
                 quote(&table.name),
@@ -99,7 +109,6 @@ pub fn define<'a>(db: &Connection, tables: impl IntoIterator<Item = &'a Table>) 
             ))?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 

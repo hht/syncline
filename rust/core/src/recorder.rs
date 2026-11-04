@@ -203,10 +203,10 @@ impl Recorder {
             .ok_or_else(|| Error::Failed("recording of this replay has already ended".to_owned()))
     }
 
-    /// Names of local-only tables
+    /// Local-only table declarations
     #[must_use]
-    pub fn local_only(&self) -> Vec<String> {
-        self.local_only.iter().map(|table| table.name.clone()).collect()
+    pub fn local_only(&self) -> &[Table] {
+        &self.local_only
     }
 }
 

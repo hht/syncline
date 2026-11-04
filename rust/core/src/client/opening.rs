@@ -49,9 +49,14 @@ impl Opening {
             checksum,
         } = self;
         db.execute_batch("PRAGMA synchronous = FULL")?;
-        // Before creating tables, so a refused declaration leaves none behind
+        // Before creating tables, so a declaration refused here leaves none behind
         refuse_names(&config.synced, &config.local_only, &config.retired.iter().cloned().collect())?;
-        tables::define(db, config.synced.iter().chain(&config.local_only))?;
+        // A local-only table reusing a retired name is defined once retiring has dropped the synced table, which may differ in shape or case
+        let reusing = |table: &tables::Table| config.retired.iter().any(|name| name.eq_ignore_ascii_case(&table.name));
+        tables::define(
+            db,
+            config.synced.iter().chain(config.local_only.iter().filter(|table| !reusing(table))),
+        )?;
         db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA journal_size_limit = 1048576")?;
         Ok(Options {
             config,

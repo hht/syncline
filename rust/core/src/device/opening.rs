@@ -13,6 +13,7 @@ use crate::owner;
 use crate::recorder::Recorder;
 use crate::stage::Stage;
 use crate::synced_tables::SyncedTables;
+use crate::tables;
 use crate::upload_queue::UploadQueue;
 use crate::verifier::Verifier;
 use std::collections::HashMap;
@@ -94,6 +95,13 @@ impl Device {
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
+            // A local-only table may reuse a retired name: it is defined only now that retiring dropped the synced table
+            let reused = device
+                .recorder
+                .local_only()
+                .iter()
+                .filter(|table| device.retired.iter().any(|name| name.eq_ignore_ascii_case(&table.name)));
+            tables::redefine(db, reused)?;
             for name in &foreign {
                 wipe(db, &mut device.effects, name)?;
             }
