@@ -114,24 +114,20 @@ const course = sqliteTable('course', { id: text().primaryKey() });
 const createCourse = 'CREATE TABLE course (id TEXT PRIMARY KEY)';
 const rows = (storage: ReturnType<typeof deviceStorage>, table: string) => storage.sql.exec(`SELECT id FROM ${table}`).toArray();
 
-/** Storage where shared space catalog (owner admin) received a course row. */
-async function courseReceived() {
+/** Storage where shared space catalog (owner `owner`, admin by default) received a course row. */
+async function courseReceived(owner = 'admin') {
   const storage = deviceStorage(createWorkout, createProgram, createCourse);
   const device = new Device(storage, tables, { owner: 'alice' });
-  const catalog = device.shared('catalog', [program, course], 'admin');
+  const catalog = device.shared('catalog', [program, course], owner);
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'secret' }, row: { id: 'secret' } }] });
   device.close();
   return storage;
 }
 
-test('table that left sync and came back: owner switch on the release that brings it back clears it', async () => {
+test('shared space that stops declaring a table wipes it right away: no later owner switch of the space could reach it', async () => {
   const storage = await courseReceived();
-  let device = new Device(storage, tables, { owner: 'alice' });
+  const device = new Device(storage, tables, { owner: 'alice' });
   await device.shared('catalog', [program], 'admin').opened();
-  device.close();
-  expect(rows(storage, 'course')).toEqual([{ id: 'secret' }]);
-  device = new Device(storage, tables, { owner: 'alice' });
-  await device.shared('catalog', [program, course], 'public').opened();
   expect(rows(storage, 'course')).toEqual([]);
 });
 
@@ -288,3 +284,16 @@ test('shared space switching owner wipes the tables it declared last time but no
   await device.shared('catalog', [program], 'public').opened();
   expect(rows(storage, 'course')).toEqual([]);
 });
+
+test.for(['admin', 'alice'])(
+  'table turning local-only from a shared space opened for %s drops the rows it pulled first; local rows written since stay',
+  async (owner) => {
+    const storage = await courseReceived(owner);
+    const device = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
+    expect(rows(storage, 'course')).toEqual([]);
+    await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+    device.close();
+    new Device(storage, tables, { owner: 'alice', localOnly: [course] }).close();
+    expect(rows(storage, 'course')).toEqual([{ id: 'draft' }]);
+  },
+);

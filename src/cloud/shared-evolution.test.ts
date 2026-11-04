@@ -42,7 +42,8 @@ test('app rolls back past plan declaration then upgrades again: refetches shared
   });
   const storage = deviceStorage(...schema);
   await pullAll(new Device(storage, []).shared('catalog', [program, plan]), space);
-  // During rollback, notifications from shards are processed normally: plan changes enter _syncline_unknown; row "a" remains in the table.
+  // The rolled-back release no longer declares plan, so opening wipes it (no later owner switch could reach its rows); notifications from
+  // shards are processed normally, with plan changes entering _syncline_unknown.
   const rolledBack = new Device(storage, []).shared('catalog', [program]);
   const base = space.head();
   space.mutate((tx) => {
@@ -50,7 +51,7 @@ test('app rolls back past plan declaration then upgrades again: refetches shared
     tx.insert(plan, { id: 'c' });
   });
   expect(await rolledBack.receive(noticeFor(space.round(64_000, base), everything) as Poke)).toBe(true);
-  expect(plans(storage)).toEqual(['a']);
+  expect(plans(storage)).toEqual([]);
   const back = new Device(storage, []).shared('catalog', [program, plan]);
   await back.opened();
   expect(back.behind()).toBe(true);

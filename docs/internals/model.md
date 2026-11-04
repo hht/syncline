@@ -2,15 +2,16 @@
 
 Syncline specifies its sync protocols as TLA+ models and checks them exhaustively with TLC. Implementation conformance to the models is guarded by trace validation. This page outlines the models and how to run them; see the detail pages linked below.
 
-## Three models
+## Models
 
 | Model | Scope |
 |---|---|
 | `model/Private.tla` | Private spaces: offline device writes, pushes, and pulls, combined with crashes, disconnects, deployments, point-in-time recovery, backup restores, storage errors, local row corruption, and explicit user resyncs. Writes are never lost or executed twice, and devices eventually converge to the cloud state. |
 | `model/Shared.tla` | Shared spaces: buckets and subscriptions, stale cached copies, space rebuilds, and log truncation. Rows landed on devices always match the visible rows for their subscription at some version, and devices eventually catch up to head. |
 | `model/Fanout.tla` | Shared space fanout: chores and broadcast shards deliver to each connection without missing notices or triggering wasted pulls, eventually pushing up to the head version. |
+| `model/Ownership.tla` | Device table ownership across releases and owner switches: tables move between the private space, shared spaces, and local-only use while the signed-in owner or a shared space's owner changes. Owners are optional and need not match across spaces. No table holds rows of a user other than the current owner of where they came from, and a space with a cookie holds exactly its own rows. Not trace-validated: device tests cover the implementation (`owner.test.ts`). |
 
-Properties to uphold appear at the end of each model: P1–P3, P5–P7, P9–P11, and P8a, P8k, P8r (private spaces); S1–S2 (shared spaces); `Covers`, `NoWastedPull`, and `CatchesUp` (fanout); along with the ghost invariant `HistConsistent` (commit log consistency with cloud tables). What each configuration checks, its state space size, and how it runs in gates are documented at the top of each `.cfg` file under `model/`.
+Properties to uphold appear at the end of each model: P1–P3, P5–P7, P9–P11, and P8a, P8k, P8r (private spaces); S1–S2 (shared spaces); `NoLeak` and `Exact` (ownership); `Covers`, `NoWastedPull`, and `CatchesUp` (fanout); along with the ghost invariant `HistConsistent` (commit log consistency with cloud tables). What each configuration checks, its state space size, and how it runs in gates are documented at the top of each `.cfg` file under `model/`.
 
 ## How to run
 

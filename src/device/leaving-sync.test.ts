@@ -1,0 +1,59 @@
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { expect, test } from 'vitest';
+import { Device } from '../test/test-device.ts';
+import { createWorkout, tables } from '../test/test-schema.ts';
+import { deviceStorage } from '../test/test-storage.ts';
+
+// Tables leaving sync are wiped where no later owner switch could reach them; whatever the app does with the name afterwards must not
+// keep the database from opening.
+
+const program = sqliteTable('program', { id: text().primaryKey() });
+const course = sqliteTable('course', { id: text().primaryKey() });
+const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
+
+/** Storage where shared space catalog (owner admin) declared program and course and received a course row; `stored` names the course table. */
+async function catalogSynced(stored = 'course') {
+  const storage = deviceStorage(
+    createWorkout,
+    'CREATE TABLE program (id TEXT PRIMARY KEY)',
+    `CREATE TABLE ${stored} (id TEXT PRIMARY KEY)`,
+  );
+  const device = new Device(storage, tables, { owner: 'alice' });
+  const catalog = device.shared('catalog', [program, course], 'admin');
+  await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'c1' }, row: { id: 'c1' } }] });
+  device.close();
+  return storage;
+}
+
+test.for(['admin', 'public'])(
+  'shared space (opened for %s) that stopped declaring a table the app replaced with a view still opens',
+  async (owner) => {
+    const storage = await catalogSynced();
+    storage.sql.exec('DROP TABLE course');
+    storage.sql.exec('CREATE VIEW course AS SELECT id FROM program');
+    const device = new Device(storage, tables, { owner: 'alice' });
+    await expect(device.shared('catalog', [program], owner).opened()).resolves.toBeUndefined();
+  },
+);
+
+test.for(['admin', 'public'])(
+  'shared space (opened for %s) that stopped declaring a table stored under a name of different case wipes it',
+  async (owner) => {
+    // SQLite table names are case-insensitive: the declaration adopted the existing table Course.
+    const storage = await catalogSynced('Course');
+    await new Device(storage, tables, { owner: 'alice' }).shared('catalog', [program], owner).opened();
+    expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([]);
+  },
+);
+
+test('table turning local-only from a shared space and retired in the same release still opens', async () => {
+  const storage = await catalogSynced();
+  expect(() => new Device(storage, tables, { owner: 'alice', localOnly: [course], retired: ['course'] }).close()).not.toThrow();
+});
+
+test('local-only table reusing a retired name it never synced under keeps working', async () => {
+  const storage = deviceStorage(createWorkout, 'CREATE TABLE course (id TEXT PRIMARY KEY)');
+  const device = new Device(storage, tables, { owner: 'alice', localOnly: [course], retired: ['course'] });
+  await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+  expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
+});

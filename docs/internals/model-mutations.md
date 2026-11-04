@@ -91,6 +91,15 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Send empty catch-up chained onto device cookie when head version cannot be queried (`MCFanout`: `Covers`)
 - Shard acknowledgments adopt head instead of reverting to persisted version after shared space actor restart (`MCFanout`: S2)
 
+## Ownership (`Ownership.tla`)
+
+- Keep tables no space records on a private owner switch (`MCOwnership`: `NoLeak`)
+- Keep the rows of a table turning local-only from a shared space (`MCOwnership`: `NoLeak`)
+- Keep the rows of a table a shared space no longer declares (`MCOwnership`: `NoLeak`: no owner switch reaches it any more)
+- Keep the rows of a table never synced that a space declares for the first time (`MCOwnership`: `Exact`: local-only writes would never upload)
+- Leave another space's record of a table a space declares (`MCOwnership`: `Exact`: the old space takes it back without refetching)
+- Wipe only the declared tables on a shared space owner switch, not the ones it recorded last time (`MCOwnership`: `NoLeak`)
+
 ## Mutations that do not trigger a violation
 
 Correctness does not depend on them:

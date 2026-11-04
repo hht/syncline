@@ -27,12 +27,12 @@
 
 use crate::effects::Effects;
 use crate::error::Error;
-use crate::evolution::{redeclare, returning};
+use crate::evolution::{declared, ordinary, redeclare, returning, wipe};
 use crate::owner;
 use crate::protocol::{Cookie, Point};
 use crate::savepoint;
 use crate::shadow_tables::drop_shadow;
-use crate::sql::{column_names, quote};
+use crate::sql::quote;
 use crate::stage::Stage;
 use crate::synced_tables::SyncedTables;
 use crate::tables::{self, Table};
@@ -101,6 +101,7 @@ impl SharedSpace {
     /// done before any step that can fail, so a failed open never leaves them readable), creates tables and missing columns from declarations, upgrades local tables (re-declared tables trigger full pull), and discards incompatible partial pulls.
     ///
     /// A table returning to sync is wiped before it becomes readable (zeroed in the database file too): an owner switch while it was out of sync could not reach it.
+    /// A table the space stops declaring is wiped the same way, for the same reason.
     ///
     /// # Errors
     /// Table declaration conflicts with existing database tables; database read/write error.
@@ -120,8 +121,18 @@ impl SharedSpace {
         let names: Vec<String> = synced.declaration().keys().cloned().collect();
         self.synced = Some(synced);
         let back = returning(db, &self.name, &names)?;
+        // Tables this space stopped declaring: no later owner switch of the space reaches them, so the rows it pulled go now
+        let mut dropped = Vec::new();
+        for name in declared(db, &self.name)? {
+            if !names.contains(&name) && ordinary(db, &name)? {
+                dropped.push(name);
+            }
+        }
         let upgrade = |host: &mut Host<'_>| {
             savepoint::commit(host, parts, |host| {
+                for name in &dropped {
+                    wipe(host.0, host.1, name)?;
+                }
                 // Full pull: no pending writes, clear cookie and staged chunks, pull from scratch (first chunk clears)
                 if redeclare(host.0, host.1, &self.name, &names)? {
                     self.clear_cookie(host.0)?;
@@ -130,7 +141,7 @@ impl SharedSpace {
                 self.synced()?.upgrade(host.0, host.1)
             })
         };
-        if back.is_empty() {
+        if back.is_empty() && dropped.is_empty() {
             upgrade(host)?;
         } else {
             owner::securely(host, |host| host.0, upgrade)?;
@@ -223,15 +234,11 @@ impl SharedSpace {
     /// (runs before the declarations are applied, so a table may not exist yet), then pulls from scratch with no target
     fn reset(&mut self, host: &mut Host<'_>) -> Result<(), Error> {
         self.wanted = None;
-        let mut names: Vec<String> = host
-            .0
-            .prepare("SELECT name FROM _syncline_declared WHERE space = ?")?
-            .query_map([&self.name], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
+        let mut names = declared(host.0, &self.name)?;
         names.extend(self.tables().filter(|name| !names.contains(name)).cloned().collect::<Vec<_>>());
         savepoint::commit(host, parts, |host| {
             for name in &names {
-                if !column_names(host.0, name)?.is_empty() {
+                if ordinary(host.0, name)? {
                     host.0.execute(&format!("DELETE FROM {}", quote(name)), [])?;
                     host.1.touch(name);
                 }

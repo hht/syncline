@@ -86,6 +86,26 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
     Ok(())
 }
 
+/// Tables in `local_only` that a shared space recorded: turning local-only drops that record, so the space's owner switch could no
+/// longer reach them, and the rows it pulled (for its owner, unrelated to the private owner) must go first.
+///
+/// # Errors
+/// Database read error.
+pub fn foreign(db: &rusqlite::Connection, local_only: &[String]) -> rusqlite::Result<Vec<String>> {
+    let mut found = Vec::new();
+    for name in local_only {
+        let shared: bool = db.query_row(
+            "SELECT EXISTS (SELECT 1 FROM _syncline_declared WHERE name = ? AND space <> '')",
+            [name],
+            |row| row.get(0),
+        )?;
+        if shared {
+            found.push(name.clone());
+        }
+    }
+    Ok(found)
+}
+
 /// Wipes tables that were synced (they carry `_extra`) but no space declares any more and are not `local_only`, with their shadow tables:
 /// their rows belong to whoever synced them, so an owner switch must not leave them readable. Any space that declares one later finds it
 /// [`returning`] and pulls it from scratch. Only ordinary tables are inspected: a virtual table whose module this connection lacks cannot be read.
@@ -104,27 +124,62 @@ pub fn wipe_orphans(db: &rusqlite::Connection, effects: &mut Effects, local_only
             continue;
         }
         if column_names(db, &name)?.iter().any(|column| column == "_extra") {
-            db.execute(&format!("DELETE FROM {}", quote(&name)), [])?;
-            effects.touch(&name);
-            drop_shadow(db, &name)?;
+            wipe(db, effects, &name)?;
         }
     }
     Ok(())
 }
 
-/// Tables in `names` that were synced before (they carry `_extra`), are not declared by `space` last time, and now are: they left sync
-/// without being retired, or come from another space. Their rows may have missed deletes, and may belong to a previous owner.
+/// Deletes every row of synced table `name` and its shadow table (a partial pull of it).
+///
+/// # Errors
+/// Database write error.
+pub fn wipe(db: &rusqlite::Connection, effects: &mut Effects, name: &str) -> rusqlite::Result<()> {
+    db.execute(&format!("DELETE FROM {}", quote(name)), [])?;
+    effects.touch(name);
+    drop_shadow(db, name)
+}
+
+/// Whether `name` is an ordinary table: the app may have replaced a table that left sync with a view, which cannot be wiped, or a virtual
+/// table, whose module this connection may lack.
+///
+/// # Errors
+/// Database read error.
+pub fn ordinary(db: &rusqlite::Connection, name: &str) -> rusqlite::Result<bool> {
+    db.query_row(
+        // Table names are case-insensitive: a declaration adopts an existing table whatever its case
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name = ? COLLATE NOCASE)",
+        [name],
+        |row| row.get(0),
+    )
+}
+
+/// Tables `space` declared last time (private space is empty string).
+///
+/// # Errors
+/// Database read error.
+pub fn declared(db: &rusqlite::Connection, space: &str) -> rusqlite::Result<Vec<String>> {
+    db.prepare("SELECT name FROM _syncline_declared WHERE space = ?")?
+        .query_map([space], |row| row.get(0))?
+        .collect()
+}
+
+/// Tables in `names` that `space` did not declare last time and now does, and that either were synced before (they carry `_extra`):
+/// they left sync without being retired, or come from another space, so their rows may have missed deletes and may belong to a previous
+/// owner; or hold rows anyway (written while local-only), which would never upload.
 ///
 /// # Errors
 /// Database read error.
 pub fn returning(db: &rusqlite::Connection, space: &str, names: &[String]) -> rusqlite::Result<Vec<String>> {
-    let before: Vec<String> = db
-        .prepare("SELECT name FROM _syncline_declared WHERE space = ?")?
-        .query_map([space], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let before = declared(db, space)?;
     let mut back = Vec::new();
     for name in names {
-        if !before.contains(name) && column_names(db, name)?.iter().any(|column| column == "_extra") {
+        if before.contains(name) {
+            continue;
+        }
+        let columns = column_names(db, name)?;
+        let filled = || db.query_row(&format!("SELECT EXISTS (SELECT 1 FROM {})", quote(name)), [], |row| row.get(0));
+        if !columns.is_empty() && (columns.iter().any(|column| column == "_extra") || filled()?) {
             back.push(name.clone());
         }
     }

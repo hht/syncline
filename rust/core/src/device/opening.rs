@@ -7,7 +7,7 @@ use super::{Device, Options};
 use crate::database::Database;
 use crate::effects::Effects;
 use crate::error::Error;
-use crate::evolution::{redeclare, refuse_names, retire, returning};
+use crate::evolution::{foreign, redeclare, refuse_names, retire, returning, wipe};
 use crate::internal;
 use crate::owner;
 use crate::recorder::Recorder;
@@ -88,10 +88,16 @@ impl Device {
     /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
     fn upgrade(&mut self) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();
-        let back = !returning(self.db.connection(), "", &names)?.is_empty();
+        let mut foreign = foreign(self.db.connection(), &self.local_only)?;
+        // Retiring drops them outright
+        foreign.retain(|name| !self.retired.contains(name));
+        let wipes = !returning(self.db.connection(), "", &names)?.is_empty() || !foreign.is_empty();
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
+            for name in &foreign {
+                wipe(db, &mut device.effects, name)?;
+            }
             // Local-only tables belong to no space: a space that synced one treats it as returning when it takes it back
             for name in &device.local_only {
                 db.execute("DELETE FROM _syncline_declared WHERE name = ?", [name])?;
@@ -119,7 +125,7 @@ impl Device {
             )?;
             Ok(())
         };
-        if back {
+        if wipes {
             owner::securely(self, |device| device.db.connection(), run)
         } else {
             run(self)
