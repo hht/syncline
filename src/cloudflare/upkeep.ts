@@ -30,8 +30,6 @@ export class Upkeep {
   readonly #events: Events;
   readonly #truncation: Truncation | undefined;
   readonly #counting: Counting | undefined;
-  /** Active upkeep step type for failure reporting. */
-  #step: 'index' | 'drop' = 'index';
 
   /**
    * Initializes maintenance tasks: indexes contains DDL statements for missing or stale indexes; keep protects cloud-only tables;
@@ -74,7 +72,11 @@ export class Upkeep {
       run: async () => this.#run(),
       retry,
       failed: (error) =>
-        this.#events({ type: 'upkeep.failed', step: this.#step, reason: error instanceof Error ? error.message : String(error) }),
+        this.#events({
+          type: 'upkeep.failed',
+          step: this.#indexes.length > 0 ? 'index' : 'drop',
+          reason: error instanceof Error ? error.message : String(error),
+        }),
     };
   }
 
@@ -91,12 +93,10 @@ export class Upkeep {
   #run() {
     const [index] = this.#indexes;
     if (index !== undefined) {
-      this.#step = 'index';
       this.#query(index);
       this.#indexes.shift();
       if (this.#indexes.length > 0) return true;
     } else {
-      this.#step = 'drop';
       dropRetired(this.#query, this.#keep);
     }
     const next = nextDrop(this.#query, this.#keep)?.at;

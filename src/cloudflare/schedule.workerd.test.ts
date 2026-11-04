@@ -93,7 +93,9 @@ test('an export leased together with a task that resets the object leaves that l
   await runDurableObjectAlarm(object(name)).catch(() => undefined);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await object(name).importNotes([{ id: 'b', text: 'b' }]);
+  // Each export cut off with the reset runs alone, one per alarm.
   await alarmAfter(object(name), 120_000);
+  await alarmAfter(object(name), 0);
   expect(await object(name).exported()).not.toEqual([]);
 });
 
@@ -118,4 +120,36 @@ test('restarting with shards behind redelivers at once even if a reset left the 
   expect(at).toBeLessThanOrEqual(Date.now());
   await alarmAfter(leased(), 0);
   await fannedOut('leased');
+});
+
+/** Moves every entry past the lease and fires the alarm, tolerating a task that resets the object, then waits for the replacement. */
+async function alarmPastLease(name: string) {
+  await alarmAfter(object(name), lease).catch(() => undefined);
+  // The aborted object rejects calls until the runtime replaces it.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+test('a task due alongside one that resets the object completes on a following alarm instead of being cut off with it every time', async () => {
+  const { name } = await online(1);
+  await object(name).remind('reset', Date.now());
+  await object(name).remind('innocent', Date.now());
+  for (let alarm = 0; alarm < 3; alarm += 1) await alarmPastLease(name);
+  expect(await object(name).fired()).toEqual(['innocent']);
+  expect((await entries(name)).reset).toBeDefined();
+});
+
+test('a task that reset the object three times in a row waits a day before its next run, and rescheduling it does not bring it closer', async () => {
+  const { name } = await online(1);
+  await object(name).remind('reset', Date.now());
+  for (let alarm = 0; alarm < 4; alarm += 1) await alarmPastLease(name);
+  await object(name).remind('reset', Date.now());
+  const paused = async () => {
+    const [at = 0, failures = 0] = (await entries(name)).reset ?? [];
+    return at - Date.now() > 23 * 3_600_000 && failures > 0;
+  };
+  expect(await paused()).toBe(true);
+  // A day later it gets one more run, which resets the object again, and waits another day.
+  await alarmAfter(object(name), 86_400_000).catch(() => undefined);
+  await alarmPastLease(name);
+  expect(await paused()).toBe(true);
 });

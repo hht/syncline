@@ -41,8 +41,8 @@ const steps: Step[] = [
       // Bucket row counts per table generation and cursor progress for background row counting.
       'CREATE TABLE _syncline_bucket_rows (tbl TEXT NOT NULL, gen INTEGER NOT NULL, bucket TEXT NOT NULL, rows INTEGER NOT NULL, PRIMARY KEY (tbl, gen, bucket)) WITHOUT ROWID',
       'CREATE TABLE _syncline_counted (tbl TEXT PRIMARY KEY, gen INTEGER NOT NULL, after TEXT) WITHOUT ROWID',
-      // Schedule table multiplexing background chores and timers onto alarms.
-      'CREATE TABLE _syncline_schedule (name TEXT PRIMARY KEY, at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0)',
+      // Schedule table multiplexing background chores and timers onto alarms; resets counts runs started but never finished.
+      'CREATE TABLE _syncline_schedule (name TEXT PRIMARY KEY, at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0, resets INTEGER NOT NULL DEFAULT 0)',
     ],
     down: [],
   },

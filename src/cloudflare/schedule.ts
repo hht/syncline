@@ -88,21 +88,52 @@ export class Schedule {
    * the entry survives and the alarm re-armed on restart runs it again after the lease. The lease is committed before any task runs,
    * since a reset rolls back writes not yet committed, including those of a task that never yields. Scheduling during the run replaces
    * the lease; an entry is deleted on completion only if it still holds its lease. Then arms the alarm for the next earliest due time.
+   * An entry whose earlier run never finished may be what reset the object: it runs alone, so the tasks due with it are not cut off
+   * again; after resetLimit such runs in a row it waits a day instead and is reported, so a task that never fits resets the object
+   * once a day rather than every lease.
    * @see https://developers.cloudflare.com/durable-objects/api/storage-api/#sync
    */
   async run(chores: (name: string) => Chore | undefined, scheduled: (name: string) => void | Promise<void>) {
     const now = Date.now();
     const due = this.#storage.sql
-      .exec('SELECT name, failures FROM _syncline_schedule WHERE at <= ?', now)
+      .exec('SELECT name, failures, resets FROM _syncline_schedule WHERE at <= ? ORDER BY resets, name', now)
       .toArray()
       // An entry still leased here was orphaned by a reset: its backoff count is gone, so it runs as a first attempt.
-      .map(({ name, failures }) => ({ name: String(name), failures: Math.max(0, Number(failures)) }));
-    this.#storage.sql.exec('UPDATE _syncline_schedule SET at = ?, failures = ? WHERE at <= ?', now + lease, leased, now);
+      .map(({ name, failures, resets }) => ({ name: String(name), failures: Math.max(0, Number(failures)), resets: Number(resets) }));
+    const suspect = due.find(({ resets }) => resets > 0);
+    if (suspect && suspect.resets >= resetLimit) {
+      this.#storage.sql.exec(
+        'UPDATE _syncline_schedule SET at = ?, failures = max(failures, 1), resets = ? WHERE name = ?',
+        now + resetPause,
+        resetLimit - 1,
+        suspect.name,
+      );
+      const error = new Error(
+        `${suspect.name} reset the object ${resetLimit} times in a row (exceeding the CPU limit, configurable with limits.cpu_ms, or hanging); retrying in a day`,
+      );
+      if (suspect.name.startsWith(reserved)) chores(suspect.name)?.failed(error);
+      else report(error);
+      await this.arm();
+      return;
+    }
+    const batch = suspect ? [suspect] : due;
+    for (const { name } of batch)
+      this.#storage.sql.exec(
+        'UPDATE _syncline_schedule SET at = ?, failures = ?, resets = resets + 1 WHERE name = ?',
+        now + lease,
+        leased,
+        name,
+      );
     await this.#storage.sync();
     await Promise.all(
-      due.map(async ({ name, failures }) => {
-        await (name.startsWith(reserved) ? this.#chore(name, failures, chores(name)) : this.#scheduled(name, scheduled));
-        this.#storage.sql.exec('DELETE FROM _syncline_schedule WHERE name = ? AND failures = ?', name, leased);
+      batch.map(async ({ name, failures }) => {
+        try {
+          await (name.startsWith(reserved) ? this.#chore(name, failures, chores(name)) : this.#scheduled(name, scheduled));
+        } finally {
+          // The run finished, so it did not reset the object; only a row it rescheduled is left to clear.
+          this.#storage.sql.exec('DELETE FROM _syncline_schedule WHERE name = ? AND failures = ?', name, leased);
+          this.#storage.sql.exec('UPDATE _syncline_schedule SET resets = 0 WHERE name = ? AND resets > 0', name);
+        }
       }),
     );
     await this.arm();
@@ -151,6 +182,10 @@ export const lease = 15 * 60_000;
 
 /** Failure count marking a leased entry (a running entry, or one orphaned by a reset mid-run). */
 const leased = -1;
+
+/** Unfinished runs in a row after which an entry waits resetPause instead of its lease before running again. */
+const resetLimit = 3;
+const resetPause = 86_400_000;
 
 /** Reserved prefix for internal Syncline chores in _syncline_schedule. */
 export const reserved = 'syncline:';
