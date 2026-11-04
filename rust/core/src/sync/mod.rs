@@ -48,6 +48,24 @@ pub const PONG: &str = "pong";
 /// WebSocket subprotocol: protocol name, followed by token and schema fingerprint with respective prefixes.
 pub const SUBPROTOCOL: &str = "syncline";
 pub const BEARER: &str = "bearer.";
+
+/// Token subprotocol: percent-encodes every byte outside RFC 3986 unreserved characters, so any token forms a valid subprotocol
+/// (browsers reject subprotocols that are not RFC 7230 tokens; commas would split the header); the cloud decodes it with `decodeURIComponent`.
+/// @see <https://www.rfc-editor.org/rfc/rfc3986#section-2.3>
+/// @see <https://websockets.spec.whatwg.org/#dom-websocket-websocket>
+#[must_use]
+pub fn bearer(token: &str) -> String {
+    use std::fmt::Write;
+    let mut encoded = String::from(BEARER);
+    for byte in token.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
 pub const SCHEMA_PREFIX: &str = "schema.";
 pub const SCHEMA_HEADER: &str = "Syncline-Schema";
 

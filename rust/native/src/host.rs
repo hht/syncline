@@ -236,8 +236,13 @@ impl Host {
                     }
                 }
                 Instruction::Schedule { timer, delay } => {
-                    self.timers
-                        .insert(timer, Instant::now() + Duration::from_secs_f64(delay.max(0.0) / 1000.0));
+                    // A deadline beyond representable time never arrives, so such a timer is not kept.
+                    if let Some(at) = Duration::try_from_secs_f64(delay.max(0.0) / 1000.0)
+                        .ok()
+                        .and_then(|after| Instant::now().checked_add(after))
+                    {
+                        self.timers.insert(timer, at);
+                    }
                 }
                 Instruction::Cancel { timer } => {
                     self.timers.remove(&timer);

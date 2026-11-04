@@ -7,7 +7,7 @@ import type { Query } from '../common/storage.ts';
 import { rowId } from '../tables/keys.ts';
 import { bucketsAs, type TableReads } from './batches.ts';
 import type { BucketRows, Tally } from './bucket-rows.ts';
-import type { BucketRules, Buckets, Subscription } from './buckets.ts';
+import { type BucketRules, type Buckets, boundBuckets, type Subscription } from './buckets.ts';
 import { type Commits, changedRows, type Keys } from './commits.ts';
 import { landedAt, type Position } from './position.ts';
 import type { Begun, Reader } from './reader.ts';
@@ -239,6 +239,7 @@ export function withBuckets(buckets: Buckets, query: Query, keys: Keys, tally: T
     const [table, key, before = []] = entry;
     if (!key) return entry;
     const after = now(table, key);
+    boundBuckets(table, after);
     tally.add(table, key, before, after);
     return [table, key, [...new Set([...before, ...after])].sort()];
   });

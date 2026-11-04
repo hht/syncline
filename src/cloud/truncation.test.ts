@@ -124,10 +124,11 @@ test('a shared write split across commits records the byte size of each segment 
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [program, day], { shared: { buckets: rules } });
   space.mutate((tx) => {
-    for (let index = 0; index < 9000; index += 1) tx.upsert(program, { id: `${'k'.repeat(150)}${index}`, status: 'published' });
+    for (let index = 0; index < 9000; index += 1) tx.upsert(program, { id: `${'k'.repeat(400)}${index}`, status: 'published' });
   });
   const rows = query(cloud, 'SELECT bytes, length(CAST(keys AS BLOB)) AS stored FROM _syncline_commit WHERE version > 0 ORDER BY version');
-  expect(rows.length).toBeGreaterThan(1);
+  // More than two segments: growth from earlier segments must carry into every later one.
+  expect(rows.length).toBeGreaterThan(2);
   let total = 0;
   expect(rows.map(({ bytes }) => Number(bytes))).toEqual(rows.map(({ stored }) => (total += Number(stored))));
 });

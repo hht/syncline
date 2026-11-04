@@ -272,3 +272,17 @@ test('device declared column undeclared on cloud (cloud rolled back column addit
   await catchUp(new Space(cloud, [workoutWithReps]), device);
   expect(rows(storage, 'workout')).toEqual([{ id: 'w1', note: 'squat', reps: 5, _extra: null }]);
 });
+
+test('a range pull resumed after a deploy took its table out of sync continues without restarting the whole space', () => {
+  const cloud = cloudStorage(createWorkout, createTag);
+  const before = new Space(cloud, [workout, tag]);
+  before.mutate((tx) => {
+    for (let index = 0; index < 60; index += 1) tx.insert(tag, { id: `t${String(index).padStart(2, '0')}`, name: 'Legs' });
+    tx.insert(workout, { id: 'w1' });
+  });
+  const cookie = before.head();
+  const first = before.pull({ cookie, ranges: [{ table: 'tag', after: { id: 't00' }, until: { id: 't50' } }] }, 400);
+  if (!('next' in first) || first.next === undefined) throw new Error('expected a chunked range pull');
+  const resumed = new Space(cloud, [workout]).pull({ cookie, cursor: first.next }, 400);
+  expect(resumed.patch[0]).not.toEqual({ op: 'clear' });
+});

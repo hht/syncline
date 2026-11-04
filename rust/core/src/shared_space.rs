@@ -27,13 +27,16 @@
 
 use crate::effects::Effects;
 use crate::error::Error;
-use crate::evolution::redeclare;
+use crate::evolution::{redeclare, returning};
 use crate::owner;
-use crate::protocol::{Cookie, Op, Point};
+use crate::protocol::{Cookie, Point};
 use crate::savepoint;
+use crate::shadow_tables::drop_shadow;
+use crate::sql::{column_names, quote};
 use crate::stage::Stage;
 use crate::synced_tables::SyncedTables;
 use crate::tables::{self, Table};
+use crate::unknown_rows::UnknownRows;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
 
@@ -94,24 +97,15 @@ impl SharedSpace {
         }
     }
 
-    /// Opens space: creates tables and missing columns from declarations, upgrades local tables (re-declared tables trigger full pull), enforces owner boundary (swapping user clears previously seen rows, including reclaiming database pages: subscription changes take effect upon full pull landing and must not be exposed to unauthorized users), and discards incompatible partial pulls.
+    /// Opens space: enforces owner boundary first (swapping user clears previously seen rows, including reclaiming database pages: subscription changes take effect upon full pull landing and must not be exposed to unauthorized users;
+    /// done before any step that can fail, so a failed open never leaves them readable), creates tables and missing columns from declarations, upgrades local tables (re-declared tables trigger full pull), and discards incompatible partial pulls.
+    ///
+    /// A table returning to sync is wiped before it becomes readable (zeroed in the database file too): an owner switch while it was out of sync could not reach it.
     ///
     /// # Errors
     /// Table declaration conflicts with existing database tables; database read/write error.
     pub fn open(&mut self, db: &Connection, effects: &mut Effects, retired: &HashSet<String>) -> Result<(), Error> {
-        tables::define(db, &self.tables)?;
-        let synced = SyncedTables::new(db, &self.tables, &self.name, retired)?;
-        let names: Vec<String> = synced.declaration().keys().cloned().collect();
-        self.synced = Some(synced);
         let host = &mut (db, effects);
-        savepoint::commit(host, parts, |host| {
-            // Full pull: no pending writes, clear cookie and staged chunks, pull from scratch (first chunk clears)
-            if redeclare(host.0, &self.name, &names)? {
-                self.clear_cookie(host.0)?;
-                self.unstage(host.0)?;
-            }
-            self.synced()?.upgrade(host.0, host.1)
-        })?;
         if let Some(owner) = self.owner.clone() {
             let stored = owner::stored(db, &self.name)?;
             if stored.as_deref() != Some(owner.as_str()) {
@@ -120,6 +114,26 @@ impl SharedSpace {
                 }
                 owner::record(db, &self.name, &owner)?;
             }
+        }
+        tables::define(db, &self.tables)?;
+        let synced = SyncedTables::new(db, &self.tables, &self.name, retired)?;
+        let names: Vec<String> = synced.declaration().keys().cloned().collect();
+        self.synced = Some(synced);
+        let back = returning(db, &self.name, &names)?;
+        let upgrade = |host: &mut Host<'_>| {
+            savepoint::commit(host, parts, |host| {
+                // Full pull: no pending writes, clear cookie and staged chunks, pull from scratch (first chunk clears)
+                if redeclare(host.0, host.1, &self.name, &names)? {
+                    self.clear_cookie(host.0)?;
+                    self.unstage(host.0)?;
+                }
+                self.synced()?.upgrade(host.0, host.1)
+            })
+        };
+        if back.is_empty() {
+            upgrade(host)?;
+        } else {
+            owner::securely(host, |host| host.0, upgrade)?;
         }
         savepoint::commit(host, parts, |host| {
             // Shadow tables only exist mid-chunk pull and mirror synced tables: if this release altered synced tables with shadows or rolled back to an earlier release mid-pull, discard partial pull and restart
@@ -205,13 +219,22 @@ impl SharedSpace {
         Ok(())
     }
 
-    /// Owner change: wipes the rows the previous owner could see right away, then pulls from scratch with no target
+    /// Owner change: wipes the rows the previous owner could see right away in the tables the space declares (runs before the
+    /// declarations are applied, so a table may not exist yet), then pulls from scratch with no target
     fn reset(&mut self, host: &mut Host<'_>) -> Result<(), Error> {
         self.wanted = None;
         savepoint::commit(host, parts, |host| {
-            self.synced()?.write(host.0, &Op::Clear, host.1)?;
+            for name in self.tables() {
+                if !column_names(host.0, name)?.is_empty() {
+                    host.0.execute(&format!("DELETE FROM {}", quote(name)), [])?;
+                    host.1.touch(name);
+                }
+                drop_shadow(host.0, name)?;
+            }
+            UnknownRows::new(&self.name).clear(host.0, None, None)?;
             self.clear_cookie(host.0)?;
-            self.unstage(host.0)
+            self.stage.clear(host.0)?;
+            Ok(())
         })
     }
 

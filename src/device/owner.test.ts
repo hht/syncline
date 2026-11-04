@@ -1,4 +1,4 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { AccountMismatch, PendingWrites } from '../expo/errors.ts';
 import { Device } from '../test/test-device.ts';
@@ -100,4 +100,125 @@ test('opened with different owner: previous owner data wiped in db file (deleted
   new Device(storage, tables, { owner: 'bob', discardPending: true }).close();
   const image = new TextDecoder('utf-8', { fatal: false }).decode(storage.image());
   expect(image.includes('alice secret payload')).toBe(false);
+});
+
+test('shared space switches owner but fails to open (a release changed a column type): rows viewed by the previous owner are cleared anyway', async () => {
+  const storage = await used();
+  const device = new Device(storage, tables, { owner: 'bob', discardPending: true });
+  const retyped = sqliteTable('program', { id: integer().primaryKey() });
+  await expect(device.shared('catalog', [retyped], 'public').opened()).rejects.toThrow();
+  expect(await device.query('SELECT id FROM program', [])).toEqual([]);
+});
+
+const course = sqliteTable('course', { id: text().primaryKey() });
+const createCourse = 'CREATE TABLE course (id TEXT PRIMARY KEY)';
+const rows = (storage: ReturnType<typeof deviceStorage>, table: string) => storage.sql.exec(`SELECT id FROM ${table}`).toArray();
+
+/** Storage where shared space catalog (owner admin) received a course row. */
+async function courseReceived() {
+  const storage = deviceStorage(createWorkout, createProgram, createCourse);
+  const device = new Device(storage, tables, { owner: 'alice' });
+  const catalog = device.shared('catalog', [program, course], 'admin');
+  await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'secret' }, row: { id: 'secret' } }] });
+  device.close();
+  return storage;
+}
+
+test('table that left sync and came back: owner switch on the release that brings it back clears it', async () => {
+  const storage = await courseReceived();
+  let device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program], 'admin').opened();
+  device.close();
+  expect(rows(storage, 'course')).toEqual([{ id: 'secret' }]);
+  device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program, course], 'public').opened();
+  expect(rows(storage, 'course')).toEqual([]);
+});
+
+/** Storage where shared space catalog (owner admin) last declared program and course. */
+async function catalogWithCourse() {
+  const storage = deviceStorage(createWorkout, createProgram, createCourse);
+  const device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program, course], 'admin').opened();
+  device.close();
+  return storage;
+}
+
+test('table moved from a shared space to the private space: owner switch on the shared space leaves private rows alone', async () => {
+  const storage = await catalogWithCourse();
+  const device = new Device(storage, [...tables, course], { owner: 'alice' });
+  await device.private.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'mine' }, row: { id: 'mine' } }] });
+  expect(rows(storage, 'course')).toEqual([{ id: 'mine' }]);
+  await device.shared('catalog', [program], 'public').opened();
+  expect(rows(storage, 'course')).toEqual([{ id: 'mine' }]);
+  expect(device.private.cookie()).toEqual({ version: 1, nonce: 1 });
+});
+
+test('table moved from a shared space to local-only: owner switch on the shared space keeps local rows written since', async () => {
+  const storage = await catalogWithCourse();
+  const device = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
+  await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+  await device.shared('catalog', [program], 'public').opened();
+  expect(rows(storage, 'course')).toEqual([{ id: 'draft' }]);
+});
+
+test('table moved to another shared space opened in an earlier session: an owner switch on the old space leaves its rows to the new space', async () => {
+  const storage = await catalogWithCourse();
+  let device = new Device(storage, tables, { owner: 'alice' });
+  const extra = device.shared('extra', [course], 'public');
+  await extra.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'c1' }, row: { id: 'c1' } }] });
+  device.close();
+  device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program], 'public').opened();
+  expect(rows(storage, 'course')).toEqual([{ id: 'c1' }]);
+});
+
+test('owner switches while a table is out of sync: when the table returns, the previous owner rows are gone before any read', async () => {
+  const storage = await courseReceived();
+  for (const owner of ['admin', 'public']) {
+    const device = new Device(storage, tables, { owner: 'alice' });
+    await device.shared('catalog', [program], owner).opened();
+    device.close();
+  }
+  const device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program, course], 'public').opened();
+  expect(await device.query('SELECT id FROM course', [])).toEqual([]);
+});
+
+const privateCourse = sqliteTable('course', { id: text().primaryKey(), title: text() });
+
+/** Storage where alice's private space synced a course row, then a release dropped course from sync and bob signed in. */
+async function courseLeftByAlice() {
+  const storage = deviceStorage(createWorkout, 'CREATE TABLE course (id TEXT PRIMARY KEY, title TEXT)');
+  const alice = new Device(storage, [...tables, privateCourse], { owner: 'alice' });
+  await alice.private.receive({
+    ...synced,
+    patch: [{ op: 'put', table: 'course', key: { id: 'secret' }, row: { id: 'secret', title: 'alice course payload' } }],
+  });
+  alice.close();
+  new Device(storage, tables, { owner: 'bob' }).close();
+  return storage;
+}
+
+test('private table out of sync across an owner switch: when it returns to the private space, the previous owner rows are gone before any read and wiped in the db file', async () => {
+  const storage = await courseLeftByAlice();
+  const bob = new Device(storage, [...tables, privateCourse], { owner: 'bob' });
+  expect(await bob.query('SELECT id FROM course', [])).toEqual([]);
+  expect(new TextDecoder('utf-8', { fatal: false }).decode(storage.image()).includes('alice course payload')).toBe(false);
+});
+
+test('private table out of sync across an owner switch: a shared space opened for the first time on it shows none of the previous owner rows', async () => {
+  const storage = await courseLeftByAlice();
+  const bob = new Device(storage, tables, { owner: 'bob' });
+  await bob.shared('library', [privateCourse], 'bob').opened();
+  expect(await bob.query('SELECT id FROM course', [])).toEqual([]);
+});
+
+test('shared owner switches while a table is out of sync, then the table moves to the private space: the previous owner rows are gone before any read', async () => {
+  const storage = await courseReceived();
+  let device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program], 'public').opened();
+  device.close();
+  device = new Device(storage, [...tables, course], { owner: 'alice' });
+  expect(await device.query('SELECT id FROM course', [])).toEqual([]);
 });

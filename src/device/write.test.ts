@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { expect, test } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { upload, write } from '../test/test-schema.ts';
-import { deviceStorage } from '../test/test-storage.ts';
+import { deviceStorage, restoredDeviceStorage } from '../test/test-storage.ts';
 import { exercise, read, statements, tables, w1, withWorkout, workout } from './test-workout.ts';
 
 // Local writes: standard Drizzle reads and writes, uploads modified rows; cloud and replay overwrite by column.
@@ -76,14 +76,20 @@ test('no-op writes are not uploaded; writing to unsynced tables throws and rolls
   expect(read(phone.storage).workouts).toMatchObject([{ note: 'squat' }]);
 });
 
-test('writing to the internal cookie table throws and rolls back (SQLite sessions skip tables without a primary key)', async () => {
+test.for([
+  'UPDATE _syncline_cookie SET version = 999',
+  "INSERT INTO _syncline_columns (name, columns) VALUES (NULL, '[]')",
+  "INSERT INTO _syncline_owner (space, owner) VALUES (NULL, 'x')",
+  'DELETE FROM _SYNCLINE_PENDING',
+])('writing to internal tables throws and rolls back, including rows SQLite sessions do not record: %s', async (sql) => {
   const { phone } = await withWorkout();
   const cookie = phone.device.private.cookie();
   expect(cookie).not.toBeNull();
-  await expect(phone.device.write(async (execute) => execute('UPDATE _syncline_cookie SET version = 999', []))).rejects.toThrow(
-    'local write can only modify synced',
-  );
+  await expect(phone.device.write(async (execute) => execute(sql, []))).rejects.toThrow('not authorized');
   expect(phone.device.private.cookie()).toEqual(cookie);
+  const image = phone.storage.image();
+  phone.device.close();
+  expect(() => new Device(restoredDeviceStorage(image), tables)).not.toThrow();
 });
 
 test('mutating primary key behaves as deleting old row and inserting new row', async () => {
@@ -153,4 +159,15 @@ test('JSON text containing NUL is invalid on the device as on the cloud (JSON.pa
   const insert = device.write(async (execute) => execute("INSERT INTO workout (id, extra) VALUES ('w1', ?)", ['{}\u0000x']));
   await expect(insert).rejects.toMatchObject({ table: 'workout', issues: [{ path: ['extra'] }] });
   expect(() => JSON.parse('{}\u0000x')).toThrow();
+});
+
+test('JSON nested deeper than 1000 levels is invalid on the cloud as on the device (SQLite json_valid caps nesting at 1000)', async () => {
+  const { space, phone } = await withWorkout();
+  const nested = (depth: number) => `${'['.repeat(depth)}${']'.repeat(depth)}`;
+  const insert = (id: string, extra: string) =>
+    phone.device.write(async (execute) => execute('INSERT INTO workout (id, extra) VALUES (?, ?)', [id, extra]));
+  await insert('w8', nested(1000));
+  await expect(insert('w9', nested(1001))).rejects.toMatchObject({ table: 'workout', issues: [{ path: ['extra'] }] });
+  expect(() => space.mutate((tx) => tx.insert(workout, { id: 'w9', extra: JSON.parse(nested(1001)) }))).toThrow('must be valid JSON');
+  space.mutate((tx) => tx.insert(workout, { id: 'w8', extra: JSON.parse(nested(1000)) }));
 });

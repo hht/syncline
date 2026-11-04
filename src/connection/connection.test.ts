@@ -254,3 +254,29 @@ test('does not report error when stopped while pull result is queued behind acti
   await flush();
   expect(reported).toEqual([]);
 });
+
+test('a token with characters outside HTTP tokens (base64 /, =, comma, space) travels in the WebSocket subprotocol and uploads', async () => {
+  const space = new Space(cloudStorage(createNote), tables);
+  const { network } = serving(space);
+  const device = new Device(deviceStorage(createNote), tables);
+  const options = network.options(0);
+  // Browsers reject subprotocols that are not RFC 7230 tokens when constructing a WebSocket.
+  const tchars = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+  const connection = new Connection(device.private, {
+    url,
+    ...options,
+    socket: (address, protocols) => {
+      if (!protocols.every((protocol) => tchars.test(protocol))) throw new SyntaxError(`Invalid subprotocol: ${protocols}`);
+      return options.socket(address, protocols);
+    },
+    token: async () => 'std/b64+x=, y',
+  });
+  connection.start();
+  await write(device, (tx) => tx.insert(note).values({ id: 'n1' }));
+  for (let step = 0; step < 200 && device.private.pendingCount() > 0; step += 1) {
+    await flush();
+    network.pending()[0]?.();
+  }
+  expect(space.pull({ cookie: null }, 1000).patch).toContainEqual(expect.objectContaining({ row: { id: 'n1' } }));
+  connection.stop();
+});

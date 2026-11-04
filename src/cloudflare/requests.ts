@@ -1,4 +1,4 @@
-import { bearer } from '../common/protocol.ts';
+import { bearer, bearerToken } from '../common/protocol.ts';
 import { schemaHeader, schemaPrefix } from '../tables/declaration.ts';
 
 /**
@@ -39,7 +39,10 @@ export function withoutToken(request: Request) {
 
 /** Extracts the client token from the WebSocket subprotocol or HTTP Authorization header. */
 export function tokenOf(request: Request) {
-  if (isSocket(request)) return protocolOf(request, bearer);
+  if (isSocket(request)) {
+    const encoded = protocolOf(request, bearer);
+    return encoded === undefined ? undefined : bearerToken(encoded);
+  }
   return /^Bearer (.+)$/.exec(request.headers.get('Authorization') ?? '')?.[1];
 }
 

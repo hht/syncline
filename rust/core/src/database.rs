@@ -2,13 +2,15 @@
 //! Local writes span multiple calls (begin, execute statements, end), requiring continuous recording;
 //! rusqlite [`Session`] borrows the connection, and both are co-located in one struct via `self_cell`.
 //! Reverting a changeset errors if local rows differ (e.g. out-of-band writes to synced tables) rather than silently overwriting.
-//! When compiling integrator statements (`prepare_guarded`), an authorizer rejects PRAGMAs: some PRAGMAs take effect at compile time,
+//! When compiling integrator statements (`prepare_guarded`), an authorizer rejects PRAGMAs and row mutations on internal tables (`_syncline_` prefix):
+//! sessions do not record rows with NULL primary keys, so changeset checks cannot see every write to non-STRICT internal tables.
+//! Some PRAGMAs take effect at compile time,
 //! and rusqlite compiles statement tails to determine whether multiple statements exist, defeating keyword-based checks
 //! (lexical semicolon scanning also fails on constructs like `$name(...)` containing semicolons).
 //! PRAGMAs are rejected only during compile: SQLite compiles PRAGMAs internally at runtime (such as session extension inspecting table schemas).
 //! The authorizer remains registered and toggles via an atomic switch: re-registering an authorizer invalidates all compiled statements.
 //! The connection enables defensive mode: integrator statements cannot directly modify raw database pages (`sqlite_dbpage`) or writable schema (`writable_schema`).
-//! What it should not know: what changesets are used for, table schemas, or which statements integrators may execute.
+//! What it should not know: what changesets are used for, table schemas, or which statements integrators may execute beyond the guards above.
 //! @see <https://sqlite.org/sessionintro.html>
 //! @see <https://sqlite.org/c3ref/set_authorizer.html>
 //! @see <https://sqlite.org/c3ref/c_dbconfig_defensive.html> (`SQLITE_DBCONFIG_DEFENSIVE`)
@@ -41,7 +43,7 @@ pub struct Database {
     cell: Cell,
     /// Next recording ID.
     next: u32,
-    /// Indicates compilation of integrator statements: authorizer rejects PRAGMAs (atomic flag enables cross-thread access).
+    /// Indicates compilation of integrator statements: authorizer rejects PRAGMAs and internal table writes (atomic flag enables cross-thread access).
     guarding: Arc<AtomicBool>,
 }
 
@@ -67,7 +69,14 @@ impl Database {
         let guarding = Arc::new(AtomicBool::new(false));
         let refusing = guarding.clone();
         connection.authorizer(Some(move |context: AuthContext<'_>| {
-            if refusing.load(Ordering::Relaxed) && matches!(context.action, AuthAction::Pragma { .. }) {
+            let refused = match context.action {
+                AuthAction::Pragma { .. } => true,
+                AuthAction::Insert { table_name } | AuthAction::Delete { table_name } | AuthAction::Update { table_name, .. } => {
+                    table_name.starts_with("_syncline_")
+                }
+                _ => false,
+            };
+            if refusing.load(Ordering::Relaxed) && refused {
                 Authorization::Deny
             } else {
                 Authorization::Allow
@@ -80,11 +89,11 @@ impl Database {
         })
     }
 
-    /// Compiles an integrator statement (cached): rejects if statement or tail contains PRAGMA.
+    /// Compiles an integrator statement (cached): rejects if statement or tail contains PRAGMA or writes an internal table.
     ///
     /// # Errors
     ///
-    /// Returns an error if statement contains PRAGMA (`SQLITE_AUTH`), contains multiple statements, or fails compilation.
+    /// Returns an error if statement contains PRAGMA or writes an internal table (`SQLITE_AUTH`), contains multiple statements, or fails compilation.
     pub fn prepare_guarded(&self, sql: &str) -> rusqlite::Result<CachedStatement<'_>> {
         self.guarding.store(true, Ordering::Relaxed);
         let statement = self.connection().prepare_cached(sql);

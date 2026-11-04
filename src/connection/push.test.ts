@@ -121,6 +121,13 @@ test('cloud limits pushed mutations: rejects batches over 1000 mutations with 10
   expect(parseMutations(JSON.stringify([mutation('c1', 1, [])]))).toMatchObject([{ client: 'c1', id: 1, malformed: expect.any(String) }]);
 });
 
+test('cloud rejects pushes whose client ID is not well-formed or longer than 64 characters with 1007', () => {
+  const pushed = (client: string) => JSON.stringify([{ client, id: 1, changes: [{ op: 'put', table: 'note', row: { id: 'n1' } }] }]);
+  expect(parseMutations(pushed('c'.repeat(64)))).toHaveLength(1);
+  expect(() => parseMutations(pushed('c'.repeat(65)))).toThrow('Mutation');
+  expect(() => parseMutations(pushed('c\uDC00'))).toThrow('Mutation');
+});
+
 test('non-finite floats (NaN, Infinity) serialize to null in JSON: recognized without rejecting whole batch', () => {
   const pushed = JSON.stringify([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'note', row: { id: 'n1', x: Number.NaN, y: Number.POSITIVE_INFINITY } }] },

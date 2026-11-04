@@ -44,6 +44,12 @@ export const bucketId = (bucket: Bucket) => JSON.stringify(bucket);
  */
 export const bucketBytes = 256;
 
+/** Throws Reject if a write leaves a row in a bucket longer than bucketBytes. */
+export function boundBuckets(table: string, ids: string[]) {
+  const long = ids.find((bucket) => utf8Bytes(bucket) > bucketBytes);
+  if (long !== undefined) throw new Reject(`Bucket for a row in ${table} exceeds ${bucketBytes} bytes: ${long.slice(0, 100)}.`);
+}
+
 /** Checks whether a condition contains a subquery (referencing other tables) after stripping string literals and quoted identifiers. */
 const hasSubquery = (condition: string) => /\bselect\b/i.test(condition.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]/g, ''));
 
@@ -153,7 +159,7 @@ export class Buckets {
 
   /**
    * Evaluates current bucket memberships for a batch of rows: executes one query per table; returns lookup function by table and primary key.
-   * Throws Reject if any bucket exceeds bucketBytes (commit log and subscriptions must accommodate it).
+   * Does not bound bucket sizes: a deployed rule may place existing rows in oversized buckets, and writes moving them out must still run.
    */
   now(query: Query, rows: [string, Record<string, unknown>][]) {
     const found = new Map<string, string[]>();
@@ -166,10 +172,7 @@ export class Buckets {
           `SELECT ${quoteAll(columns)}, ${this.membership(table)} AS buckets FROM ${quote(table)} WHERE ${condition}`,
           values,
         )) {
-          const ids = this.idsOf(row.buckets);
-          const long = ids.find((bucket) => utf8Bytes(bucket) > bucketBytes);
-          if (long !== undefined) throw new Reject(`Bucket for a row in ${table} exceeds ${bucketBytes} bytes: ${long.slice(0, 100)}.`);
-          found.set(rowId(table, keyOf(columns, row)), ids);
+          found.set(rowId(table, keyOf(columns, row)), this.idsOf(row.buckets));
         }
     }
     return (table: string, key: Record<string, unknown>) => found.get(rowId(table, key)) ?? [];
@@ -214,7 +217,7 @@ export class Buckets {
       if (params.length !== rule.types.length || !params.every((param, index) => fits(param, rule.types[index] as ColumnType)))
         throw new Error(`Invalid parameters in subscription bucket ${JSON.stringify(bucket)}: ${rule.types.join(', ') || 'none'}`);
       const id = bucketId(bucket as Bucket);
-      // No row can be in such a bucket (row writes reject it), so subscribing to it is a verify error.
+      // Row writes reject leaving a row in such a bucket, so no device may subscribe to one either.
       if (utf8Bytes(id) > bucketBytes) throw new Error(`Subscription bucket exceeds ${bucketBytes} bytes: ${id.slice(0, 100)}`);
       ids.add(id);
     }

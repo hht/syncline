@@ -9,12 +9,22 @@ vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
   default: async () => undefined,
   Files: {
     install: async () => ({
-      open: () => ({
-        // A call of type panic traps like a Rust panic does in WebAssembly.
-        open: (options: string) => trapOn(options),
-        control: (input: string) => trapOn(input),
-        free: () => undefined,
-      }),
+      open: () => {
+        // A call of type panic traps like a Rust panic does in WebAssembly; a trap leaves the Rust value borrowed,
+        // so freeing it afterwards throws as wasm-bindgen does.
+        let trapped = false;
+        const traps = (text: string) => {
+          trapped ||= text.includes('panic');
+          return trapOn(text);
+        };
+        return {
+          open: traps,
+          control: traps,
+          free: () => {
+            if (trapped) throw new Error('attempted to take ownership of Rust value while it was borrowed');
+          },
+        };
+      },
       remove: (name: string) => removed.push(name),
     }),
   },
@@ -73,10 +83,10 @@ test('rejects deleting database while open in another instance; deletes file aft
 });
 
 test('a core panic (WebAssembly trap) marks the Worker broken, whether opening or handling a call', async () => {
-  await call(4, { type: 'open', id: 1, name: 'worker-panic', options: {} });
-  expect(await call(4, { type: 'panic', id: 2 })).toEqual({ type: 'broken', error: expect.objectContaining({ message: 'unreachable' }) });
-  expect(await call(5, { type: 'open', id: 1, name: 'worker-panic', options: { panic: true } })).toEqual({
+  expect(await call(4, { type: 'open', id: 1, name: 'worker-panic', options: { panic: true } })).toEqual({
     type: 'broken',
     error: expect.objectContaining({ message: 'unreachable' }),
   });
+  await call(5, { type: 'open', id: 1, name: 'worker-panic', options: {} });
+  expect(await call(5, { type: 'panic', id: 2 })).toEqual({ type: 'broken', error: expect.objectContaining({ message: 'unreachable' }) });
 });

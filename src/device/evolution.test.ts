@@ -95,6 +95,25 @@ test('app rolls back to not recognizing tag and upgrades back: changes during ro
   expect(new Device(storage, [workoutWithReps, tag]).private.pullRequest()).not.toHaveProperty('refetch');
 });
 
+test('pending writes on a table that leaves sync and returns: its synced rows are wiped before any read while the writes replay on top, stay queued, land after the refetch, and upload', async () => {
+  const { cloud, space, storage, device } = await synced();
+  await write(device, (tx) => tx.update(tag).set({ name: 'edited' }).where(eq(tag.id, 't1')));
+  await write(device, (tx) => tx.insert(tag).values({ id: 't2', name: 'new' }));
+  new Device(storage, [workoutWithReps]).close();
+  const back = new Device(storage, [workoutWithReps, tag]);
+  expect(await back.query('SELECT id FROM tag', [])).toEqual([['t2']]);
+  expect(back.private.pending()).toHaveLength(2);
+  await back.private.receive(pulled(space, back));
+  const tags = [
+    { id: 't1', name: 'edited' },
+    { id: 't2', name: 'new' },
+  ];
+  expect(storage.sql.exec('SELECT id, name FROM tag ORDER BY id').toArray()).toEqual(tags);
+  await upload(space, back, [back]);
+  expect(back.private.pending()).toEqual([]);
+  expect(cloud.sql.exec('SELECT id, name FROM tag ORDER BY id').toArray()).toEqual(tags);
+});
+
 test('rollback and upgrade with full refetch when cloud did PITR: pending writes preserved and pushed after refetch (restore cannot revert unacknowledged device writes)', async () => {
   const { cloud, space, storage } = await synced();
   const rolledBack = new Device(storage, [workoutWithReps]);

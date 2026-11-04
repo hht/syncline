@@ -94,7 +94,8 @@ async function openLibrary(instance: number, name: string, options: unknown) {
   try {
     instructions = db.open(JSON.stringify(options), host, Date.now());
   } catch (error) {
-    db.free();
+    // A trap leaves the Rust value borrowed, so freeing it would throw and mask the trap; the page discards this Worker instead.
+    if (!(error instanceof WebAssembly.RuntimeError)) db.free();
     throw error;
   }
   const shell = new Shell(db, {}, (instruction) => post({ instance, received: [instruction] }));

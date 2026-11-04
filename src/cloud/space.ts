@@ -187,10 +187,9 @@ export class Space {
       // Transient storage errors propagate without advancing lmid; client retries with backoff. Permanent errors advance lmid and hold the write.
       if (isTransient(error)) throw error;
       // Non-executable writes: rolls back, records a keyless commit advancing lmid, and stores raw mutation in _syncline_held.
-      // Bounded so the held row fits the 2 MB DO row limit whatever the message echoes (names, Standard Schema inputs), without leaving
-      // a lone high surrogate, which makes the poke unreadable in Rust.
-      const message = error instanceof Error ? error.message : String(error);
-      const reason = message.slice(0, 1000).replace(/[\uD800-\uDBFF]$/, '');
+      // Bounded so the held row fits the 2 MB DO row limit whatever the message echoes (names, Standard Schema inputs). A cut inside a
+      // surrogate pair needs no repair: workerd stores the lone surrogate and reads it back as U+FFFD, so devices receive it well-formed.
+      const reason = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
       const held = commitWrite(
         this.#context,
         client,

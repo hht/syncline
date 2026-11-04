@@ -285,9 +285,9 @@ export class Client {
       tables: deviceDefinitions(shared.tables),
       ...(shared.owner !== undefined && { owner: shared.owner }),
     };
+    // The shared call goes out at once, queued behind open: queries issued after it then run after an owner switch cleared the rows.
     // Calls on the space wait for it to connect (the core rejects them before connect) and fail with the reason it could not.
-    const connected = this.#opened
-      .then(() => share && this.call(share))
+    const connected = Promise.all([this.#opened, share && this.call(share)])
       .then(() => this.call({ type: 'connect', channel: name, url, ...(this.#options.allowCleartext && { allowCleartext: true }) }))
       .then(() => this.#send({ type: 'start', channel: name }));
     connected.catch((error: Error) => this.failed(name, error));

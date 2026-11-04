@@ -163,15 +163,18 @@ const fits = (key: Context['key'], scan: Scan) => !key(scan.table) || keyed(key,
 /**
  * Validates an incoming client cursor: verifies JSON structure, primary key column integrity for scan and ranges,
  * and history continuity for all referenced cookies; returns parsed Position, or undefined if unrecognized.
+ * Ranges over tables no longer synced (left sync by deployment) stay valid without bounds, as {@link rangesOf} treats them.
  */
 export function recognize(text: string, { onHistory, key }: Context): Position | undefined {
   const position = decodePosition(text);
   if (!position) return undefined;
-  const { round, tail, seen, scan, ranges = [] } = position;
+  const { round, tail, seen, scan, ranges } = position;
   const known = [seen, round.to, tail.at, round.from].every((at) => !at || onHistory(at));
   const keys =
-    (!scan || fits(key, scan)) && ranges.every(({ table, after, until }) => keyed(key, table, after) && keyed(key, table, until));
-  return known && keys ? position : undefined;
+    (!scan || fits(key, scan)) &&
+    (ranges ?? []).every(({ table, after, until }) => !key(table) || (keyed(key, table, after) && keyed(key, table, until)));
+  if (!known || !keys) return undefined;
+  return ranges ? { ...position, ranges: ranges.map((range) => (key(range.table) ? range : { table: range.table })) } : position;
 }
 
 /** Normalizes requested range pulls by table name: bounds missing primary key columns or targeting unsynced tables degenerate to whole-table scans (broadening without data loss). */

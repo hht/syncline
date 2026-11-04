@@ -129,3 +129,32 @@ test('returns 413 without pulling when POST body exceeds pullBytes in UTF-8 byte
   // Character count within limit while UTF-8 byte count exceeds budget (é is 2 bytes).
   expect((await pull(padded('é'.repeat(pullBytes / 2)))).status).toBe(413);
 });
+
+test('throws when verify returns a non-finite expiresAt (integrator error) instead of forwarding an unreadable expiry', async () => {
+  const { target } = recording();
+  for (const expiresAt of [Number.POSITIVE_INFINITY, Number.NaN])
+    await expect(
+      forward(
+        new Request(pullURL(url, { cookie: null }), { headers: { Authorization: 'Bearer secret' } }),
+        { getByName: () => target } as never,
+        async () => ({ space: 's1', expiresAt }),
+      ),
+    ).rejects.toThrow('expiresAt must be a finite number');
+});
+
+test('decodes a percent-encoded token from the WebSocket subprotocol and forwards none of it', async () => {
+  const { seen, target } = recording();
+  const verified: string[] = [];
+  await forward(
+    new Request(pullURL(url, { cookie: null }), {
+      headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}std%2Fb64%2Bx%3D%2C%20y` },
+    }),
+    { getByName: () => target } as never,
+    async (token) => {
+      verified.push(token);
+      return { space: 's1', expiresAt: Number.MAX_SAFE_INTEGER };
+    },
+  );
+  expect(verified).toEqual(['std/b64+x=, y']);
+  expect(seen[0]?.headers.get('Sec-WebSocket-Protocol')).toBe(subprotocol);
+});

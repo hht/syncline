@@ -145,13 +145,29 @@ function checkOf(table: string, column: SQLiteColumn): Check {
   };
 }
 
+/**
+ * Valid as devices judge it with SQLite json_valid: parses, and nests at most 1000 levels deep (SQLite JSON_MAX_DEPTH), which
+ * JSON.parse does not limit.
+ * @see https://sqlite.org/json1.html (JSON nesting limit)
+ */
 function isJson(text: string) {
   try {
     JSON.parse(text);
-    return true;
   } catch {
     return false;
   }
+  return nestsWithin(text, 1000);
+}
+
+/** Whether brackets outside strings nest at most `limit` levels deep in text that already parsed as JSON. */
+function nestsWithin(text: string, limit: number) {
+  let depth = 0;
+  for (const char of text.replace(/"(?:[^"\\]|\\.)*"/g, '')) {
+    if (char === '[' || char === '{') depth += 1;
+    else if (char === ']' || char === '}') depth -= 1;
+    if (depth > limit) return false;
+  }
+  return true;
 }
 
 type Field = { field: string; column: SQLiteColumn; check: Check };

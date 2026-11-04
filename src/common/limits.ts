@@ -24,6 +24,12 @@ export const valueChars = valueBytes / 4;
 export const keyBytes = 512;
 
 /**
+ * Maximum length of a client ID in UTF-16 code units: devices generate UUIDs (36 characters).
+ * Bounds lmid rows and live notices, which carry client IDs, against modified clients.
+ */
+export const clientChars = 64;
+
+/**
  * Maximum UTF-8 byte length of a device subscription (canonical sorted bucket array) in a shared space.
  * Each pull echoes the landed subscription base64-encoded in the URL together with the cursor.
  * Bounds bucket merge work on connections while fitting comfortably within Cloudflare URL size limits.

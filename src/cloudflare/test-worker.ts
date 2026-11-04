@@ -86,6 +86,8 @@ export class TestSpace extends SynclineSpace<Env> {
     fire(this.ctx, name);
     // Recurring chore: reschedules itself when executed.
     if (name === 'recurring') this.schedule(name, Date.now() + 7 * 86_400_000);
+    // Resets the object without yielding, as exceeding the CPU limit does mid-task.
+    if (name === 'reset') this.ctx.abort('reset');
   };
 
   fired() {

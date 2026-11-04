@@ -1,4 +1,4 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { remoteDatabase } from '../expo/remote-database.ts';
 import { Device } from '../test/test-device.ts';
@@ -164,4 +164,15 @@ test('reads fail on integers beyond the JS safe range at both ends, including th
   const { device } = opened();
   for (const sql of ['SELECT 9007199254740992', 'SELECT -9223372036854775807 - 1'])
     await expect(device.query(sql, [])).rejects.toThrow('outside JS safe integer range');
+});
+
+test('local writes fail on the 64-bit minimum integer like any integer beyond the JS safe range, uploading nothing', async () => {
+  const count = sqliteTable('count', { id: text().primaryKey(), n: integer() });
+  const device = new Device(deviceStorage('CREATE TABLE count (id TEXT PRIMARY KEY, n INTEGER)'), [count]);
+  for (const sql of [
+    "INSERT INTO count (id, n) VALUES ('a', 9007199254740992)",
+    "INSERT INTO count (id, n) VALUES ('b', -9223372036854775807 - 1)",
+  ])
+    await expect(device.write(async (execute) => execute(sql, []))).rejects.toThrow('exceeds safe JS');
+  expect(device.private.pending()).toEqual([]);
 });

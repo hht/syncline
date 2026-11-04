@@ -172,6 +172,19 @@ export const expired = 4001;
 export const subprotocol = 'syncline';
 export const bearer = 'bearer.';
 
+/**
+ * Decodes the token from a bearer subprotocol: devices percent-encode bytes outside RFC 3986 unreserved characters so any token forms
+ * a valid subprotocol (browsers accept only RFC 7230 tokens, and commas would split the header). Returns undefined if malformed.
+ * @see https://www.rfc-editor.org/rfc/rfc3986#section-2.3
+ */
+export function bearerToken(encoded: string) {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return undefined;
+  }
+}
+
 /** WebSocket heartbeat messages. Ping is answered with automatic Durable Object pong replies. */
 export const ping = 'ping';
 export const pong = 'pong';

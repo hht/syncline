@@ -52,10 +52,10 @@ export class Upkeep {
     this.#events = events;
     this.#truncation = truncation;
     this.#counting = counting;
-    this.written();
-    if (counting?.pending()) timetable.by(countName, Date.now());
+    if (truncation?.commitsOverLimit()) timetable.ensure(truncateName, Date.now());
+    if (counting?.pending()) timetable.ensure(countName, Date.now());
     const at = indexes.length > 0 ? Date.now() : nextDrop(query, keep)?.at;
-    if (at !== undefined) timetable.by(name, at);
+    if (at !== undefined) timetable.ensure(name, at);
   }
 
   /** Checks commit log byte limits after a commit and schedules truncation if needed. */

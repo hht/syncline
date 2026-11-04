@@ -1,3 +1,4 @@
+import { clientChars } from './limits.ts';
 import {
   type Advice,
   type Change,
@@ -206,6 +207,9 @@ export function parseChanges(value: unknown): Change[] {
  */
 export type Pushed = Mutation | (Omit<Mutation, 'changes'> & { changes: unknown; malformed: string });
 
+/** Client ID: well-formed (live notices carry it to Rust, which rejects lone surrogates) and at most clientChars long. */
+const isClient = (value: unknown): value is string => typeof value === 'string' && value.length <= clientChars && value.isWellFormed();
+
 /**
  * Parses a push batch of client mutations ordered by client sequence.
  * Rejects the batch if array structure or mutation identities are invalid;
@@ -215,7 +219,7 @@ export function parseMutations(text: string): Pushed[] {
   const value: unknown = JSON.parse(text);
   if (!Array.isArray(value) || value.length > pushMutations) invalid('Push', value);
   return value.map((mutation: unknown): Pushed => {
-    if (!isObject(mutation) || typeof mutation.client !== 'string' || !isCount(mutation.id)) invalid('Mutation', mutation);
+    if (!isObject(mutation) || !isClient(mutation.client) || !isCount(mutation.id)) invalid('Mutation', mutation);
     if (mutation.first !== undefined && mutation.first !== true) invalid('Mutation', mutation);
     const identity = { client: mutation.client, id: mutation.id, ...(mutation.first === true && { first: true as const }) };
     try {

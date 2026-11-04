@@ -15,7 +15,7 @@ type Backoff = { base: number; max: number };
 /** Background chore definition: run performs one step (returning true if unfinished); errors report to failed and back off. */
 export type Chore = { run: () => Promise<boolean>; retry: Backoff; failed: (error: unknown) => void };
 
-type Storage = Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm' | 'deleteAlarm'> & { sql: Pick<SqlStorage, 'exec'> };
+type Storage = Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm' | 'deleteAlarm' | 'sync'> & { sql: Pick<SqlStorage, 'exec'> };
 
 export class Schedule {
   readonly #storage: Storage;
@@ -26,12 +26,25 @@ export class Schedule {
 
   /** Schedules chore name to run no later than at epoch ms, preserving earlier scheduled times or active backoff; replaces a lease. */
   by(name: string, at: number) {
+    this.#schedule(name, at, true);
+  }
+
+  /**
+   * Schedules chore name like {@link by} but keeps a lease, for work found pending when the object starts: a leased entry runs when its
+   * lease ends, and on a restart it may be the very task whose reset restarted the object.
+   */
+  ensure(name: string, at: number) {
+    this.#schedule(name, at, false);
+  }
+
+  #schedule(name: string, at: number, release: boolean) {
     this.#storage.sql.exec(
       // Avoid updating unchanged rows to minimize billed SQLite row writes on opens and writes.
-      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at, failures = 0 WHERE failures = ? OR (failures = 0 AND excluded.at < at)',
+      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at, failures = 0 WHERE (failures = ? AND ?) OR (failures = 0 AND excluded.at < at)',
       name,
       at,
       leased,
+      release ? 1 : 0,
     );
   }
 
@@ -72,8 +85,10 @@ export class Schedule {
    * Executes all due chores and scheduled tasks concurrently when an alarm fires:
    * Syncline chores run via chores (stepping, rescheduling, or backing off on error); integrator tasks run via scheduled.
    * Leases due entries (moving them to the end of the lease, marked leased) rather than deleting them: if the actor resets mid-run,
-   * the entry survives and the alarm re-armed on restart runs it again. Scheduling during the run replaces the lease; an entry is
-   * deleted on completion only if it still holds its lease. Then arms the alarm for the next earliest due time.
+   * the entry survives and the alarm re-armed on restart runs it again after the lease. The lease is committed before any task runs,
+   * since a reset rolls back writes not yet committed, including those of a task that never yields. Scheduling during the run replaces
+   * the lease; an entry is deleted on completion only if it still holds its lease. Then arms the alarm for the next earliest due time.
+   * @see https://developers.cloudflare.com/durable-objects/api/storage-api/#sync
    */
   async run(chores: (name: string) => Chore | undefined, scheduled: (name: string) => void | Promise<void>) {
     const now = Date.now();
@@ -83,6 +98,7 @@ export class Schedule {
       // An entry still leased here was orphaned by a reset: its backoff count is gone, so it runs as a first attempt.
       .map(({ name, failures }) => ({ name: String(name), failures: Math.max(0, Number(failures)) }));
     this.#storage.sql.exec('UPDATE _syncline_schedule SET at = ?, failures = ? WHERE at <= ?', now + lease, leased, now);
+    await this.#storage.sync();
     await Promise.all(
       due.map(async ({ name, failures }) => {
         await (name.startsWith(reserved) ? this.#chore(name, failures, chores(name)) : this.#scheduled(name, scheduled));

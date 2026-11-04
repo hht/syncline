@@ -1,5 +1,5 @@
 import type { Server } from '../cloud/server.ts';
-import { bearer, subprotocol } from '../common/protocol.ts';
+import { bearer, bearerToken, subprotocol } from '../common/protocol.ts';
 import { parsePullBody, parsePullRequest } from '../common/pull-url.ts';
 import { versionConflict, versionParam } from '../common/version.ts';
 import { schemaConflict, schemaPrefix } from '../tables/declaration.ts';
@@ -34,6 +34,7 @@ export const privateCloud = (server: Server<CloudEnd>, space?: string): Cloud =>
  */
 const identities = new Map([
   ['valid', Number.POSITIVE_INFINITY],
+  ['std/b64+x=, y', Number.POSITIVE_INFINITY],
   ['renewed', Number.POSITIVE_INFINITY],
   ['expiring', Number.MAX_SAFE_INTEGER],
   ['lapsing', 0],
@@ -48,7 +49,7 @@ export const mismatched = (url: string, cloudVersion: number) => new URL(url).se
 /** Parses WebSocket subprotocols for token expiry and schema fingerprint. */
 export function admitSocket(protocols: string[]) {
   const token = protocols.includes(subprotocol) ? protocols.find((protocol) => protocol.startsWith(bearer)) : undefined;
-  const expiresAt = identities.get(token?.slice(bearer.length) ?? '');
+  const expiresAt = identities.get(bearerToken(token?.slice(bearer.length) ?? '') ?? '');
   const schema = protocols.find((protocol) => protocol.startsWith(schemaPrefix))?.slice(schemaPrefix.length);
   return { expiresAt, ...(schema === undefined ? {} : { schema }) };
 }

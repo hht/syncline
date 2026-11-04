@@ -178,3 +178,14 @@ fn dropping_handle_while_queued_exits_immediately_and_next_turn_runs() {
     first.reply(2);
     assert_eq!(replies(&third, 1)[0].get("error"), None);
 }
+
+#[test]
+fn timer_beyond_representable_time_never_fires_instead_of_panicking() {
+    use syncline::client::Instruction;
+    let library = Library::start("far-timer");
+    let path = library.directory.join("far.db");
+    let (events, _) = std::sync::mpsc::channel();
+    let mut host = super::Host::new(path.clone(), crate::files::take(&path, || {}), events, std::sync::Arc::default());
+    host.execute(vec![Instruction::Schedule { timer: 1, delay: f64::MAX }]);
+    assert!(host.timers.is_empty());
+}

@@ -107,3 +107,14 @@ for (const { label, before, after } of rewrites)
     const chunk = second.pullShared(landed, viewer);
     expect('patch' in chunk && chunk.patch).toEqual([]);
   });
+
+test('a bucket rule deployed over existing rows that land in a bucket over 256 bytes: writes moving a row out of it succeed, writes keeping it there throw', () => {
+  const grouped = sqliteTable('program', { id: text().primaryKey(), g: text() });
+  const cloud = cloudStorage('CREATE TABLE program (id TEXT PRIMARY KEY, g TEXT)');
+  const long = 'x'.repeat(300);
+  new Space(cloud, [grouped], { shared: { buckets: { all: { program: {} } } } }).mutate((tx) => tx.insert(grouped, { id: 'p1', g: long }));
+  const space = new Space(cloud, [grouped], { shared: { buckets: { all: { program: {} }, byG: { program: { by: ['g'] } } } } });
+  expect(() => space.mutate((tx) => tx.insert(grouped, { id: 'p3', g: long }))).toThrow('exceeds 256 bytes');
+  space.mutate((tx) => tx.update(grouped, { id: 'p1', g: 'short' }));
+  expect(cloud.sql.exec('SELECT g FROM program WHERE id = ?', 'p1').toArray()).toEqual([{ g: 'short' }]);
+});

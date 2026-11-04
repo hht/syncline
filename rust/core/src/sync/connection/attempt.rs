@@ -12,7 +12,7 @@ use crate::sync::instructions::{Instruction, Out, Timer};
 use crate::sync::mirror::{format_cookie, pull_url};
 use crate::sync::pull::After;
 use crate::sync::status::done_downloading;
-use crate::sync::{BEARER, Context, Job, SCHEMA_PREFIX, SUBPROTOCOL};
+use crate::sync::{Context, Job, SCHEMA_PREFIX, SUBPROTOCOL, bearer};
 
 /// In-flight token request before connecting
 pub(super) struct TokenWait {
@@ -151,7 +151,7 @@ impl Connection {
             }
         };
         let url = pull_url(&self.url, &[("cookie", format_cookie(cookie))]).replacen("http", "ws", 1);
-        let mut protocols = vec![SUBPROTOCOL.to_owned(), format!("{BEARER}{token}")];
+        let mut protocols = vec![SUBPROTOCOL.to_owned(), bearer(token)];
         if let Some(handshake) = &self.handshake {
             protocols.push(format!("{SCHEMA_PREFIX}{}", handshake.fingerprint()));
         }

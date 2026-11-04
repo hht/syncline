@@ -8,7 +8,7 @@
 //! Requests fresh token from integrator before each connection attempt (and before each pull while connected),
 //! retrying on backoff when unavailable.
 //! Reports sync status to app; manual sync reconnects immediately (bypassing backoff) and waits until caught up;
-//! resync clears local database and re-downloads from scratch (preserving pending writes unless discard is requested).
+//! resync re-downloads from scratch, keeping rows visible until the download lands (preserving pending writes unless discard is requested).
 //! Attempt lifecycle is in `attempt`, live socket handling in `link`, HTTP pull in `pull`.
 //! What it should not know: where tokens come from or how they are verified, local database and revert/replay, task queuing.
 //! @see <https://doc.replicache.dev/concepts/how-it-works>
@@ -194,7 +194,7 @@ impl Connection {
         }
     }
 
-    /// Resync: disconnects current attempt, queues resync (clears database if discard is set), then reconnects; pending and new `sync()` calls wait; on error, waiting calls fail and reconnects via backoff
+    /// Resync: disconnects current attempt, queues resync (reverts pending writes if discard is set), then reconnects; pending and new `sync()` calls wait; on error, waiting calls fail and reconnects via backoff
     pub fn resync(&mut self, ctx: &mut Context, id: u64, discard: bool) {
         if !self.started {
             ctx.out.push(Instruction::Reply {

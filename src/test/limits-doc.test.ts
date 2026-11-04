@@ -6,6 +6,7 @@ import { rowOverhead } from '../cloud/commits.ts';
 import { defaultConnections } from '../cloud/server.ts';
 import { defaultRows } from '../cloud/shared.ts';
 import {
+  clientChars,
   commitFloor,
   keyBytes,
   pullBytes,
@@ -50,6 +51,7 @@ test.each([
   `pull request body exceeds ${mb(pullBytes)} (UTF-8)`,
   `Roughly ${count(pushLimit)} bytes of changes`,
   `up to ${count(pushMutations)} mutations`,
+  `At most ${count(clientChars)} characters (UTF-16 code units)`,
   `${count(defaultConnections)} concurrent connections`,
   `${count(socketLimit)} bytes per entire message`,
   `minimum transfer rate of ${kb(slowestRate)}/s`,

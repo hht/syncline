@@ -222,6 +222,18 @@ test('holds unexecutable mutation, advances lmid, includes held write in notice,
   ]);
 });
 
+test('held reason cut inside a surrogate pair reaches the device well-formed: storage keeps the lone surrogate and reads it back replaced', async () => {
+  const name = space();
+  const { cookie } = await pull(name, null);
+  const device = await connect(name, cookie);
+  await device.next();
+  // The rejection echoes the row: pad the key so the 1,000-character cut lands inside an emoji.
+  const prefix = JSON.stringify({ op: 'put', table: 'note', row: { id: '' } }).indexOf('""') + 1;
+  device.push({ id: 1, changes: [put('note', { id: `${'x'.repeat(199 - prefix)}${'😀'.repeat(5)}`, text: {} as never })] });
+  const reason = ((await device.next()) as { message: { held: { reason: string }[] } }).message.held[0]?.reason ?? '';
+  expect([reason.isWellFormed(), reason.endsWith('\uFFFD')]).toEqual([true, true]);
+});
+
 test('ignores mutations pushed on connect when connection is immediately closed with 4000', async () => {
   const name = space();
   const device = await connect(name, null);

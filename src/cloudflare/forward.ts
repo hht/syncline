@@ -33,16 +33,22 @@ function versionRejected(request: Request) {
 
 /**
  * Shared admission pipeline for sync entry points:
- * validates protocol version (rejecting mismatches), authenticates tokens via verify (returning 401 on failure),
- * and parses pull URL query parameters (returning 400 on malformed queries without waking the Durable Object).
+ * validates protocol version (rejecting mismatches), authenticates tokens via verify (returning 401 on failure; throwing if
+ * `expiresAt` is not a finite number, an integrator error), and parses pull URL query parameters (returning 400 on malformed
+ * queries without waking the Durable Object).
  */
-export async function admit<T>(request: Request, verify: (token: string) => Promise<T | undefined>): Promise<T | Response> {
+export async function admit<T extends { expiresAt: number }>(
+  request: Request,
+  verify: (token: string) => Promise<T | undefined>,
+): Promise<T | Response> {
   const url = new URL(request.url);
   if (url.searchParams.get(versionParam) !== String(protocolVersion)) return versionRejected(request);
   const token = tokenOf(request);
   const identity = token ? await verify(token) : undefined;
   // Handle null returns from JavaScript verify callbacks as unauthenticated.
   if (identity === undefined || identity === null) return new Response(null, { status: 401 });
+  if (!Number.isFinite(identity.expiresAt))
+    throw new Error(`verify returned expiresAt ${identity.expiresAt}: expiresAt must be a finite number`);
   try {
     parsePullRequest(url);
   } catch {

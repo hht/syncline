@@ -45,9 +45,9 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 | `status(): SyncStatus` | Current sync status |
 | `onStatus(listener): () => void` | Invoked whenever sync status changes |
 | `sync({ signal }?): Promise<void>` | Syncs immediately, waiting until caught up and all local writes are confirmed (succeeds immediately if already up to date). Fails on errors or when `signal` aborts; fails immediately if the cloud rejected pushed writes with 1007 since sync last restarted (see 1007 in [Limits](limits.md)) |
-| `resync({ signal, discardPending }?): Promise<void>` | Re-downloads synced tables from scratch, replacing local copies (used when local data is corrupted). Keeps pending writes and pushes them as usual after re-downloading. When `discardPending: true`, drops pending writes as well (used when uploads are permanently rejected with 1007) |
+| `resync({ signal, discardPending }?): Promise<void>` | Re-downloads synced tables from scratch, replacing local copies (used when local data is corrupted). Keeps pending writes and pushes them as usual after re-downloading. When `discardPending: true`, drops pending writes as well (used when uploads are permanently rejected with 1007): reverts them at once, keeping the other rows visible until the re-download lands; if a revert fails (synced tables modified outside Syncline), reports why as an app error (`reportError`) and clears synced tables instead |
 | `reconnect(): void` | Reconnects immediately and re-invokes `token`. Call when credentials change (updating permissions and visible scopes for shared spaces), such as inside Firebase's `onIdTokenChanged` |
-| `shared(name, { schema, url, token?, owner? })` | Opens a read-only shared space in the same database, with its own `status`, `onStatus`, `sync`, `resync`, and `reconnect`. The cloud determines visible rows based on token (defaults to private space token if omitted). If `owner` (logged-in user) differs from last time, clears previously viewed rows |
+| `shared(name, { schema, url, token?, owner? })` | Opens a read-only shared space in the same database, with its own `status`, `onStatus`, `sync`, `resync`, and `reconnect`. The cloud determines visible rows based on token (defaults to private space token if omitted). If `owner` (logged-in user) differs from last time, clears previously viewed rows before any query issued after this call runs, even if the space then fails to open (such as a release changing a column type), unless the declaration itself is rejected (such as a table name already used by another space) |
 | `close(): Promise<void>` | Stops sync and closes the database |
 | `delete(): Promise<void>` | Closes the database and deletes database files (clearing local data) |
 
@@ -105,14 +105,14 @@ Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)
 | `mutate(write)` | Server write, executed synchronously |
 | `held({ limit?, after? })` | Returns held writes: `{ client, id, reason, version, at, changes }[]`. `changes` contains the raw pushed payload (may not be valid recognized changes if the device had defects; typed as `unknown`). Default page size is 100 entries; `after` is the `version` of the last entry from the previous page |
 | `resubmit(client, id, changes?)` | Resubmits a held write. Throws if no longer held, if `changes` is omitted while the original changes cannot be recognized, or if it touches read-only tables |
-| `schedule(name, at)`, `unschedule(name)` | Custom scheduling: invokes `scheduled(name)` no later than `at`. Names must not start with `syncline:` |
+| `schedule(name, at)`, `unschedule(name)` | Custom scheduling: invokes `scheduled(name)` no later than `at`, unless a task resetting the object delays it (see [Limits](limits.md)). Names must not start with `syncline:` |
 | `scheduled` | Override this (`protected override scheduled = (name) => …`) to handle custom scheduled callbacks |
 
 Alarms are managed by Syncline (sharing a single alarm between exports and custom schedules); do not override `alarm()` or call `setAlarm` directly. The same applies to `mutate`, `schedule`, `unschedule`, and `scheduled` on `SynclineSharedSpace`.
 
 ### `forward(request, namespace, verify)`
 
-Entrypoint for sync requests in the entry Worker: extracts the token and passes it to `verify`, which returns `{ space, expiresAt }` or `undefined`. Forwards recognized tokens to the Durable Object named `space`; returns 401 if unrecognized.
+Entrypoint for sync requests in the entry Worker: extracts the token and passes it to `verify`, which returns `{ space, expiresAt }` (`expiresAt` in epoch milliseconds) or `undefined`. Forwards recognized tokens to the Durable Object named `space`; returns 401 if unrecognized. Throws if `expiresAt` is not a finite number (integrator error).
 
 ### `restoreSpace(namespace, name, at)`
 
@@ -126,7 +126,7 @@ Restores a private space to `at` (millisecond timestamp).
 | `class SynclineSharedSpace<Env>` | Durable Object for shared spaces: `super(ctx, env, { ...definition, broadcast, validation?, events?, retired? })` (`retired` matches `SynclineSpace`); `protected mutate(write): Promise<void>` |
 | `class SynclineBroadcast<Env>` | Durable Object for broadcast shards: `super(ctx, env, sharedNamespace, events?)`. Alarms are managed internally (closing expired connections via alarm); do not override `alarm()` or call `setAlarm` directly |
 | `abstract class SynclineSharedEntry<Env>` | Cached entrypoint: implement `protected shared()`, returning the shared space namespace |
-| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`. `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules or if the JSON-encoded subscription exceeds 8,192 bytes (integrator error) |
+| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`. `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules, if a bucket exceeds 256 bytes, if the JSON-encoded subscription exceeds 8,192 bytes, or if `expiresAt` is not a finite number (integrator errors) |
 
 ### Types
 

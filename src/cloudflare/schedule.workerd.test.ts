@@ -1,6 +1,8 @@
-import { runInDurableObject } from 'cloudflare:test';
+import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
 import { lease } from './schedule.ts';
+import { fannedOut } from './test-shared.ts';
 import { alarmAfter, object, online, squat } from './test-space.ts';
 
 test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix', async () => {
@@ -44,4 +46,76 @@ test('an actor reset during a chore keeps it scheduled: once the lease expires, 
   expect(await object(name).alarmAt()).not.toBeNull();
   await alarmAfter(object(name), lease);
   expect(await object(name).exported()).toHaveLength(1);
+});
+
+/** Schedule table rows as { name: [at, failures] }. */
+const entries = (name: string) =>
+  runInDurableObject(object(name), (_, state) =>
+    Object.fromEntries(
+      state.storage.sql
+        .exec('SELECT name, at, failures FROM _syncline_schedule')
+        .toArray()
+        .map((row) => [String(row.name), [Number(row.at), Number(row.failures)]]),
+    ),
+  );
+
+test('a task that resets the object before yielding keeps its lease: it runs again after the lease, not at once', async () => {
+  const { name } = await online(1);
+  await object(name).remind('reset', Date.now());
+  const started = Date.now();
+  await runDurableObjectAlarm(object(name)).catch(() => undefined);
+  // The aborted object rejects calls until the runtime replaces it.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const [at, failures] = (await entries(name)).reset ?? [];
+  expect(failures).toBe(-1);
+  expect(at).toBeGreaterThanOrEqual(started + lease);
+  expect(Number(await object(name).alarmAt())).toBeGreaterThanOrEqual(started + lease);
+});
+
+test('restarting the object keeps a lease orphaned by a reset instead of rescheduling the chore at once', async () => {
+  const { name } = await online(1);
+  const leasedUntil = Date.now() + lease;
+  await runInDurableObject(object(name), (_, state) => {
+    state.storage.sql.exec('DROP INDEX IF EXISTS "tag.note_id"');
+    state.storage.sql.exec("INSERT OR REPLACE INTO _syncline_schedule (name, at, failures) VALUES ('syncline:upkeep', ?, -1)", leasedUntil);
+  });
+  await runInDurableObject(object(name), (_, state) => state.abort('restart')).catch(() => undefined);
+  expect((await entries(name))['syncline:upkeep']).toEqual([leasedUntil, -1]);
+});
+
+test('an export leased together with a task that resets the object leaves that lease once a later write reschedules it', async () => {
+  const { name } = await online(1);
+  await object(name).importNotes([{ id: 'a', text: 'a' }]);
+  await object(name).remind('reset', Date.now() + 3_600_000);
+  await runInDurableObject(object(name), (_, state) => {
+    state.storage.sql.exec('UPDATE _syncline_schedule SET at = ?', Date.now() - 1);
+  });
+  await runDurableObjectAlarm(object(name)).catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await object(name).importNotes([{ id: 'b', text: 'b' }]);
+  await alarmAfter(object(name), 120_000);
+  expect(await object(name).exported()).not.toEqual([]);
+});
+
+test('restarting with shards behind redelivers at once even if a reset left the delivery leased', async () => {
+  // Stubs break once their object resets: fetch a fresh one per call.
+  const leased = () => env.CATALOG.getByName('leased');
+  await leased().publish('r1');
+  await fannedOut('leased');
+  const behind = await runInDurableObject(leased(), (_, state) => state.storage.kv.get('syncline:fanout'));
+  await leased().publish('r2');
+  await fannedOut('leased');
+  await runInDurableObject(leased(), (_, state) => {
+    state.storage.kv.put('syncline:fanout', behind);
+    state.storage.sql.exec("UPDATE _syncline_schedule SET at = ?, failures = -1 WHERE name = 'syncline:deliver'", Date.now() + lease);
+  });
+  await expect(runInDurableObject(leased(), (_, state) => state.abort('Reset'))).rejects.toThrow();
+  // The aborted object rejects calls until the runtime replaces it.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const at = await runInDurableObject(leased(), (_, state) =>
+    Number(state.storage.sql.exec("SELECT at FROM _syncline_schedule WHERE name = 'syncline:deliver'").one().at),
+  );
+  expect(at).toBeLessThanOrEqual(Date.now());
+  await alarmAfter(leased(), 0);
+  await fannedOut('leased');
 });

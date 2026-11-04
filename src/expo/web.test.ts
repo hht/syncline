@@ -164,7 +164,24 @@ test('marks downloadError on private space and shared spaces when open fails wit
   await flush();
   const failed = { connecting: false, downloadError: expect.objectContaining({ message: 'Local database is open in another tab' }) };
   expect([space.status(), catalog.status()]).toEqual([expect.objectContaining(failed), expect.objectContaining(failed)]);
-  expect(worker().posted.map(({ call }) => call.type)).toEqual(['open']);
+  expect(worker().posted.map(({ call }) => call.type)).toEqual(['open', 'shared']);
+});
+
+test('opening a shared space reaches the core before queries issued after it, so an owner switch clears rows before they are read', async () => {
+  const { space } = await opened();
+  worker().posted.length = 0;
+  space.shared('catalog', { schema: { note }, url: 'https://sync.test/catalog', owner: 'u2' });
+  void space.db
+    .select()
+    .from(note)
+    .all()
+    .catch(() => undefined);
+  await flush();
+  expect(
+    worker()
+      .posted.map(({ call }) => call.type)
+      .slice(0, 2),
+  ).toEqual(['shared', 'query']);
 });
 
 test('reopening identical shared space returns open instance without reopening; throws when url or owner differs', async () => {
@@ -230,4 +247,24 @@ test('deleting database after Worker crash succeeds by spawning a new Worker to 
   expect(removal.call).toMatchObject({ type: 'close', name: 'web-test', remove: true });
   worker().deliver(removal.instance, { type: 'reply', id: removal.call.id ?? -1 });
   await deleting;
+});
+
+test('sync on a space waits for its connect reply; connect carries allowCleartext when set', async () => {
+  const space = openSyncline({
+    name: 'web-test',
+    schema: {},
+    url: 'http://localhost:8787/space',
+    token: async () => 'valid',
+    allowCleartext: true,
+  });
+  const { instance, call } = worker().last('open');
+  worker().deliver(instance, { type: 'reply', id: call.id ?? -1 });
+  void space.sync().catch(() => undefined);
+  await flush();
+  const connect = worker().last('connect');
+  expect(connect.call).toMatchObject({ allowCleartext: true });
+  expect(worker().posted.some(({ call }) => call.type === 'sync')).toBe(false);
+  worker().deliver(instance, { type: 'reply', id: connect.call.id ?? -1 });
+  await flush();
+  expect(worker().last('sync').call).toMatchObject({ type: 'sync' });
 });

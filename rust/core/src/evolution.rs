@@ -1,8 +1,10 @@
 //! Schema evolution on device open: permanently drops retired tables and columns,
-//! and triggers a full refetch for tables re-declared after leaving sync (cloud does not record drops during rollback periods).
+//! and wipes then fully refetches tables re-declared after leaving sync or taken over from another space (cloud does not record drops during
+//! rollback periods, and the rows may belong to a previous owner).
 //! Shared by private and shared spaces.
 //! What it should not know: how refetches are executed, or how pending writes are reverted and replayed.
 
+use crate::effects::Effects;
 use crate::error::Error;
 use crate::sql::{column_names, quote};
 use crate::tables::Table;
@@ -83,22 +85,33 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
     Ok(())
 }
 
-/// Updates declared table list for `space` (private space is empty string), returning whether a full refetch is required (tables previously declared that left sync without being retired may have missed deletes).
-pub fn redeclare(db: &rusqlite::Connection, space: &str, names: &[String]) -> Result<bool, Error> {
+/// Tables in `names` that were synced before (they carry `_extra`), are not declared by `space` last time, and now are: they left sync
+/// without being retired, or come from another space. Their rows may have missed deletes, and may belong to a previous owner.
+///
+/// # Errors
+/// Database read error.
+pub fn returning(db: &rusqlite::Connection, space: &str, names: &[String]) -> rusqlite::Result<Vec<String>> {
     let before: Vec<String> = db
         .prepare("SELECT name FROM _syncline_declared WHERE space = ?")?
         .query_map([space], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     let mut back = Vec::new();
-    if !before.is_empty() {
-        for name in names {
-            if !before.contains(name) && column_names(db, name)?.iter().any(|column| column == "_extra") {
-                back.push(name);
-            }
+    for name in names {
+        if !before.contains(name) && column_names(db, name)?.iter().any(|column| column == "_extra") {
+            back.push(name.clone());
         }
     }
+    Ok(back)
+}
+
+/// Updates declared table list for `space` (private space is empty string), wiping the rows of [`returning`] tables before they are
+/// readable (an owner switch while they were out of sync could not reach them); returns whether a full refetch is required (some were wiped).
+pub fn redeclare(db: &rusqlite::Connection, effects: &mut Effects, space: &str, names: &[String]) -> Result<bool, Error> {
+    let back = returning(db, space, names)?;
     let unknown = UnknownRows::new(space);
     for name in &back {
+        db.execute(&format!("DELETE FROM {}", quote(name)), [])?;
+        effects.touch(name);
         unknown.clear(db, Some(name), None)?;
     }
     db.execute("DELETE FROM _syncline_declared WHERE space = ?", [space])?;

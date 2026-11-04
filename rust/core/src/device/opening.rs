@@ -7,7 +7,7 @@ use super::{Device, Options};
 use crate::database::Database;
 use crate::effects::Effects;
 use crate::error::Error;
-use crate::evolution::{redeclare, refuse_names, retire};
+use crate::evolution::{redeclare, refuse_names, retire, returning};
 use crate::internal;
 use crate::owner;
 use crate::recorder::Recorder;
@@ -84,33 +84,42 @@ impl Device {
         })
     }
 
-    /// Upgrades local tables to current declaration: drops retired tables and columns, triggers full refetch for re-declared tables, and restores newly declared columns from `_extra`.
+    /// Upgrades local tables to current declaration: drops retired tables and columns, wipes (securely) and fully refetches re-declared tables, and restores newly declared columns from `_extra`.
     /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
     fn upgrade(&mut self) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();
+        let back = !returning(self.db.connection(), "", &names)?.is_empty();
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
-            let back = redeclare(db, "", &names)?;
+            // Runs after pending writes are reverted, so wiping returning tables leaves them to replay after the refetch lands
+            let back = redeclare(db, &mut device.effects, "", &names)?;
             device.synced.upgrade(db, &mut device.effects)?;
             Ok(back)
         };
         let fallback = upgrade.clone();
-        self.onto(
-            |device| {
-                if upgrade(device)? {
-                    device.refetch()?;
-                }
-                Ok(())
-            },
-            &HashMap::new(),
-            true,
-            move |device| {
-                fallback(device)?;
-                device.refetch()
-            },
-        )?;
-        Ok(())
+        let run = move |device: &mut Device| {
+            device.onto(
+                |device| {
+                    if upgrade(device)? {
+                        device.refetch()?;
+                    }
+                    Ok(())
+                },
+                &HashMap::new(),
+                true,
+                move |device| {
+                    fallback(device)?;
+                    device.refetch()
+                },
+            )?;
+            Ok(())
+        };
+        if back {
+            owner::securely(self, |device| device.db.connection(), run)
+        } else {
+            run(self)
+        }
     }
 
     /// Sets the owner of this space: clears previous owner data (including database files) on user switch, allowing same user to continue; ignored if owner is None.
