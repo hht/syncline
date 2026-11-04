@@ -19,6 +19,7 @@ use crate::database::Database;
 use crate::declaration::Declaration;
 use crate::effects::Effects;
 use crate::error::Error;
+use crate::evolution::wipe_orphans;
 use crate::protocol::{Cookie, Op};
 use crate::recorder::{Config, Recorder, Recording};
 use crate::savepoint;
@@ -190,7 +191,7 @@ impl Device {
         Ok(())
     }
 
-    /// Wipes synced tables, pending writes, cookie, and staging; also wipes local-only tables if `local` is true (owner change).
+    /// Wipes synced tables, pending writes, cookie, and staging; also wipes local-only tables and tables no space syncs any more if `local` is true (owner change).
     fn reset(&mut self, local: bool) -> Result<(), Error> {
         self.commit(|device| {
             let db = device.db.connection();
@@ -200,6 +201,7 @@ impl Device {
                     db.execute(&format!("DELETE FROM {}", quote(name)), [])?;
                     device.effects.touch(name);
                 }
+                wipe_orphans(db, &mut device.effects, &device.local_only)?;
             }
             device.uploads.clear(db)?;
             db.execute("DELETE FROM _syncline_cookie WHERE space = ''", [])?;

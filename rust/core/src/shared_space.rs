@@ -219,12 +219,18 @@ impl SharedSpace {
         Ok(())
     }
 
-    /// Owner change: wipes the rows the previous owner could see right away in the tables the space declares (runs before the
-    /// declarations are applied, so a table may not exist yet), then pulls from scratch with no target
+    /// Owner change: wipes the rows the previous owner could see right away in the tables the space declares now or declared last time
+    /// (runs before the declarations are applied, so a table may not exist yet), then pulls from scratch with no target
     fn reset(&mut self, host: &mut Host<'_>) -> Result<(), Error> {
         self.wanted = None;
+        let mut names: Vec<String> = host
+            .0
+            .prepare("SELECT name FROM _syncline_declared WHERE space = ?")?
+            .query_map([&self.name], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        names.extend(self.tables().filter(|name| !names.contains(name)).cloned().collect::<Vec<_>>());
         savepoint::commit(host, parts, |host| {
-            for name in self.tables() {
+            for name in &names {
                 if !column_names(host.0, name)?.is_empty() {
                     host.0.execute(&format!("DELETE FROM {}", quote(name)), [])?;
                     host.1.touch(name);

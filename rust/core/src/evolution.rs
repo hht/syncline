@@ -6,6 +6,7 @@
 
 use crate::effects::Effects;
 use crate::error::Error;
+use crate::shadow_tables::drop_shadow;
 use crate::sql::{column_names, quote};
 use crate::tables::Table;
 use crate::unknown_rows::{UnknownRows, clear_table};
@@ -80,6 +81,32 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
                 db.execute(&format!("ALTER TABLE {} DROP COLUMN {}", quote(table), quote(column)), [])?;
             }
             Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Wipes tables that were synced (they carry `_extra`) but no space declares any more and are not `local_only`, with their shadow tables:
+/// their rows belong to whoever synced them, so an owner switch must not leave them readable. Any space that declares one later finds it
+/// [`returning`] and pulls it from scratch. Only ordinary tables are inspected: a virtual table whose module this connection lacks cannot be read.
+///
+/// # Errors
+/// Database read/write error.
+pub fn wipe_orphans(db: &rusqlite::Connection, effects: &mut Effects, local_only: &[String]) -> rusqlite::Result<()> {
+    let names: Vec<String> = db
+        .prepare(
+            "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name NOT IN (SELECT name FROM _syncline_declared)",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for name in names {
+        if name.starts_with("_syncline_") || name.starts_with("sqlite_") || local_only.contains(&name) {
+            continue;
+        }
+        if column_names(db, &name)?.iter().any(|column| column == "_extra") {
+            db.execute(&format!("DELETE FROM {}", quote(&name)), [])?;
+            effects.touch(&name);
+            drop_shadow(db, &name)?;
         }
     }
     Ok(())

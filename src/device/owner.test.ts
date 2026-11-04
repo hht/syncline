@@ -276,3 +276,15 @@ test.for(meanwhile)(
     expect([rows(storage, 'course'), catalog.cookie()]).toEqual([[], null]);
   },
 );
+
+test('owner switch while a private table is out of sync wipes it: no space declares it, so its rows belong to the previous owner', async () => {
+  const storage = await courseLeftByAlice();
+  expect(rows(storage, 'course')).toEqual([]);
+});
+
+test('shared space switching owner wipes the tables it declared last time but no longer does', async () => {
+  const storage = await courseReceived();
+  const device = new Device(storage, tables, { owner: 'alice' });
+  await device.shared('catalog', [program], 'public').opened();
+  expect(rows(storage, 'course')).toEqual([]);
+});
