@@ -105,6 +105,7 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Keep the rows of a table never synced that a space declares for the first time (`MCOwnership`: `Exact`: local-only writes would never upload)
 - Leave another space's record of a table a space declares (`MCOwnership`: `Exact`: the old space takes it back without refetching)
 - Wipe only the declared tables on a shared space owner switch, not the ones it recorded last time (`MCOwnership`: `NoLeak`)
+- Drop every retired table that was ever synced, not only the ones a space records (`MCOwnership`: `LocalKept`)
 
 ## Mutations that do not trigger a violation
 

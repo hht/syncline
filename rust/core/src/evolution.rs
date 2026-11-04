@@ -1,4 +1,4 @@
-//! Schema evolution on device open: permanently drops retired tables and columns,
+//! Schema evolution on device open: permanently drops retired columns and the retired tables a space still records,
 //! and wipes then fully refetches tables re-declared after leaving sync or taken over from another space (cloud does not record drops during
 //! rollback periods, and the rows may belong to a previous owner).
 //! Shared by private and shared spaces.
@@ -78,7 +78,8 @@ pub fn stored_names(db: &rusqlite::Connection, retired: &[String]) -> rusqlite::
         .collect()
 }
 
-/// Drops retired tables and columns: clears unknown rows from `_syncline_unknown`; physically drops synced tables and columns (tables with `_extra`).
+/// Drops retired tables and columns: clears unknown rows from `_syncline_unknown`; physically drops synced tables and columns (tables with `_extra`),
+/// though only tables a space recorded at the last open, so it runs before spaces redeclare.
 pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<(), Error> {
     for name in retired {
         let (table, column) = name
@@ -93,6 +94,13 @@ pub fn retire(db: &rusqlite::Connection, retired: &HashSet<String>) -> Result<()
         }
         match column {
             None => {
+                // A table that left sync earlier may hold local-only writes since: its rows wait for an owner switch like those of any table that left sync
+                let recorded: bool = db.query_row("SELECT EXISTS (SELECT 1 FROM _syncline_declared WHERE name = ?)", [table], |row| {
+                    row.get(0)
+                })?;
+                if !recorded {
+                    continue;
+                }
                 // Drop partially pulled shadow tables: retired tables are no longer declared, so shadow tables will never be claimed
                 db.execute(&format!("DROP TABLE {}", quote(table)), [])?;
                 crate::shadow_tables::drop_shadow(db, table)?;

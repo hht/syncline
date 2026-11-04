@@ -24,8 +24,9 @@
 (* shared space is wiped first; a shared space's owner switch wipes its    *)
 (* tables and the ones it recorded last time, even if its open then fails. *)
 (* Retired tables stay retired in every later release and neither a space  *)
-(* nor local-only use declares them again; P's open drops the synced ones  *)
-(* (the app's own tables are left alone).                                  *)
+(* nor local-only use declares them again; P's open drops the ones a space *)
+(* recorded (tables that left sync earlier wait for an owner switch, and   *)
+(* the app's own are left alone).                                          *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 
@@ -68,10 +69,11 @@ Returning(s, D, rec, con) == {t \in D : rec[t] # s /\ (synced[t] \/ con[t] # {})
 Redeclared(s, D, rec) == [t \in Tables |-> IF t \in D THEN s ELSE IF rec[t] = s THEN None ELSE rec[t]]
 
 \* Private space opens for user u (None: owner omitted) with declaration D, local-only tables L, and retired tables R: upgrade (drop
-\* retired synced tables, redeclare, wiping returning tables), then claim
+\* retired tables a space recorded, redeclare, wiping returning tables), then claim
 OpenPrivate(u, D, L, R) ==
     /\ phase = "closed" /\ sessions < MaxSessions /\ retired \subseteq R /\ (D \cup L) \cap R = {}
-    /\ LET gone == {t \in R : synced[t]}
+    /\ LET \* Only tables a space recorded: the others left sync earlier and may hold local-only writes since
+           gone == {t \in R : record[t] # None}
            back == Returning(P, D, record, content)
            \* A table turning local-only leaves the space recording it; rows a shared space pulled for its owner go first
            foreign == {t \in L : record[t] \in Shared}
@@ -166,4 +168,9 @@ NoLeak ==
 \* An open space with a cookie holds exactly its own rows in every table it declares: nothing foreign, nothing missing
 Exact ==
     \A s \in Spaces : \A t \in decl[s] : cookie[s] => content[t] # {} /\ \A tag \in content[t] : tag[1] = s /\ Mine(tag, OwnerOf(s))
+\* Local-only writes are lost only to an owner switch or to a space declaring their table (which wipes it first), even after the
+\* table leaves local-only use and is retired
+Kept(t) == {tag \in content[t] : tag[1] = Local} \subseteq content'[t]
+NoSwitch == privOwner \in {None, privOwner'} /\ \A s \in Shared : owner[s] \in {None, owner'[s]}
+LocalKept == [][NoSwitch => \A t \in Tables \ UNION {decl'[s] : s \in Spaces} : Kept(t)]_vars
 ================================================================================

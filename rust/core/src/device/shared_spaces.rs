@@ -43,7 +43,7 @@ impl Device {
                 )));
             }
         }
-        // Retiring drops them on every open
+        // Retired names never return: retiring drops the tables spaces record under them
         refuse_names(&tables, &[], &self.retired)?;
         self.shared.insert(name.to_owned(), SharedSpace::new(name, tables, owner));
         Ok(())

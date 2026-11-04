@@ -1,5 +1,5 @@
 //! Device initialization: creates internal Syncline tables, upgrades local tables to match the current declaration
-//! (permanently drops retired tables/columns and refetches re-declared tables), verifies owner identity
+//! (permanently drops retired columns and recorded retired tables, and refetches re-declared tables), verifies owner identity
 //! (wiping previous owner data on user switch), and discards stale in-progress pulls.
 //! What it should not know: how pending writes are reverted and replayed during schema upgrade, or how tables are created.
 
@@ -83,7 +83,7 @@ impl Device {
         })
     }
 
-    /// Upgrades local tables to current declaration: drops retired tables and columns, wipes (securely) and fully refetches re-declared tables, and restores newly declared columns from `_extra`.
+    /// Upgrades local tables to current declaration: drops retired columns and the retired tables a space records, wipes (securely) and fully refetches re-declared tables, and restores newly declared columns from `_extra`.
     /// Reverts pending writes before upgrade and replays afterward; if revert fails, reports error, upgrades without reverting, and triggers full refetch.
     fn upgrade(&mut self) -> Result<(), Error> {
         let names: Vec<String> = self.synced.declaration().keys().cloned().collect();

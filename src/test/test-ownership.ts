@@ -71,7 +71,8 @@ export class Ownership {
   }
 
   openPrivate(u: string, D: Set<string>, L: Set<string>, R: Set<string>) {
-    const gone = new Set([...R].filter((t) => this.synced.get(t)));
+    // Only tables a space recorded: the others left sync earlier and may hold local-only writes since
+    const gone = new Set([...R].filter((t) => this.record.get(t) !== None));
     const back = this.#returning(P, D, this.record, this.content);
     const foreign = new Set([...L].filter((t) => this.#shared.includes(this.record.get(t) as string)));
     const redeclared = this.#redeclared(P, D, this.record);

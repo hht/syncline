@@ -31,3 +31,12 @@ test.for(['admin', 'public'])(
     await expect(device.shared('catalog', [program], owner).opened()).resolves.toBeUndefined();
   },
 );
+
+test('retiring a table that was local-only at the last open keeps its local writes', async () => {
+  const storage = await catalogSynced();
+  const local = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
+  await local.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+  local.close();
+  new Device(storage, tables, { owner: 'alice', retired: ['course'] }).close();
+  expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
+});

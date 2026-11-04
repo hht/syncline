@@ -62,7 +62,7 @@ export type OpenOptions<S extends Schema> = {
   schema: S;
   /** Local-only tables stored in the database but never uploaded or downloaded; cleared on account switch. */
   localOnly?: Schema;
-  /** Retired tables and columns ("table.column") permanently removed from sync, never declared again, and dropped on open. */
+  /** Retired tables and columns ("table.column") permanently removed from sync, never declared again; dropped on open while a space records them. */
   retired?: string[];
   /** Private space sync endpoint URL (HTTPS), used for both WebSocket and HTTP downloads. Must not contain query parameters or '#'; otherwise the space fails with downloadError. */
   url: string;
