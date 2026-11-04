@@ -89,3 +89,15 @@ test.for([
   await mirror.receive({ base: cookie, cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [{ op: 'clear' }, planPut('p2', { more: 1 })] });
   expect(storage.sql.exec('SELECT id FROM plan').toArray()).toEqual([{ id: 'p2' }]);
 });
+
+test('a synced table the app renamed opens when declared under its new name, rows pulled again', async () => {
+  const storage = deviceStorage(createWorkout);
+  const first = new Device(storage, [workout, plan], { owner: 'alice' });
+  await first.private.receive({ ...synced, patch: [planPut('p1')] });
+  first.close();
+  new Device(storage, tables, { owner: 'alice' }).close();
+  storage.sql.exec('ALTER TABLE plan RENAME TO renamed');
+  const device = new Device(storage, [workout, sqliteTable('renamed', { id: text().primaryKey(), note: text() })], { owner: 'alice' });
+  expect(device.private.pullRequest().refetch).toBe(true);
+  expect(storage.sql.exec('SELECT id FROM renamed').toArray()).toEqual([]);
+});
