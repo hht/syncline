@@ -101,3 +101,12 @@ test('reuses only passing runs and clears cached hash on failure', () => {
   passedCache(file).record('MCA.cfg', 'h1', false);
   expect(passedCache(file).reusable('MCA.cfg', 'h1')).toBe(false);
 });
+
+test('keeps passes recorded by a concurrent run (pnpm model and pnpm model:trace, or two pnpm model runs)', () => {
+  const file = join(scratch({}), 'cache.json');
+  const first = passedCache(file);
+  const second = passedCache(file);
+  first.record('MCA.cfg', 'h1', true);
+  second.record('MCB.cfg', 'h2', true);
+  expect([passedCache(file).reusable('MCA.cfg', 'h1'), passedCache(file).reusable('MCB.cfg', 'h2')]).toEqual([true, true]);
+});

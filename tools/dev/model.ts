@@ -124,14 +124,15 @@ async function check(pattern: RegExp) {
 /** Cached passing configurations and traces: name -> input hash (model-cache.ts) */
 const cacheFile = join(root, '.check/model-cache.json');
 /**
- * Inputs determining model check conclusions beyond model files: installed TLC jar hash, execution/pass evaluation logic
- * (this file and gates.ts runTool), and cache hash computation (model-cache.ts). Any change invalidates cached results.
+ * Inputs determining model check conclusions beyond model files: installed TLC jar hash, and the source of the functions that build TLC
+ * command lines, run TLC, and judge its output (with the argument lists they use). Any change to them invalidates cached results; edits
+ * elsewhere in this runner or in other gates keep them. A function these start calling, or a setting they start reading, must join the list.
+ * Worker counts and timeouts are left out: they change how long a check takes, not what passes.
  */
 const toolInputs = () => ({
   tlc: createHash('sha256').update(readFileSync(jar)).digest('hex'),
-  runner: [import.meta.filename, join(import.meta.dirname, 'model-cache.ts'), join(import.meta.dirname, '../check/gates.ts')].map((file) =>
-    readFileSync(file, 'utf8'),
-  ),
+  runner: [planOf, checkModel, checkTrace, exec, runTool, inScratchDir].map(String),
+  arguments: [traceJvm, traceTlc],
 });
 
 /**

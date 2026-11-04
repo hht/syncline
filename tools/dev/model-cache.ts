@@ -104,23 +104,23 @@ export function inputsHash(dirs: string[], root: string, cfg: string, tool: unkn
 
 /** Cache file mapping configuration name -> passing input hash. */
 export function passedCache(file: string) {
-  const passed: Record<string, string> = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-  const save = () => {
-    // Write to a temporary file before renaming to avoid corrupting cache on interruption.
-    mkdirSync(dirname(file), { recursive: true });
-    // Suffix PID to prevent concurrent processes (pnpm model and pnpm model:trace) from colliding on the temp file.
-    const partial = `${file}.${process.pid}.tmp`;
-    writeFileSync(partial, `${JSON.stringify(passed, null, 2)}\n`);
-    renameSync(partial, file);
-  };
+  const load = (): Record<string, string> => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {});
+  const passed = load();
   return {
     /** Returns true if inputs match the previous passing run. */
     reusable: (name: string, hash: string) => passed[name] === hash,
     /** Records the outcome: stores hash on pass, deletes entry on failure. */
     record: (name: string, hash: string, ok: boolean) => {
-      if (ok) passed[name] = hash;
-      else delete passed[name];
-      save();
+      // Rereads before writing: another run (pnpm model:trace, or a second pnpm model) may have recorded passes since this one started.
+      const latest = load();
+      if (ok) latest[name] = hash;
+      else delete latest[name];
+      // Write to a temporary file before renaming to avoid corrupting cache on interruption.
+      mkdirSync(dirname(file), { recursive: true });
+      // Suffix PID to prevent concurrent processes from colliding on the temp file.
+      const partial = `${file}.${process.pid}.tmp`;
+      writeFileSync(partial, `${JSON.stringify(latest, null, 2)}\n`);
+      renameSync(partial, file);
     },
   };
 }
