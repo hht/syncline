@@ -92,6 +92,10 @@ impl Device {
         let upgrade = move |device: &mut Device| -> Result<bool, Error> {
             let db = device.db.connection();
             retire(db, &device.retired)?;
+            // Local-only tables belong to no space: a space that synced one treats it as returning when it takes it back
+            for name in &device.local_only {
+                db.execute("DELETE FROM _syncline_declared WHERE name = ?", [name])?;
+            }
             // Runs after pending writes are reverted, so wiping returning tables leaves them to replay after the refetch lands
             let back = redeclare(db, &mut device.effects, "", &names)?;
             device.synced.upgrade(db, &mut device.effects)?;

@@ -104,7 +104,7 @@ pub fn returning(db: &rusqlite::Connection, space: &str, names: &[String]) -> ru
     Ok(back)
 }
 
-/// Updates declared table list for `space` (private space is empty string), wiping the rows of [`returning`] tables before they are
+/// Updates declared table list for `space` (private space is empty string), taking each table from any space that declared it before, and wiping the rows of [`returning`] tables before they are
 /// readable (an owner switch while they were out of sync could not reach them); returns whether a full refetch is required (some were wiped).
 pub fn redeclare(db: &rusqlite::Connection, effects: &mut Effects, space: &str, names: &[String]) -> Result<bool, Error> {
     let back = returning(db, space, names)?;
@@ -116,6 +116,8 @@ pub fn redeclare(db: &rusqlite::Connection, effects: &mut Effects, space: &str, 
     }
     db.execute("DELETE FROM _syncline_declared WHERE space = ?", [space])?;
     for name in names {
+        // A table has one owning space: the space it left (possibly unopened this session) must treat it as returning if it takes it back
+        db.execute("DELETE FROM _syncline_declared WHERE name = ?", [name])?;
         db.execute("INSERT INTO _syncline_declared (space, name) VALUES (?, ?)", params![space, name])?;
     }
     Ok(!back.is_empty())

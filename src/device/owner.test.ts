@@ -222,3 +222,57 @@ test('shared owner switches while a table is out of sync, then the table moves t
   device = new Device(storage, [...tables, course], { owner: 'alice' });
   expect(await device.query('SELECT id FROM course', [])).toEqual([]);
 });
+
+const lesson = sqliteTable('lesson', { id: text().primaryKey() });
+
+/** Ways course leaves catalog (owner admin) in sessions where catalog is unopened. */
+const meanwhile: [string, (storage: ReturnType<typeof deviceStorage>) => Promise<void>][] = [
+  [
+    'another shared space took it',
+    async (storage) => {
+      const device = new Device(storage, tables, { owner: 'alice' });
+      const extra = device.shared('extra', [course], 'admin');
+      await extra.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'x1' }, row: { id: 'x1' } }] });
+      device.close();
+    },
+  ],
+  [
+    'the private space of another owner took it',
+    async (storage) => {
+      const device = new Device(storage, [...tables, course], { owner: 'bob' });
+      await device.private.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'bob' }, row: { id: 'bob' } }] });
+      device.close();
+    },
+  ],
+  [
+    'another shared space switched owner, wiped it, then failed to open',
+    async (storage) => {
+      let device = new Device(storage, tables, { owner: 'alice' });
+      await device.shared('extra', [lesson], 'x').opened();
+      device.close();
+      device = new Device(storage, tables, { owner: 'alice' });
+      const retyped = sqliteTable('course', { id: integer().primaryKey() });
+      await expect(device.shared('extra', [lesson, retyped], 'y').opened()).rejects.toThrow();
+      device.close();
+    },
+  ],
+  [
+    'it was local-only and got a local row',
+    async (storage) => {
+      const device = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
+      await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+      device.close();
+    },
+  ],
+];
+
+test.for(meanwhile)(
+  'course left catalog because %s: when catalog takes it back, nothing from meanwhile remains and it pulls from scratch',
+  async ([, leave]) => {
+    const storage = await courseReceived();
+    await leave(storage);
+    const catalog = new Device(storage, tables, { owner: 'alice' }).shared('catalog', [program, course], 'admin');
+    await catalog.opened();
+    expect([rows(storage, 'course'), catalog.cookie()]).toEqual([[], null]);
+  },
+);

@@ -230,6 +230,8 @@ impl SharedSpace {
                     host.1.touch(name);
                 }
                 drop_shadow(host.0, name)?;
+                // Wiped for every space: whichever space takes the table next pulls it from scratch, even if this open fails
+                host.0.execute("DELETE FROM _syncline_declared WHERE name = ?", [name])?;
             }
             UnknownRows::new(&self.name).clear(host.0, None, None)?;
             self.clear_cookie(host.0)?;
