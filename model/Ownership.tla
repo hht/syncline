@@ -9,8 +9,8 @@
 (* declared table with the space's rows; an incremental pull (with a       *)
 (* cookie) only adds the space's rows, so rows from elsewhere are never    *)
 (* removed by it. A space receives rows of tables it does not declare yet  *)
-(* (kept as unknown rows), so a table it declares for the first time is    *)
-(* complete on open while its cookie stays.                                *)
+(* (kept as unknown rows until its owner switches, even across a refetch), *)
+(* so a table it declares for the first time shows them on open.           *)
 (*                                                                         *)
 (* A session opens P first (upgrade, then owner claim), then any shared    *)
 (* spaces in any order, each declaring disjoint tables. Owners are         *)
@@ -40,13 +40,14 @@ VARIABLES
     synced,     \* Table was synced at some point (carries _extra)
     content,    \* Tags of the rows the table holds
     cookie,     \* Space holds a cookie (incremental pulls continue from it)
+    unknown,    \* Space holds rows of the tables it does not declare (pulled since its last owner switch)
     decl,       \* Tables each space declares in this session ({} if not opened)
     local,      \* Local-only tables in this session
     phase,      \* "closed" / "open" (P opened, shared spaces may open)
     left,       \* Ghost: tables that held local-only rows and were then neither local-only nor synced (the app's own tables since)
     sessions
 
-vars == <<privOwner, owner, record, synced, content, cookie, decl, local, phase, left, sessions>>
+vars == <<privOwner, owner, record, synced, content, cookie, unknown, decl, local, phase, left, sessions>>
 
 OwnerOf(s) == IF s = P THEN privOwner ELSE owner[s]
 Tag(s) == <<s, OwnerOf(s)>>
@@ -54,7 +55,7 @@ Tag(s) == <<s, OwnerOf(s)>>
 Init ==
     /\ privOwner = None /\ owner = [s \in Shared |-> None]
     /\ record = [t \in Tables |-> None] /\ synced = [t \in Tables |-> FALSE] /\ content = [t \in Tables |-> {}]
-    /\ cookie = [s \in Spaces |-> FALSE] /\ decl = [s \in Spaces |-> {}] /\ local = {}
+    /\ cookie = [s \in Spaces |-> FALSE] /\ unknown = [s \in Spaces |-> FALSE] /\ decl = [s \in Spaces |-> {}] /\ local = {}
     /\ phase = "closed" /\ left = {} /\ sessions = 0
 
 \* Tables a space takes over on open: synced before but not recorded for it, or never synced but holding rows (local-only writes)
@@ -76,10 +77,13 @@ OpenPrivate(u, D, L) ==
            orphans == {t \in Tables : synced[t] /\ rec1[t] = None /\ t \notin L}
            cleared == IF switch THEN D \cup L \cup orphans ELSE {}
            kept == ~switch /\ back = {} /\ cookie[P]
+           \* Unknown rows of tables declared for the first time land on open (a switch wipes them afterwards)
+           restored == {t \in D \ back : unknown[P] /\ ~synced[t]}
        IN /\ record' = rec1
           /\ content' = [t \in Tables |->
-                IF t \in cleared THEN {} ELSE IF kept /\ t \in D /\ ~synced[t] THEN wiped1[t] \cup {<<P, who>>} ELSE wiped1[t]]
+                IF t \in cleared THEN {} ELSE IF t \in restored THEN wiped1[t] \cup {<<P, who>>} ELSE wiped1[t]]
           /\ cookie' = [cookie EXCEPT ![P] = kept]
+          /\ unknown' = [unknown EXCEPT ![P] = ~switch /\ @]
           /\ privOwner' = who
     /\ synced' = [t \in Tables |-> synced[t] \/ t \in D]
     /\ decl' = [decl EXCEPT ![P] = D] /\ local' = L
@@ -98,19 +102,22 @@ OpenShared(s, D, o, fails) ==
            rec0 == [t \in Tables |-> IF t \in reset THEN None ELSE record[t]]
            con0 == [t \in Tables |-> IF t \in reset THEN {} ELSE content[t]]
            back == Returning(s, D, rec0, con0)
-       IN IF fails
-          THEN /\ record' = rec0 /\ content' = con0
-               /\ cookie' = [cookie EXCEPT ![s] = IF switch THEN FALSE ELSE cookie[s]]
-               /\ UNCHANGED <<synced, decl>>
-          ELSE LET kept == ~switch /\ back = {} /\ cookie[s]
-                   \* Tables the space no longer declares: its rows would outlive the owner switches that reach them
-                   dropped == {t \in Tables : rec0[t] = s /\ t \notin D}
-               IN /\ record' = Redeclared(s, D, rec0)
-                  /\ content' = [t \in Tables |->
-                        IF t \in back \cup dropped THEN {} ELSE IF kept /\ t \in D /\ ~synced[t] THEN con0[t] \cup {Tag(s)} ELSE con0[t]]
-                  /\ cookie' = [cookie EXCEPT ![s] = kept]
-               /\ synced' = [t \in Tables |-> synced[t] \/ t \in D]
-               /\ decl' = [decl EXCEPT ![s] = D]
+           unknown0 == ~switch /\ unknown[s]
+       IN /\ unknown' = [unknown EXCEPT ![s] = unknown0]
+          /\ IF fails
+             THEN /\ record' = rec0 /\ content' = con0
+                  /\ cookie' = [cookie EXCEPT ![s] = IF switch THEN FALSE ELSE cookie[s]]
+                  /\ UNCHANGED <<synced, decl>>
+             ELSE LET kept == ~switch /\ back = {} /\ cookie[s]
+                      \* Tables the space no longer declares: its rows would outlive the owner switches that reach them
+                      dropped == {t \in Tables : rec0[t] = s /\ t \notin D}
+                      restored == {t \in D \ back : unknown0 /\ ~synced[t]}
+                  IN /\ record' = Redeclared(s, D, rec0)
+                     /\ content' = [t \in Tables |->
+                           IF t \in back \cup dropped THEN {} ELSE IF t \in restored THEN con0[t] \cup {Tag(s)} ELSE con0[t]]
+                     /\ cookie' = [cookie EXCEPT ![s] = kept]
+                  /\ synced' = [t \in Tables |-> synced[t] \/ t \in D]
+                  /\ decl' = [decl EXCEPT ![s] = D]
     /\ owner' = IF o = None THEN owner ELSE [owner EXCEPT ![s] = o]
     /\ UNCHANGED <<privOwner, local, phase, left, sessions>>
 
@@ -118,18 +125,18 @@ OpenShared(s, D, o, fails) ==
 Pull(s) ==
     /\ phase = "open" /\ decl[s] # {}
     /\ content' = [t \in Tables |-> IF t \in decl[s] THEN (IF cookie[s] THEN content[t] \cup {Tag(s)} ELSE {Tag(s)}) ELSE content[t]]
-    /\ cookie' = [cookie EXCEPT ![s] = TRUE]
+    /\ cookie' = [cookie EXCEPT ![s] = TRUE] /\ unknown' = [unknown EXCEPT ![s] = TRUE]
     /\ UNCHANGED <<privOwner, owner, record, synced, decl, local, phase, left, sessions>>
 
 LocalWrite(t) ==
     /\ phase = "open" /\ t \in local
     /\ content' = [content EXCEPT ![t] = @ \cup {<<Local, privOwner>>}]
-    /\ UNCHANGED <<privOwner, owner, record, synced, cookie, decl, local, phase, left, sessions>>
+    /\ UNCHANGED <<privOwner, owner, record, synced, cookie, unknown, decl, local, phase, left, sessions>>
 
 Close ==
     /\ phase = "open"
     /\ phase' = "closed" /\ decl' = [s \in Spaces |-> {}] /\ local' = {}
-    /\ UNCHANGED <<privOwner, owner, record, synced, content, cookie, left, sessions>>
+    /\ UNCHANGED <<privOwner, owner, record, synced, content, cookie, unknown, left, sessions>>
 
 Next ==
     \/ \E u \in Users \cup {None}, D \in SUBSET Tables, L \in SUBSET Tables : D \cap L = {} /\ OpenPrivate(u, D, L)
