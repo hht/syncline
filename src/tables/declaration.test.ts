@@ -35,6 +35,7 @@ test('treats device schemas with subsets of cloud tables and columns as compatib
     ]),
   ).toBeUndefined();
   expect(judge([program, workout])).toBeUndefined();
+  expect(judge([program])).toBeUndefined();
 });
 
 test('marks schemas ahead when device defines undeployed tables/columns, mismatched types/keys, or nullable columns declared non-null on cloud', () => {
@@ -56,9 +57,10 @@ test('treats device columns declared non-null when nullable on cloud as compatib
 test('marks schemas retired when referencing retired tables or columns, prioritizing retired over ahead', () => {
   const device = [
     program,
-    sqliteTable('workout', { id: text().primaryKey(), title: text().notNull(), notes: text() }),
+    sqliteTable('workout', { id: text().primaryKey(), title: text().notNull(), notes: text(), sets: integer() }),
     sqliteTable('tag', { id: text().primaryKey() }),
   ];
+  // workout.sets is undeployed (ahead), yet retired names are reported first
   expect(judge(device, ['workout.notes', 'tag'])).toEqual({ kind: 'retired', names: ['tag', 'workout.notes'] });
 });
 

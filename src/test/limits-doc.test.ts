@@ -102,7 +102,16 @@ test('checksum verification waits a full day after completing a round, and retri
 });
 
 test('Rust device-side limits match cloud limits', () => {
-  expect(rustLimits()).toMatchObject({ valueBytes, valueChars, keyBytes, writeRows, writeKeyBytes });
+  expect(rustLimits()).toMatchObject({
+    valueBytes,
+    valueChars,
+    keyBytes,
+    writeRows,
+    writeKeyBytes,
+    writeBytes,
+    pushMutations,
+    socketLimit,
+  });
 });
 
 test('web shell determines HTTP pull stall from core duration (native shell imports core constants directly)', () => {
