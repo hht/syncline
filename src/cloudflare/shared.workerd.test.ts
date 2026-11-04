@@ -276,7 +276,7 @@ test('dispatches head version round to shards on startup for empty shared space 
   // Dispatches immediately on startup so test environment arms alarms without waiting for writes.
   await vi.waitFor(async () => {
     const confirmed = await runInDurableObject(fresh, (_, state) => state.storage.kv.get('syncline:fanout'));
-    expect(confirmed).toEqual({ version: 0, nonce: head.nonce });
+    expect(confirmed).toEqual({ cookie: { version: 0, nonce: head.nonce }, shards: ['fresh#0', 'fresh#1'] });
   });
 });
 

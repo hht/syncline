@@ -2,12 +2,12 @@ import { DurableObject } from 'cloudflare:workers';
 import { Broadcast, defaultShards } from '../cloud/broadcast.ts';
 import { Buckets } from '../cloud/buckets.ts';
 import { type Events, isolated, quiet } from '../cloud/events.ts';
-import { Fanout } from '../cloud/fanout.ts';
+import { type Confirmed, Fanout } from '../cloud/fanout.ts';
 import type { Round } from '../cloud/shared.ts';
 import { Space } from '../cloud/space.ts';
 import { withTimeout } from '../cloud/timeout.ts';
 import type { Transaction } from '../cloud/transaction.ts';
-import { type Chunk, type Cookie, type Poke, ping, pong, type Reset, socketLimit, subprotocol } from '../common/protocol.ts';
+import { type Chunk, type Poke, ping, pong, type Reset, socketLimit, subprotocol } from '../common/protocol.ts';
 import { type PullRequest, parsePullRequest } from '../common/pull-url.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
@@ -33,7 +33,7 @@ export { forwardShared, type SharedDefinition, type SharedIdentity, SynclineShar
  * @see https://github.com/electric-sql/electric/blob/3f9809fb0bd894cb74470d434749673492ad7acf/packages/sync-service/lib/electric/shapes/api/response.ex
  */
 
-// Monotonically increasing version acknowledged by all broadcast shards, stored in shared space KV.
+// Monotonically increasing version acknowledged by all broadcast shards, with those shards, stored in shared space KV.
 const fanoutKey = 'syncline:fanout';
 // Registered chore name for fanout dispatch and periodic wakeups in the schedule table.
 const deliverName = `${reserved}deliver`;
@@ -110,13 +110,13 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
         send: (shard, round) =>
           withTimeout(broadcast.getByName(shard).notify(round), notifyTimeout, `Shard timed out after ${notifyTimeout / 1000}s`),
         failed: (shard, error) => this.#events({ type: 'notice.failed', shard, reason: String(error) }),
-        confirmed: async (head) => {
-          ctx.storage.kv.put(fanoutKey, head);
+        confirmed: async (state) => {
+          ctx.storage.kv.put(fanoutKey, state);
           this.timetable.at(deliverName, Date.now() + refreshInterval);
           await this.timetable.arm();
         },
       },
-      ctx.storage.kv.get<Cookie>(fanoutKey) ?? null,
+      ctx.storage.kv.get<Confirmed>(fanoutKey) ?? null,
     );
     // Dispatches immediately if unacknowledged shards or pending rescans exist. Replaces the entry outright, clearing the lease and reset
     // count a reset left: rounds are bounded by shard timeouts, so delivery is never the task whose reset restarted the object.

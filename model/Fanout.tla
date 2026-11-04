@@ -19,9 +19,10 @@
 (* only 'many' and the shard pushes hints to all connections.              *)
 (* Broadcast shards: known tracks the latest version in memory; after a    *)
 (* reset, known is unknown (hibernating connections survive). If the       *)
-(* received base is greater than known, delivery is non-contiguous: the    *)
+(* received base is greater than known, or known is unknown and the round  *)
+(* is the empty round of a fresh fanout, delivery is non-contiguous: the   *)
 (* shard queries the shared space for the latest version and pushes hints  *)
-(* to all connections; if contiguous, known advances and the shard pushes  *)
+(* to all connections; otherwise known advances and the shard pushes       *)
 (* chained notices to connections whose subscriptions intersect touched    *)
 (* buckets.                                                                *)
 (* Connections: connecting devices join the recipient list before querying *)
@@ -85,9 +86,12 @@ PushAll(s, v, bk, hint) ==
        ELSE UNCHANGED <<chan, cPushed>>
     /\ aSeen' = IF s = ResShard /\ (hint \/ bk \cap ResSub # {}) THEN Max({aSeen, v}) ELSE aSeen
 
-\* Shard receives round (base, v] with touched buckets bk (many: too many touched buckets, carries only this flag); non-contiguous base queries latest version and pushes hints; contiguous base advances known
+\* Shard receives round (base, v] with touched buckets bk (many: too many touched buckets, carries only this flag); non-contiguous base queries latest version and pushes hints; contiguous base advances known.
+\* A shard that lost known (reset or eviction) still chains a non-empty round: its base is a version the shard acknowledged before (cur only
+\* advances on delivery, and restarts roll it back), so every connection already holds what came before it; only the empty round of a
+\* fresh fanout (base = v, possibly ahead of what the shard processed) cannot chain
 ShardReceive(s, base, v, bk, many) ==
-    IF known[s] = Unknown \/ base > known[s]
+    IF IF known[s] = Unknown THEN base = v ELSE base > known[s]
     THEN known' = [known EXCEPT ![s] = Latest] /\ PushAll(s, Latest, {}, TRUE)
     ELSE IF v > known[s]
          THEN known' = [known EXCEPT ![s] = v] /\ PushAll(s, v, bk, many)

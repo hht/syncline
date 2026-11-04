@@ -1,6 +1,9 @@
 import { type Cookie, sameCookie } from '../common/protocol.ts';
 import type { Round } from './shared.ts';
 
+/** Version acknowledged by all shards, with the shards that acknowledged it. */
+export type Confirmed = { cookie: Cookie; shards: readonly string[] };
+
 /** Host environment for fanout: shard list, head cookie, round builder, delivery, failure reporter, and confirmed version persistence. */
 type Host = {
   shards: readonly string[];
@@ -12,10 +15,10 @@ type Host = {
   /** Reports a failed delivery to a shard. */
   failed: (shard: string, error: unknown) => void;
   /**
-   * Called when all shards have confirmed through `head`: persisted version is provided back to constructor on next startup.
+   * Called when all shards have confirmed through `head`: the persisted state is provided back to constructor on next startup.
    * Runs synchronously with all-shards-confirmed check to avoid race conditions with intervening writes; awaits returned promise.
    */
-  confirmed: (head: Cookie) => void | Promise<void>;
+  confirmed: (state: Confirmed) => void | Promise<void>;
 };
 
 /**
@@ -38,10 +41,15 @@ export class Fanout {
   /** Cached rounds from distinct starting points to head: shards sharing the same starting version reuse the same round. */
   #rounds: { head: Cookie; from: Map<string, Round> } | undefined;
 
-  /** Constructs a fanout coordinator; `confirmed` is the previously persisted all-shards-confirmed cookie (or null). */
-  constructor(host: Host, confirmed: Cookie | null) {
+  /**
+   * Constructs a fanout coordinator; `confirmed` is the previously persisted state (or null). A version persisted for another shard set
+   * is dropped: a shard added since never acknowledged it, so rounds from it would skip what that shard's connections missed.
+   */
+  constructor(host: Host, confirmed: Confirmed | null) {
     this.#host = host;
-    this.#confirmed = confirmed;
+    // Compares serialized lists, so storage holding anything else also counts as another shard set.
+    const same = JSON.stringify(confirmed?.shards) === JSON.stringify(host.shards);
+    this.#confirmed = same ? (confirmed?.cookie ?? null) : null;
   }
 
   /** Returns whether all shards have confirmed through the current head cookie. */
@@ -97,7 +105,7 @@ export class Fanout {
       this.#confirmed = head;
       this.#acked.clear();
       this.#rounds = undefined;
-      await this.#host.confirmed(head);
+      await this.#host.confirmed({ cookie: head, shards: this.#host.shards });
     }
     return true;
   }

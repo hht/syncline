@@ -133,15 +133,22 @@ test('queries shared space only once when multiple devices connect concurrently 
   for (const socket of sockets) expect(last(socket)).toMatchObject({ cookie: catalog.cookie(), patch: [] });
 });
 
-test('queries head and pushes hints to older connections when round cannot chain after shard restart, resuming normal notifications on subsequent rounds', async () => {
-  const run = await setup();
-  const { space, commit, restart, connect, asked } = run;
+test('after a shard restart, chains a round onto each connection without querying the shared space; an empty round of a fresh fanout still queries and hints', async () => {
+  const { space, shard, catalog, commit, restart, connect, asked } = await setup();
   const socket = await connect();
+  const before = catalog.cookie();
+  asked.length = 0;
   restart();
   await commit('p2');
-  expect(asked).toContain('latest');
+  expect(asked).toEqual([]);
+  expect(last(socket)).toMatchObject({ base: before, cookie: space().head(), patch: [{ row: { id: 'p2' } }] });
+  restart();
+  const older = await connect('admin');
+  space().mutate((tx) => tx.upsert(program, { id: 'p3', status: 'draft' }), 0);
+  await shard().notify(space().round(64_000, space().head()));
+  expect(asked).toEqual(['latest', 'latest']);
+  expect(hinted(older)).toEqual(space().head());
   expect(hinted(socket)).toEqual(space().head());
-  await catchesUp(run, socket);
 });
 
 test('queries head and pushes hints instead of notifications when round base is newer than known cookie to prevent missing intermediate changes', async () => {
@@ -158,7 +165,7 @@ test('queries head and pushes hints instead of notifications when round base is 
   expect(catalog.behind()).toBe(true);
 });
 
-test('awaits in-flight query and re-queries if needed when round arrives during query, ensuring pushed point is at least as new as the round', async () => {
+test('a round arriving during a catch-up query after a shard restart reaches the connecting socket as a hint, so its pushed point is at least as new as the round', async () => {
   const { space, shard, restart, connect, asked } = await setup();
   restart();
   const connecting = connect();
@@ -166,7 +173,7 @@ test('awaits in-flight query and re-queries if needed when round arrives during 
   space().mutate((tx) => tx.upsert(program, { id: 'p2', status: 'published' }), 0);
   await shard().notify(space().round(64_000, base));
   const socket = await connecting;
-  expect(asked).toEqual(['latest', 'latest']);
+  expect(asked).toEqual(['latest']);
   expect(hinted(socket)).toEqual(space().head());
 });
 

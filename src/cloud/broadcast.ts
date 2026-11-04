@@ -26,7 +26,7 @@ import type { Round, Subscribed } from './shared.ts';
  * emitting values if present now and del ops if removed (each connection computes its own intersection without registering subscriptions);
  * each connection records the last point pushed to it (stored in attachment, surviving hibernation), chaining notifications on top,
  * and skipping rounds unrelated to its subscription.
- * When a received round cannot chain (shard reset, evicted from memory, missed round, or distinct incarnation: incarnations are random nonces without ordering, and an older incarnation's round may arrive late): fetches the latest round from the shared space, records it, and pushes hints to every connection.
+ * When a received round cannot chain (missed round, distinct incarnation: incarnations are random nonces without ordering, and an older incarnation's round may arrive late; or the empty round of a fresh fanout reaching a shard that knows nothing): fetches the latest round from the shared space, records it, and pushes hints to every connection. A shard that lost its memory (reset or eviction) still chains non-empty rounds.
  * When a device connects, it is registered in the push list and fetches the latest round for catch-up (used only for this connection):
  * pushes hints until catch-up completes; sends an empty catch-up if the fetched round exactly matches the device cookie, otherwise sends a hint;
  * skips catch-up if the fetch fails, sending hints for all subsequent rounds (never sending an empty catch-up chained to the device cookie, which would omit intermediate changes in future notifications). Does not close the connection: closing devices simultaneously causes reconnect stampedes that overwhelm the shard.
@@ -97,7 +97,7 @@ export class Broadcast<S extends Socket> {
   readonly #sockets: Sockets<S>;
   readonly #latest: () => Promise<Round>;
   readonly #events: Events;
-  /** Latest known round (in memory only: reset or evicted state treats the next round as unchained). */
+  /** Latest known round (in memory only: lost on reset or eviction). */
   #known: Round | undefined;
   /** Active query to the shared space; concurrent requests await the same promise. */
   #asking: Promise<Round> | undefined;
@@ -137,20 +137,26 @@ export class Broadcast<S extends Socket> {
   }
 
   /**
-   * Processes a shared space round (ShardReceive in model/Fanout.tla): if unchained (nothing known, distinct incarnation, or base version newer than known cookie),
+   * Processes a shared space round (ShardReceive in model/Fanout.tla): if unchained (distinct incarnation, base version newer than known cookie,
+   * or nothing known and the round is empty),
    * queries the latest round, records it, and pushes hints to every connection; throws if the query fails (prompting shared space retry with backoff).
    * If chained and newer, pushes to every connection and updates the known round; drops retransmissions and late arrivals.
    * Updates state only after pushing: on partial push failure, the shared space retry still delivers to remaining connections without skipping.
    */
   async notify(round: Round) {
     const known = this.#known;
-    if (!known || known.incarnation !== round.incarnation || round.base.version > known.cookie.version) {
+    // A shard that lost known (reset or eviction) still chains a non-empty round: the shared space only sends from a version this shard
+    // acknowledged, so every connection already holds what came before it; only the empty round of a fresh fanout cannot chain.
+    const chained = known
+      ? known.incarnation === round.incarnation && round.base.version <= known.cookie.version
+      : round.base.version < round.cookie.version;
+    if (!chained) {
       const { rows: _, ...latest } = await this.#ask(pointOf(round));
       this.#push(latest);
       this.#known = latest;
       return;
     }
-    if (round.cookie.version <= known.cookie.version) return;
+    if (known && round.cookie.version <= known.cookie.version) return;
     this.#push(round);
     this.#known = round;
   }

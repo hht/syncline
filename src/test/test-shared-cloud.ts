@@ -1,10 +1,9 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { Broadcast } from '../cloud/broadcast.ts';
 import { type Bucket, type BucketRules, bucketId } from '../cloud/buckets.ts';
-import { Fanout } from '../cloud/fanout.ts';
+import { type Confirmed, Fanout } from '../cloud/fanout.ts';
 import type { Round } from '../cloud/shared.ts';
 import { Space } from '../cloud/space.ts';
-import type { Cookie } from '../common/protocol.ts';
 import { parsePullRequest } from '../common/pull-url.ts';
 import { subscribed } from './test-catalog.ts';
 import type { Cloud, CloudEnd, Network } from './test-network.ts';
@@ -73,8 +72,8 @@ export class SharedCloud {
   #broadcast: Broadcast<CloudEnd>;
   /** Fanout state machine to shards (production Fanout): instantiated per actor lifecycle. */
   #fanout!: Fanout;
-  /** Head version acknowledged by all shards (persisted in space database in production); wiped on rebuild. */
-  #saved: Cookie | null = null;
+  /** Head version acknowledged by all shards, with those shards (persisted in space database in production); wiped on rebuild. */
+  #saved: Confirmed | null = null;
   /** Mock edge cache: maps URL and subscription to cached response and cache durability flag. */
   readonly #cache = new Map<string, { text: string; lasting: boolean }>();
   /** Calm period: faults stopped, notices deliver reliably, cache holds only intermediate chunks. */
@@ -160,8 +159,8 @@ export class SharedCloud {
         round: (from, head) => space.round(inlineLimit, from ?? head),
         send: (_shard, round) => this.#send(round),
         failed: () => undefined,
-        confirmed: (head) => {
-          this.#saved = head;
+        confirmed: (state) => {
+          this.#saved = state;
         },
       },
       this.#saved,

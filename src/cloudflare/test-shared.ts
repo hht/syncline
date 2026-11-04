@@ -12,7 +12,7 @@ export const fannedOut = (name: string) =>
       runInDurableObject(env.CATALOG.getByName(name), (_, state) => {
         const confirmed = state.storage.kv.get('syncline:fanout');
         const head = state.storage.sql.exec<{ version: number }>('SELECT max(version) AS version FROM _syncline_commit').one();
-        expect(confirmed).toMatchObject({ version: head.version });
+        expect(confirmed).toMatchObject({ cookie: { version: head.version } });
       }),
     { timeout: 10_000 },
   );
