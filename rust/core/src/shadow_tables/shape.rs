@@ -5,7 +5,7 @@
 
 use super::{shadow_of, shadowed};
 use crate::sql::{quote, quote_all};
-use crate::tables::indexes_on;
+use crate::tables::indexes::indexes_on;
 use rusqlite::Connection;
 use std::collections::{BTreeSet, HashSet};
 
