@@ -8,6 +8,8 @@ A library that syncs relational SQLite tables between Expo devices (iOS, Android
 
 ## Core principles
 
+**Highest rule: blast radius before every fix.** Before writing a fix, list every caller, consumer, persisted state, invariant, and documented contract (`docs/`, `model/`) it touches, and state how each one's behavior changes; cover each that could break with a test, and stop for the user when one changes in a way they have not approved.
+
 1. **Deletion first.** Every line must answer "what breaks if this is deleted?" If you cannot answer, trace its origin; if you still cannot answer after tracing, delete it without reducing readability. Inline pass-through or renaming-only functions, types, and files; do not write code for unrequested needs (tests and refactoring excluded).
 2. **One module, one question.** Divide modules by question: one question = one design decision that changes independently, never by processing step; keep interfaces much smaller than implementations, state at the top which question the module answers and what it must not know, and prefer deep modules over shallow fragments. Keep dependencies unidirectional and acyclic; separate pure computation from side effects so the core consists of directly testable pure functions.
 3. **Sound algorithms.** Identify the essence and choose data structures upfront so scale-determined structures are right by design; measure before tuning local performance.
