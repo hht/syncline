@@ -29,6 +29,8 @@ export class Ownership {
   readonly decl = new Map<string, Set<string>>();
   local = new Set<string>();
   phase: 'closed' | 'open' = 'closed';
+  /** Retired tables (only ever grows). */
+  retired = new Set<string>();
   /** Ghost: tables that held local-only rows and were then neither local-only nor synced. */
   readonly left = new Set<string>();
   readonly #tables: string[];
@@ -68,11 +70,12 @@ export class Ownership {
     return new Map(this.#tables.map((t) => [t, D.has(t) ? s : record.get(t) === s ? None : (record.get(t) as string)]));
   }
 
-  openPrivate(u: string, D: Set<string>, L: Set<string>) {
+  openPrivate(u: string, D: Set<string>, L: Set<string>, R: Set<string>) {
+    const gone = new Set([...R].filter((t) => this.synced.get(t)));
     const back = this.#returning(P, D, this.record, this.content);
     const foreign = new Set([...L].filter((t) => this.#shared.includes(this.record.get(t) as string)));
     const redeclared = this.#redeclared(P, D, this.record);
-    const rec1 = new Map(this.#tables.map((t) => [t, L.has(t) ? None : (redeclared.get(t) as string)]));
+    const rec1 = new Map(this.#tables.map((t) => [t, L.has(t) || gone.has(t) ? None : (redeclared.get(t) as string)]));
     const wiped1 = new Map(this.#tables.map((t) => [t, back.has(t) || foreign.has(t) ? new Set<string>() : this.content.get(t)]));
     const isSwitch = u !== None && ![None, u].includes(this.privOwner);
     const who = u === None ? this.privOwner : u;
@@ -86,15 +89,16 @@ export class Ownership {
     );
     for (const t of this.#tables) {
       const rows = wiped1.get(t) as Set<string>;
-      this.content.set(t, cleared.has(t) ? new Set() : restored.has(t) ? new Set([...rows, tagOf(P, who)]) : rows);
+      this.content.set(t, cleared.has(t) || gone.has(t) ? new Set() : restored.has(t) ? new Set([...rows, tagOf(P, who)]) : rows);
       this.record.set(t, rec1.get(t) as string);
-      this.synced.set(t, (this.synced.get(t) as boolean) || D.has(t));
+      this.synced.set(t, (this.synced.get(t) && !gone.has(t)) || D.has(t));
     }
     this.cookie.set(P, kept);
     this.unknown.set(P, !isSwitch && (this.unknown.get(P) as boolean));
     this.privOwner = who;
     this.decl.set(P, new Set(D));
     this.local = new Set(L);
+    this.retired = new Set(R);
     for (const t of leaving) this.left.add(t);
     this.phase = 'open';
   }
