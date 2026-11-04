@@ -11,6 +11,9 @@ import type { Query } from './storage.ts';
 /** Quotes an identifier in double quotes, escaping embedded quotes by doubling them. */
 export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 
+/** Folds ASCII case, as SQLite does when comparing table and column names. */
+export const foldCase = (name: string) => name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+
 /** Quotes a list of identifiers and joins them with commas. */
 export const quoteAll = (names: readonly string[]) => names.map(quote).join(', ');
 

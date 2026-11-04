@@ -11,13 +11,9 @@ const program = sqliteTable('program', { id: text().primaryKey() });
 const course = sqliteTable('course', { id: text().primaryKey() });
 const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
-/** Storage where shared space catalog (owner admin) declared program and course and received a course row; `stored` names the course table. */
-async function catalogSynced(stored = 'course') {
-  const storage = deviceStorage(
-    createWorkout,
-    'CREATE TABLE program (id TEXT PRIMARY KEY)',
-    `CREATE TABLE ${stored} (id TEXT PRIMARY KEY)`,
-  );
+/** Storage where shared space catalog (owner admin) declared program and course and received a course row. */
+async function catalogSynced() {
+  const storage = deviceStorage(createWorkout, 'CREATE TABLE program (id TEXT PRIMARY KEY)', 'CREATE TABLE course (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables, { owner: 'alice' });
   const catalog = device.shared('catalog', [program, course], 'admin');
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'c1' }, row: { id: 'c1' } }] });
@@ -33,16 +29,6 @@ test.for(['admin', 'public'])(
     storage.sql.exec('CREATE VIEW course AS SELECT id FROM program');
     const device = new Device(storage, tables, { owner: 'alice' });
     await expect(device.shared('catalog', [program], owner).opened()).resolves.toBeUndefined();
-  },
-);
-
-test.for(['admin', 'public'])(
-  'shared space (opened for %s) that stopped declaring a table stored under a name of different case wipes it',
-  async (owner) => {
-    // SQLite table names are case-insensitive: the declaration adopted the existing table Course.
-    const storage = await catalogSynced('Course');
-    await new Device(storage, tables, { owner: 'alice' }).shared('catalog', [program], owner).opened();
-    expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([]);
   },
 );
 

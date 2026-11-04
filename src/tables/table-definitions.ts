@@ -110,6 +110,14 @@ function cloudIndexesOf(table: SQLiteTable, existing: Set<string>, bucketIndexes
   ];
 }
 
+// Throws if table `name` is stored under another case: table names are case-insensitive, while Syncline records and compares them as
+// given, so a name differing only by case would fail to match its own table.
+function checkCase(query: (sql: string) => Record<string, unknown>[], name: string) {
+  const [stored] = query(`SELECT name FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ${literal(name)} COLLATE NOCASE`);
+  if (stored && stored.name !== name)
+    throw new Error(`${name} is stored as ${String(stored.name)}: table names ignore case, so declare the stored name or choose another`);
+}
+
 // Verifies that existing database primary keys match the declared primary keys.
 function checkKey(table: SQLiteTable, info: Record<string, unknown>[]) {
   const key = info
@@ -159,6 +167,7 @@ function defineTable(query: (sql: string) => Record<string, unknown>[], table: S
     query(createTable(table, synced));
     return true;
   }
+  checkCase(query, getTableConfig(table).name);
   checkKey(table, info);
   checkTypes(table, info, synced);
   addColumns(query, table, existing, synced);

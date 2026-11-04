@@ -209,6 +209,15 @@ test('cloud: rejects adding non-null columns without static defaults to existing
   expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
 });
 
+test('cloud: a declaration must use the case its table is stored under, as table names ignore case', () => {
+  const storage = cloud(...workoutWithDone);
+  const Workout = sqliteTable('Workout', { id: text().primaryKey() });
+  expect(() => defineTables(storage, [Workout])).toThrow('Workout is stored as workout: table names ignore case');
+  const fresh = cloud();
+  expect(() => defineTables(fresh, [workout, Workout])).toThrow('Table names workout and Workout differ only by case');
+  expect(schemaOf(fresh)).toEqual([]);
+});
+
 test('cloud: preserves declared types for cloud-only tables and columns while normalizing synced columns', () => {
   const storage = cloud();
   const synced = sqliteTable('note', { id: text().primaryKey(), body: text({ length: 40 }) });

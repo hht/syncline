@@ -7,20 +7,20 @@
 use crate::effects::Effects;
 use crate::error::Error;
 use crate::shadow_tables::drop_shadow;
-use crate::sql::{column_names, quote};
+use crate::sql::{column_names, literal, quote};
 use crate::tables::Table;
 use crate::unknown_rows::{UnknownRows, clear_table};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 
-/// Ensures synced tables do not collide with local-only tables and do not declare retired names.
-pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &[String]) -> Result<(), Error> {
+/// Ensures synced tables do not collide with local-only tables and do not declare retired names, ignoring case as SQLite names do.
+pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &HashSet<String>) -> Result<(), Error> {
     let revived: Vec<String> = synced
         .iter()
         .flat_map(|table| {
             std::iter::once(table.name.clone()).chain(table.columns.iter().map(|column| format!("{}.{}", table.name, column.name)))
         })
-        .filter(|path| retired.contains(path))
+        .filter(|path| retired.iter().any(|name| name.eq_ignore_ascii_case(path)))
         .collect();
     if !revived.is_empty() {
         return Err(Error::Failed(format!(
@@ -30,7 +30,7 @@ pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &[String]) 
     }
     if let Some(table) = local_only
         .iter()
-        .find(|table| synced.iter().any(|synced| synced.name == table.name))
+        .find(|table| synced.iter().any(|synced| synced.name.eq_ignore_ascii_case(&table.name)))
     {
         return Err(Error::Failed(format!(
             "local-only table has the same name as a synced table: {}",
@@ -38,6 +38,42 @@ pub fn refuse_names(synced: &[Table], local_only: &[Table], retired: &[String]) 
         )));
     }
     Ok(())
+}
+
+/// Retired names (`table` or `table.column`) under the case their table and column are stored as, if stored: names ignore case, and
+/// devices installed before and after a release changing only the case store different names, yet share one retired list.
+///
+/// # Errors
+/// Database read error.
+pub fn stored_names(db: &rusqlite::Connection, retired: &[String]) -> rusqlite::Result<HashSet<String>> {
+    let stored = |sql: &str, name: &str| -> rusqlite::Result<String> {
+        Ok(db
+            .query_row(sql, [name], |row| row.get(0))
+            .optional()?
+            .unwrap_or_else(|| name.to_owned()))
+    };
+    retired
+        .iter()
+        .map(|name| {
+            let (table, column) = name
+                .split_once('.')
+                .map_or((name.as_str(), None), |(table, column)| (table, Some(column)));
+            let table = stored(
+                "SELECT name FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE",
+                table,
+            )?;
+            Ok(match column {
+                None => table,
+                Some(column) => {
+                    let sql = format!(
+                        "SELECT name FROM pragma_table_info({}) WHERE name = ? COLLATE NOCASE",
+                        literal(&table)
+                    );
+                    format!("{table}.{}", stored(&sql, column)?)
+                }
+            })
+        })
+        .collect()
 }
 
 /// Drops retired tables and columns: clears unknown rows from `_syncline_unknown`; physically drops synced tables and columns (tables with `_extra`).
@@ -147,8 +183,7 @@ pub fn wipe(db: &rusqlite::Connection, effects: &mut Effects, name: &str) -> rus
 /// Database read error.
 pub fn ordinary(db: &rusqlite::Connection, name: &str) -> rusqlite::Result<bool> {
     db.query_row(
-        // Table names are case-insensitive: a declaration adopts an existing table whatever its case
-        "SELECT EXISTS (SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name = ? COLLATE NOCASE)",
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name = ?)",
         [name],
         |row| row.get(0),
     )

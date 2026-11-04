@@ -7,7 +7,7 @@ use super::{Device, Options};
 use crate::database::Database;
 use crate::effects::Effects;
 use crate::error::Error;
-use crate::evolution::{foreign, redeclare, refuse_names, retire, returning, wipe};
+use crate::evolution::{foreign, redeclare, retire, returning, stored_names, wipe};
 use crate::internal;
 use crate::owner;
 use crate::recorder::Recorder;
@@ -15,14 +15,14 @@ use crate::stage::Stage;
 use crate::synced_tables::SyncedTables;
 use crate::upload_queue::UploadQueue;
 use crate::verifier::Verifier;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 impl Device {
     /// Opens the device: prepares internal tables, upgrades local tables, verifies owner identity (clearing data on owner change), and discards incompatible staged chunks.
     ///
     /// # Errors
     ///
-    /// Returns an error if retired names are declared, a local-only table collides with a synced table, the previous owner has unuploaded writes ([`Error::PendingWrites`]), or database operations fail. Returns database on error.
+    /// Returns an error if the previous owner has unuploaded writes ([`Error::PendingWrites`]), or database operations fail. Returns database on error.
     pub fn open(db: Database, options: Options, random_uuid: Box<dyn FnMut() -> String>) -> Result<Self, (Database, Error)> {
         let Options {
             config,
@@ -31,10 +31,9 @@ impl Device {
             checksum,
         } = options;
         let parts = (|| {
-            refuse_names(&config.synced, &config.local_only, &config.retired)?;
             let connection = db.connection();
+            let retired = stored_names(connection, &config.retired)?;
             internal::prepare(connection)?;
-            let retired: HashSet<String> = config.retired.iter().cloned().collect();
             let synced = SyncedTables::new(connection, &config.synced, "", &retired)?;
             let verifier = checksum.map(Verifier::new).transpose()?;
             Ok((retired, synced, verifier))

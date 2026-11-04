@@ -1,7 +1,7 @@
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { keyBytes } from '../common/limits.ts';
-import { quote, whereKey } from '../common/sql.ts';
+import { foldCase, quote, whereKey } from '../common/sql.ts';
 import { type Query, Reject } from '../common/storage.ts';
 import { keyBytesOf, keyColumns, keyOf, primaryKey } from './keys.ts';
 
@@ -93,15 +93,19 @@ export function storageTypeOf(table: string, column: SQLiteColumn): 'integer' | 
 
 /**
  * Validates declared schema tables before database initialization.
- * Verifies identifier naming rules, internal table name reservations, primary key presence, and storage affinities.
+ * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, and storage affinities.
  * @see https://sqlite.org/json1.html#path_arguments
  * @see https://tc39.es/ecma262/#sec-ordinaryownpropertykeys
  * @see https://sqlite.org/sessionintro.html
  */
 export function checkDeclared(tables: SQLiteTable[]) {
+  const seen = new Map<string, string>();
   for (const table of tables) {
     const { name, columns } = getTableConfig(table);
     checkName(name);
+    const same = seen.get(foldCase(name));
+    if (same !== undefined) throw new Error(`Table names ${same} and ${name} differ only by case; table names ignore case, as in SQLite`);
+    seen.set(foldCase(name), name);
     if (name.startsWith('_syncline_'))
       throw new Error(`Table name ${name}: names starting with _syncline_ are reserved for internal tables`);
     if (primaryKey(table).length === 0)

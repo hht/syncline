@@ -5,6 +5,7 @@
 
 use crate::device::Options;
 use crate::error::Error;
+use crate::evolution::refuse_names;
 use crate::recorder::Config;
 use crate::tables;
 use rusqlite::Connection;
@@ -48,6 +49,8 @@ impl Opening {
             checksum,
         } = self;
         db.execute_batch("PRAGMA synchronous = FULL")?;
+        // Before creating tables, so a refused declaration leaves none behind
+        refuse_names(&config.synced, &config.local_only, &config.retired.iter().cloned().collect())?;
         tables::define(db, config.synced.iter().chain(&config.local_only))?;
         db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA journal_size_limit = 1048576")?;
         Ok(Options {

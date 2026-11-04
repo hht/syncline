@@ -1,6 +1,7 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { isNames, isObject } from '../common/parse.ts';
 import type { Change } from '../common/protocol.ts';
+import { foldCase } from '../common/sql.ts';
 import { longFingerprintOf } from './fingerprint.ts';
 import { keyColumns } from './keys.ts';
 import { storageTypeOf } from './validation.ts';
@@ -109,11 +110,12 @@ function parseSchema(text: string): Schema {
   return { declaration: value.declaration as Declaration, retired: value.retired };
 }
 
-/** Validates that declared tables and columns do not include retired names, throwing if revived. */
+/** Validates that declared tables and columns do not include retired names (ignoring case, as SQLite names do), throwing if revived. */
 export function refuseRetired(tables: SQLiteTable[], retired: ReadonlySet<string>) {
+  const folded = new Set([...retired].map(foldCase));
   const revived = tables.flatMap((table) => {
     const { name, columns } = getTableConfig(table);
-    return [name, ...columns.map((column) => `${name}.${column.name}`)].filter((path) => retired.has(path));
+    return [name, ...columns.map((column) => `${name}.${column.name}`)].filter((path) => folded.has(foldCase(path)));
   });
   if (revived.length > 0)
     throw new Error(`Synced schema includes retired tables or columns (${revived.join(', ')}); choose a different name`);

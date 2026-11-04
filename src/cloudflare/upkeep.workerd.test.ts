@@ -1,6 +1,9 @@
 import { runInDurableObject } from 'cloudflare:test';
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import { retiredGrace } from '../cloud/evolution.ts';
+import { evolve, nextDrop, retiredGrace } from '../cloud/evolution.ts';
+import type { Storage } from '../common/storage.ts';
+import { defineTables } from '../tables/table-definitions.ts';
 import { Schedule } from './schedule.ts';
 import { object, online } from './test-space.ts';
 import type { TestSpace } from './test-worker.ts';
@@ -46,6 +49,18 @@ test('drops retired tables past grace period in alarms while scheduling future a
   await vi.waitFor(async () => expect(await has(name, 'archived')).toBe(false));
   expect(await has(name, 'draft')).toBe(true);
   expect(Number(await object(name).alarmAt()) - Date.now()).toBeGreaterThan(hour - 60_000);
+});
+
+test('table names ignore case in Durable Object SQLite: another case is refused, and a retired name resolves to the stored one', async () => {
+  const { name } = await online(1);
+  await runInDurableObject(object(name), (_: TestSpace, state) => {
+    const query = (text: string, ...bindings: unknown[]) => state.storage.sql.exec(text, ...bindings).toArray();
+    query('CREATE TABLE Memo (id TEXT PRIMARY KEY) WITHOUT ROWID');
+    const storage = state.storage as unknown as Storage;
+    expect(() => defineTables(storage, [sqliteTable('memo', { id: text().primaryKey() })])).toThrow('memo is stored as Memo');
+    state.storage.transactionSync(() => evolve(query, [], ['memo'], false, () => 0));
+    expect(nextDrop(query, [])?.name).toBe('Memo');
+  });
 });
 
 /** Test helper running Upkeep scenarios in an isolated Durable Object. */

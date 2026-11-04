@@ -8,7 +8,7 @@
 
 use crate::error::Error;
 use crate::sql::{quote, quote_all};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use std::fmt;
 
@@ -175,9 +175,24 @@ fn define_table(db: &Connection, table: &Table) -> Result<(), Error> {
         ))?;
         return Ok(());
     }
+    check_case(db, &table.name)?;
     check_key(table, &stored)?;
     check_types(table, &stored)?;
     add_columns(db, table, &stored)
+}
+
+/// Refuses `name` if its table is stored under another case: SQLite table names ignore case, while Syncline compares them as given.
+///
+/// # Errors
+/// `Error::Failed` if stored under another case; `Error::Sql` on read failure.
+fn check_case(db: &Connection, name: &str) -> Result<(), Error> {
+    let sql = "SELECT name FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE";
+    match db.query_row(sql, [name], |row| row.get::<_, String>(0)).optional()? {
+        Some(stored) if stored != name => Err(Error::Failed(format!(
+            "{name} is stored as {stored}: table names ignore case, so declare the stored name or choose another"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Existing table primary key must match declaration: SQLite cannot alter table primary keys; writing or scanning with mismatched primary keys leads to errors or omitted rows.

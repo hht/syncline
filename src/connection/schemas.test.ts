@@ -73,6 +73,15 @@ test('device includes retired columns: stops immediately, status reports updateN
   expect(network.fire()).toBe(false);
 });
 
+test('device declaring a name the cloud retired under another case stops with updateNeeded, as names ignore case', async () => {
+  const tag = sqliteTable('tag', { id: text().primaryKey() });
+  const { connection, run } = setup([note], [note, tag], ['Tag']);
+  connection.start();
+  await run(false);
+  expect(connection.status()).toMatchObject({ connecting: false, updateNeeded: true });
+  expect(connection.status().downloadError).toMatchObject({ kind: 'retired', names: ['tag'] });
+});
+
 test('cloud deploys retired column while connected: WebSocket closes with 4003, HTTP pull confirms retired, stops with updateNeeded', async () => {
   const { network, connection, deploy, run } = setup([noteWithStars], [noteWithStars]);
   connection.start();

@@ -114,6 +114,10 @@ test('table undeclared without retiring (code rollback): records drop and stops 
 test('retired names cannot return to sync: throws when declared, including code rollbacks that re-declare them without retired entry', () => {
   const cloud = cloudStorage(createWorkout, createTag);
   expect(() => new Space(cloud, [workout, tag], { retired: ['tag'] })).toThrow('retired tables or columns (tag)');
+  // Names ignore case, as SQLite table and column names do
+  expect(() => new Space(cloud, [workout, tag], { retired: ['Tag', 'workout.Note'] })).toThrow(
+    'retired tables or columns (workout.note, tag)',
+  );
   new Space(cloud, [workout], { retired: ['tag', 'workout.reps'] });
   expect(() => new Space(cloud, [workout, tag])).toThrow('retired tables or columns (tag)');
   expect(() => new Space(cloud, [workoutWithReps])).toThrow('retired tables or columns (workout.reps)');
@@ -146,6 +150,14 @@ test('retired synced tables past grace period are dropped physically by upkeep o
   expect(tables()).toEqual(['note', 'workout']);
   expect(nextDrop(query, ['note'])).toBeUndefined();
   expect(query('PRAGMA table_info(workout)').map(({ name }) => name)).toContain('reps');
+});
+
+test('a retired table is dropped whatever the case it is retired under (objects of different releases may store different cases)', () => {
+  const cloud = cloudStorage(createWorkout, createTag);
+  new Space(cloud, [workout], { retired: ['Tag', 'workout.Reps'] });
+  const query = queryOf(cloud);
+  expect(nextDrop(query, [])?.name).toBe('tag');
+  expect(query('SELECT name FROM _syncline_retired ORDER BY name').map(({ name }) => name)).toEqual(['tag', 'workout.reps']);
 });
 
 test('pushed write modifying retired tables and columns: drops those values, emits values.dropped, and executes remainder; dropping non-key fields drops mutation if only primary key remains while advancing lmid', () => {

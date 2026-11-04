@@ -5,13 +5,15 @@
 use super::Device;
 use crate::effects::Effects;
 use crate::error::Error;
+use crate::evolution::refuse_names;
 use crate::shared_space::SharedSpace;
 use crate::tables::Table;
 use std::collections::HashSet;
 
 impl Device {
     /// Claims a shared space name and its tables, to be opened subsequently through the task queue (table creation and upgrades via `open_shared`):
-    /// name must not be empty, must not already be open, and tables must not collide with existing synced tables, local-only tables, or tables in other shared spaces.
+    /// name must not be empty, must not already be open, and tables must not collide with existing synced tables, local-only tables, or tables in other shared spaces,
+    /// nor declare retired names.
     ///
     /// # Errors
     ///
@@ -24,16 +26,25 @@ impl Device {
         if self.shared.contains_key(name) {
             return Err(Error::Failed(format!("shared space {name} is already open")));
         }
-        let mut taken: HashSet<&String> = self.synced.declaration().keys().chain(&self.local_only).collect();
-        taken.extend(self.shared.values().flat_map(SharedSpace::tables));
+        // Table names are case-insensitive: names differing only by case name the same table
+        let mut taken: HashSet<String> = self
+            .synced
+            .declaration()
+            .keys()
+            .chain(&self.local_only)
+            .chain(self.shared.values().flat_map(SharedSpace::tables))
+            .map(|name| name.to_ascii_lowercase())
+            .collect();
         for table in &tables {
-            if !taken.insert(&table.name) {
+            if !taken.insert(table.name.to_ascii_lowercase()) {
                 return Err(Error::Failed(format!(
                     "table has the same name as an existing synced or local-only table: {}",
                     table.name
                 )));
             }
         }
+        // Retiring drops them on every open
+        refuse_names(&tables, &[], &self.retired)?;
         self.shared.insert(name.to_owned(), SharedSpace::new(name, tables, owner));
         Ok(())
     }

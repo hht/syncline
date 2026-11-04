@@ -173,17 +173,20 @@ impl Handshake {
 
 /// Verifies that all device tables and columns exist in cloud: matching types, primary keys, and foreign keys; cloud cannot require NOT NULL if device allows NULL; retired names reported first.
 fn incompatibility(cloud: &Declaration, retired: &HashSet<String>, device: &Declaration) -> Option<Incompatibility> {
+    // Names ignore case, as in SQLite: a name retired under another case still names the table or column
+    let retired: HashSet<String> = retired.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let is_retired = |name: &str| retired.contains(&name.to_ascii_lowercase());
     let mut found: Vec<(String, &'static str)> = Vec::new();
     for (name, table) in device {
         let synced = cloud.get(name);
-        if retired.contains(name) {
+        if is_retired(name) {
             found.push((name.clone(), "retired"));
         } else if !synced.is_some_and(|synced| same_table(synced, table)) {
             found.push((name.clone(), "ahead"));
         }
         for (column, kind) in &table.columns {
             let path = format!("{name}.{column}");
-            if retired.contains(&path) {
+            if is_retired(&path) {
                 found.push((path, "retired"));
             } else if synced.is_some_and(|synced| !fits(synced.columns.get(column), kind)) {
                 found.push((path, "ahead"));

@@ -1,6 +1,6 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { Cookie } from '../common/protocol.ts';
-import { quote } from '../common/sql.ts';
+import { foldCase, quote, tableColumns } from '../common/sql.ts';
 import type { Query, Storage } from '../common/storage.ts';
 import { declare, refuseRetired, tableAndColumn } from '../tables/declaration.ts';
 import { tableName } from '../tables/table-definitions.ts';
@@ -63,7 +63,11 @@ export function evolve(
   record: (keys: Keys) => number,
   now = Date.now(),
 ) {
-  const retired = retire(query, declared, now);
+  const retired = retire(
+    query,
+    declared.map((name) => storedName(query, name)),
+    now,
+  );
   refuseRetired(tables, retired);
   return { retired, change: resync(query, tables, fresh, record) };
 }
@@ -87,6 +91,19 @@ export function evolveOnOpen(
   const { retired, change } = storage.transactionSync(() => evolve(query, tables, declared, fresh, record));
   if (change.entered.length + change.left.length > 0) events({ type: 'schema.changed', ...change });
   return { declaration: declare(tables), retired, entered: change.entered };
+}
+
+/**
+ * Retired name (`table` or `table.column`) under the case its table and column are stored as, if stored: names ignore case, and
+ * objects created before and after a release changing only the case store different names, yet share one retired list.
+ */
+function storedName(query: Query, name: string) {
+  const [table, column] = tableAndColumn(name);
+  const [found] = query("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ? COLLATE NOCASE", table);
+  const stored = found ? String(found.name) : table;
+  if (column === undefined) return stored;
+  const columns = tableColumns(query, stored).map(({ name }) => String(name));
+  return `${stored}.${columns.find((name) => foldCase(name) === foldCase(column)) ?? column}`;
 }
 
 /** Records newly declared retired names and returns the combined set of declared and previously recorded names. */
