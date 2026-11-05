@@ -221,6 +221,11 @@ export class Mirror {
     return (await this.calls.probe({ type: 'heard', channel: this.channel, message: JSON.stringify(message), pulling })) as boolean;
   }
 
+  /** Whether the device needs an HTTP pull (Behind in the models): no cookie, a staged pull, or a newer version heard. */
+  behind() {
+    return this.inspect({ type: 'behind', channel: this.channel }) as boolean;
+  }
+
   async resync(discardPending = false): Promise<void> {
     await this.calls.probe({ type: 'resync', channel: this.channel, discardPending });
   }
@@ -234,10 +239,6 @@ export class Shared extends Mirror {
 
   staging() {
     return this.inspect({ type: 'staging', channel: this.channel }) as boolean;
-  }
-
-  behind() {
-    return this.inspect({ type: 'behind', channel: this.channel }) as boolean;
   }
 
   pullRequest(): PullRequest {

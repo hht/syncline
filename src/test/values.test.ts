@@ -2,15 +2,15 @@ import { eq } from 'drizzle-orm';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import type { Space } from '../cloud/space.ts';
-import type { Poke } from '../common/protocol.ts';
 import type { Device } from './test-device.ts';
-import { failure, holds, rows, synced, upload } from './test-roundtrip.ts';
-import { install, write } from './test-schema.ts';
+import { closeInstalled, failure, holds, installed, mutate, rows, synced, upload } from './test-roundtrip.ts';
+import { write } from './test-schema.ts';
 import { cloudStorage } from './test-storage.ts';
-import { type ItemWrite, item, itemChange, itemRow, problems, readBack, reading, updated, valueTables } from './test-values.ts';
+import { type ItemWrite, item, itemChange, itemRow, problems, readBack, reading, updated } from './test-values.ts';
 
-// Column values survive every sync path unchanged (device write → push → poke → other devices and new installs; server write → poke
-// and pull), or the write that carries them throws when it is made, as the documented limits promise.
+// Column values survive every sync path unchanged (device write → WebSocket push → poke, or a hint and HTTP pulls once over socketLimit
+// → other devices and new installs; server write → the same delivery), or the write that carries them throws when it is made, as the
+// documented limits promise.
 
 /** Asserts that a write threw exactly when the row breaks a documented limit. */
 function judged(error: string | undefined, row: ItemWrite) {
@@ -22,15 +22,6 @@ const nonEmpty = (change: object | undefined): change is object =>
   change !== undefined && Object.values(change).some((value) => value !== undefined);
 
 const asInsert = (row: object) => row as typeof item.$inferInsert;
-
-/** Server write returning its poke, or undefined if it threw (the error goes to `judged`). */
-async function serverWrite(space: Space, body: Parameters<Space['mutate']>[0]) {
-  let poke: Poke | undefined;
-  const error = await failure(() => {
-    poke = space.mutate(body) as Poke;
-  });
-  return { poke, error };
-}
 
 /** Updates the row on a device and uploads it; returns the row every copy must then hold. */
 async function deviceUpdate(space: Space, tablet: Device, online: Device[], row: ItemWrite, change: Omit<ItemWrite, 'id'>) {
@@ -46,41 +37,41 @@ async function deviceUpdate(space: Space, tablet: Device, online: Device[], row:
 /** Updates the row with a server write and delivers it; returns the row every copy must then hold. */
 async function serverUpdate(space: Space, phone: Device, row: ItemWrite, change: Omit<ItemWrite, 'id'>) {
   const next = updated(row, change);
-  const { poke, error } = await serverWrite(space, (tx) => tx.update(item, { ...asInsert(change), id: row.id }));
+  const error = await failure(() => mutate(space, (tx) => tx.update(item, { ...asInsert(change), id: row.id }), [phone]));
   judged(error, next);
-  if (!poke) return row;
-  await phone.private.receive(poke);
-  return next;
+  return error === undefined ? next : row;
 }
 
 test('device writes: values read back unchanged on the writer, the cloud, another device, and a new install, or the write throws', async () => {
   await fc.assert(
-    fc.asyncProperty(itemRow, fc.option(itemChange, { nil: undefined }), async (row, change) => {
-      const { cloud, space, devices } = await synced(2);
-      const [phone, tablet] = devices;
-      if (!phone || !tablet) throw new Error('two devices');
-      const online = [phone.device, tablet.device];
-      const copies = [phone.storage, tablet.storage, cloud];
+    fc
+      .asyncProperty(itemRow, fc.option(itemChange, { nil: undefined }), async (row, change) => {
+        const { cloud, space, devices } = await synced(2);
+        const [phone, tablet] = devices;
+        if (!phone || !tablet) throw new Error('two devices');
+        const online = [phone.device, tablet.device];
+        const copies = [phone.storage, tablet.storage, cloud];
 
-      const error = await failure(() => write(phone.device, (tx) => tx.insert(item).values(asInsert(row))));
-      judged(error, row);
-      if (error !== undefined) {
+        const error = await failure(() => write(phone.device, (tx) => tx.insert(item).values(asInsert(row))));
+        judged(error, row);
+        if (error !== undefined) {
+          expect(phone.device.private.pending()).toEqual([]);
+          return holds([phone.storage], item, []);
+        }
+        holds([phone.storage], item, [readBack(row)]);
+        await upload(space, phone.device, online);
+        expect(space.held()).toEqual([]);
         expect(phone.device.private.pending()).toEqual([]);
-        return holds([phone.storage], item, []);
-      }
-      holds([phone.storage], item, [readBack(row)]);
-      await upload(space, phone.device, online);
-      expect(space.held()).toEqual([]);
-      expect(phone.device.private.pending()).toEqual([]);
-      holds(copies, item, [readBack(row)]);
+        holds(copies, item, [readBack(row)]);
 
-      const final = nonEmpty(change) ? await deviceUpdate(space, tablet.device, online, row, change) : row;
-      const late = await install(space, valueTables, []);
-      holds([...copies, late.storage], item, [readBack(final)]);
-      await write(phone.device, (tx) => tx.delete(item).where(eq(item.id, row.id)));
-      await upload(space, phone.device, [...online, late.device]);
-      holds([...copies, late.storage], item, []);
-    }),
+        const final = nonEmpty(change) ? await deviceUpdate(space, tablet.device, online, row, change) : row;
+        const late = await installed(space);
+        holds([...copies, late.storage], item, [readBack(final)]);
+        await write(phone.device, (tx) => tx.delete(item).where(eq(item.id, row.id)));
+        await upload(space, phone.device, [...online, late.device]);
+        holds([...copies, late.storage], item, []);
+      })
+      .afterEach(closeInstalled),
     { numRuns: 40 },
   );
 });
@@ -88,24 +79,24 @@ test('device writes: values read back unchanged on the writer, the cloud, anothe
 test('server writes: values reach an online device and a new install unchanged, or the server write throws', async () => {
   const how = fc.constantFrom('insert' as const, 'upsert' as const);
   await fc.assert(
-    fc.asyncProperty(itemRow, how, fc.option(itemChange, { nil: undefined }), async (row, how, change) => {
-      const { cloud, space, devices } = await synced(1);
-      const [phone] = devices;
-      if (!phone) throw new Error('one device');
+    fc
+      .asyncProperty(itemRow, how, fc.option(itemChange, { nil: undefined }), async (row, how, change) => {
+        const { cloud, space, devices } = await synced(1);
+        const [phone] = devices;
+        if (!phone) throw new Error('one device');
 
-      const { poke, error } = await serverWrite(space, (tx) => tx[how](item, asInsert(row)));
-      judged(error, row);
-      if (!poke) return holds([cloud], item, []);
-      await phone.device.private.receive(poke);
-      holds([phone.storage, cloud], item, [readBack(row)]);
+        const error = await failure(() => mutate(space, (tx) => tx[how](item, asInsert(row)), [phone.device]));
+        judged(error, row);
+        if (error !== undefined) return holds([cloud], item, []);
+        holds([phone.storage, cloud], item, [readBack(row)]);
 
-      const final = nonEmpty(change) ? await serverUpdate(space, phone.device, row, change) : row;
-      const late = await install(space, valueTables, []);
-      holds([phone.storage, late.storage, cloud], item, [readBack(final)]);
-      const deleted = space.mutate((tx) => tx.delete(item, { id: row.id }));
-      for (const device of [phone.device, late.device]) await device.private.receive(deleted);
-      holds([phone.storage, late.storage, cloud], item, []);
-    }),
+        const final = nonEmpty(change) ? await serverUpdate(space, phone.device, row, change) : row;
+        const late = await installed(space);
+        holds([phone.storage, late.storage, cloud], item, [readBack(final)]);
+        await mutate(space, (tx) => tx.delete(item, { id: row.id }), [phone.device, late.device]);
+        holds([phone.storage, late.storage, cloud], item, []);
+      })
+      .afterEach(closeInstalled),
     { numRuns: 40 },
   );
 });

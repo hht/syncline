@@ -4,8 +4,8 @@ import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import type { Space } from '../cloud/space.ts';
 import { Device } from './test-device.ts';
-import { failure, holds, rows, synced, upload } from './test-roundtrip.ts';
-import { install, write } from './test-schema.ts';
+import { closeInstalled, failure, holds, installed, rows, synced, upload } from './test-roundtrip.ts';
+import { write } from './test-schema.ts';
 import { deviceStorage } from './test-storage.ts';
 import { char, counter, item, pair, readBack, reading, sorted, valueTables } from './test-values.ts';
 
@@ -80,28 +80,30 @@ function remaining(all: Keyed[], table: SQLiteTable) {
 
 test('primary keys: rows addressed by text, integer, real, and composite keys update and delete identically on every device and the cloud', async () => {
   await fc.assert(
-    fc.asyncProperty(
-      fc.uniqueArray(fc.tuple(keyText, fate), { maxLength: 4, selector: ([key]) => key }),
-      fc.uniqueArray(fc.tuple(keyInteger, fate), { maxLength: 4, selector: ([key]) => plain(key) }),
-      fc.uniqueArray(fc.tuple(keyText, keyInteger, fate), { maxLength: 4, selector: ([name, n]) => JSON.stringify([name, n]) }),
-      fc.uniqueArray(fc.tuple(keyReal, fate), { maxLength: 4, selector: ([key]) => plain(key) }),
-      async (items, counters, pairs, readings) => {
-        const { cloud, space, devices } = await synced(2);
-        const [phone, tablet] = devices;
-        if (!phone || !tablet) throw new Error('two devices');
-        const all = keyed(items, counters, pairs, readings);
-        await write(phone.device, async (tx) => {
-          for (const { table, key, field } of all) await tx.insert(table).values({ ...key, [field]: 'phone' } as never);
-        });
-        await upload(space, phone.device, [phone.device, tablet.device]);
-        await play(space, phone.device, tablet.device, all);
-        expect(space.held()).toEqual([]);
+    fc
+      .asyncProperty(
+        fc.uniqueArray(fc.tuple(keyText, fate), { maxLength: 4, selector: ([key]) => key }),
+        fc.uniqueArray(fc.tuple(keyInteger, fate), { maxLength: 4, selector: ([key]) => plain(key) }),
+        fc.uniqueArray(fc.tuple(keyText, keyInteger, fate), { maxLength: 4, selector: ([name, n]) => JSON.stringify([name, n]) }),
+        fc.uniqueArray(fc.tuple(keyReal, fate), { maxLength: 4, selector: ([key]) => plain(key) }),
+        async (items, counters, pairs, readings) => {
+          const { cloud, space, devices } = await synced(2);
+          const [phone, tablet] = devices;
+          if (!phone || !tablet) throw new Error('two devices');
+          const all = keyed(items, counters, pairs, readings);
+          await write(phone.device, async (tx) => {
+            for (const { table, key, field } of all) await tx.insert(table).values({ ...key, [field]: 'phone' } as never);
+          });
+          await upload(space, phone.device, [phone.device, tablet.device]);
+          await play(space, phone.device, tablet.device, all);
+          expect(space.held()).toEqual([]);
 
-        const late = await install(space, valueTables, []);
-        for (const table of [item, counter, pair, reading])
-          holds([phone.storage, tablet.storage, late.storage, cloud], table, remaining(all, table));
-      },
-    ),
+          const late = await installed(space);
+          for (const table of [item, counter, pair, reading])
+            holds([phone.storage, tablet.storage, late.storage, cloud], table, remaining(all, table));
+        },
+      )
+      .afterEach(closeInstalled),
     { numRuns: 40 },
   );
 });
@@ -111,18 +113,20 @@ const utf8 = (text: string) => new TextEncoder().encode(text).length;
 test('primary keys near 512 bytes: the device refuses exactly the keys the cloud would, so no accepted write is held', async () => {
   const escaping = fc.constantFrom('a', '"', '\\', '\n', '\u0001', '\u007f', 'é', '€', '😀', '\u2028');
   await fc.assert(
-    fc.asyncProperty(fc.string({ unit: escaping, minLength: 120, maxLength: 280 }), keyInteger, async (name, n) => {
-      const { cloud, space, devices } = await synced(1);
-      const [phone] = devices;
-      if (!phone) throw new Error('one device');
-      const key = { name, n: plain(n) };
-      const error = await failure(() => write(phone.device, (tx) => tx.insert(pair).values(key)));
-      expect(error === undefined, error).toBe(utf8(JSON.stringify(key)) <= 512);
-      if (error !== undefined) return;
-      await upload(space, phone.device, [phone.device]);
-      expect(space.held()).toEqual([]);
-      holds([cloud, phone.storage], pair, [{ ...key, note: null }]);
-    }),
+    fc
+      .asyncProperty(fc.string({ unit: escaping, minLength: 120, maxLength: 280 }), keyInteger, async (name, n) => {
+        const { cloud, space, devices } = await synced(1);
+        const [phone] = devices;
+        if (!phone) throw new Error('one device');
+        const key = { name, n: plain(n) };
+        const error = await failure(() => write(phone.device, (tx) => tx.insert(pair).values(key)));
+        expect(error === undefined, error).toBe(utf8(JSON.stringify(key)) <= 512);
+        if (error !== undefined) return;
+        await upload(space, phone.device, [phone.device]);
+        expect(space.held()).toEqual([]);
+        holds([cloud, phone.storage], pair, [{ ...key, note: null }]);
+      })
+      .afterEach(closeInstalled),
     { numRuns: 40 },
   );
 });
@@ -146,6 +150,7 @@ test('a new install pulling in small chunks receives every row exactly once, wha
           await fresh.private.receive(space.pull(JSON.parse(JSON.stringify(fresh.private.pullRequest())), limit));
         expect(fresh.private.cookie()).toEqual(space.head());
         for (const table of [item, pair]) expect(rows(storage, table)).toEqual(rows(cloud, table));
+        fresh.close();
       },
     ),
     { numRuns: 30 },
