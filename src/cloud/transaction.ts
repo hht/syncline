@@ -26,18 +26,19 @@ export type Transaction = {
 };
 
 /**
- * Throws if a column value about to be stored is text that is not well-formed: SQLite stores a lone surrogate as-is and reads it back
- * replaced, so the row would never match itself again. Checks the values Drizzle binds; SQL expressions are not inspected.
+ * Throws if a column value about to be stored would not read back as written: SQLite stores a lone surrogate as-is and reads it back
+ * replaced, so the row would never match itself again, and stores NaN (which Drizzle makes of an invalid Date) as NULL.
+ * Checks the values Drizzle binds; SQL expressions are not inspected.
  */
 function wellFormed(table: SQLiteTable, row: Record<string, unknown>) {
-  const issues = Object.entries(getTableColumns(table))
-    .filter(([field, column]) => {
-      const value = row[field];
-      if (value === undefined || value === null || is(value, SQL)) return false;
-      const bound: unknown = column.mapToDriverValue(value);
-      return typeof bound === 'string' && !bound.isWellFormed();
-    })
-    .map(([field]) => ({ path: [field], message: 'text contains a lone surrogate' }));
+  const issues = Object.entries(getTableColumns(table)).flatMap(([field, column]) => {
+    const value = row[field];
+    if (value === undefined || value === null || is(value, SQL)) return [];
+    const bound: unknown = column.mapToDriverValue(value);
+    if (typeof bound === 'string' && !bound.isWellFormed()) return [{ path: [field], message: 'text contains a lone surrogate' }];
+    if (Number.isNaN(bound)) return [{ path: [field], message: 'number is NaN, which SQLite stores as NULL' }];
+    return [];
+  });
   if (issues.length > 0) throw new ValidationError(getTableConfig(table).name, issues);
 }
 

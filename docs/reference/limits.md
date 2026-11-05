@@ -14,6 +14,7 @@ Before integrating, read [Tables and columns](#tables-and-columns) and [Writes](
 | Primary key of a synced row | 512 bytes encoded as JSON (UTF-8) | Local writes throw `ValidationError` and roll back entirely; server writes throw `ValidationError`; the cloud holds pushed writes |
 | Single row | Synced columns total 1,900,000 bytes (DO rows cap at 2 MB, leaving headroom) | Local writes throw `ValidationError` and roll back entirely |
 | Text values | Well-formed UTF-16 (no lone surrogates) | Local writes throw and roll back entirely; server writes throw `ValidationError` (values given as SQL expressions or filled in by `$defaultFn` are not checked); the cloud holds pushed writes; schedule and exporter names throw |
+| Number values | Finite; NaN is refused because SQLite stores it as NULL (an invalid `Date` becomes NaN); -0 is stored as 0 | Local writes throw and roll back entirely, and reads given a NaN parameter throw; server writes throw `ValidationError` (values given as SQL expressions or filled in by `$defaultFn` are not checked); the cloud holds pushed writes |
 
 ### Writes
 

@@ -11,7 +11,7 @@ import type { Channel, Held, LocalDatabase, OpenOptions, Schema } from './syncli
 /**
  * Drives the client-side synchronization interface identically across iOS, Android, and web.
  * Forwards calls to engine; emits changes, held writes, and status to subscribers; resolves tokens and validates writes;
- * encodes tables as metadata on open; and marshals parameters/results via JSON (Uint8Array for BLOBs, explicit non-finite numbers).
+ * encodes tables as metadata on open; and marshals parameters/results via JSON (Uint8Array for BLOBs, explicit infinities, NaN refused).
  * What this module must not know: Host platform implementation, storage location, or internal sync protocol mechanics.
  */
 
@@ -23,13 +23,20 @@ export type Received = Delivered | { type: 'broken'; message: string };
 
 type Reply = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
-/** Encodes parameters as JSON: Uint8Array to byte array, non-finite numbers to explicit objects (NaN stored as null per SQLite). */
-export const encode = (value: unknown) =>
-  value instanceof Uint8Array
+/**
+ * Encodes parameters as JSON: Uint8Array to byte array, infinities to explicit objects.
+ * Throws on NaN, which neither JSON nor SQLite holds (JSON writes it as null, SQLite binds it as NULL): a write would silently store
+ * NULL and a read would match NULL. Drizzle maps an invalid Date to NaN.
+ * @see https://github.com/sqlite/sqlite/blob/version-3.54.1/src/vdbemem.c#L1092-L1098
+ */
+export function encode(value: unknown) {
+  if (Number.isNaN(value)) throw new Error('Parameter is NaN, which JSON and SQLite store as null (an invalid Date maps to NaN)');
+  return value instanceof Uint8Array
     ? Array.from(value)
     : typeof value === 'number' && (value === Infinity || value === -Infinity)
       ? { real: String(value) }
       : value;
+}
 
 /** Reconstructs Uint8Array from byte-array BLOB values in query result rows. */
 export const decodeRows = (rows: unknown[][]) =>

@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterEach, expect, test, vi } from 'vitest';
 import { flush } from '../test/test-drive.ts';
@@ -137,6 +138,19 @@ test('notifies subscribers via notifyAll: throwing subscriber does not prevent s
   space.onChange((tables) => seen.push(tables));
   const reported = reportedIn(() => worker().deliver(worker().last('open').instance, { type: 'changed', tables: ['note'] }));
   expect([seen, reported]).toEqual([[new Set(['note'])], [new Error('UI error')]]);
+});
+
+test('a read given a NaN parameter throws without reaching the Worker instead of matching NULL', async () => {
+  const { space } = await opened();
+  const posted = worker().posted.length;
+  await expect(
+    space.db
+      .select()
+      .from(note)
+      .where(eq(note.id, Number.NaN as never))
+      .all(),
+  ).rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringContaining('NaN') }) });
+  expect(worker().posted).toHaveLength(posted);
 });
 
 test('queries on closed database fail with "Local database is closed"; new events are not delivered to old subscribers', async () => {

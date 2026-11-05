@@ -1,11 +1,30 @@
 import { eq } from 'drizzle-orm';
 import { expect, test } from 'vitest';
-import { holds, rows, synced, upload } from './test-roundtrip.ts';
+import { failure, holds, rows, synced, upload } from './test-roundtrip.ts';
 import { write } from './test-schema.ts';
 import { item, readBack, reading } from './test-values.ts';
 
 // Column values survive every sync path unchanged (device write → push → poke → other devices and new installs; server write → poke
 // and pull), or the write that carries them throws when it is made, as the documented limits promise.
+
+const asInsert = (row: object) => row as typeof item.$inferInsert;
+
+// SQLite stores NaN as NULL, and Drizzle maps an invalid Date to NaN: writes refuse both instead of storing null silently.
+test('NaN and invalid dates are refused: a device write throws and stores nothing, a server write throws', async () => {
+  const { cloud, space, devices } = await synced(1);
+  const [phone] = devices;
+  if (!phone) throw new Error('one device');
+  for (const row of [
+    { id: 'n1', ratio: Number.NaN },
+    { id: 'n2', count: Number.NaN },
+    { id: 'n3', at: new Date(Number.NaN) },
+  ]) {
+    expect(await failure(() => write(phone.device, (tx) => tx.insert(item).values(asInsert(row))))).toMatch(/NaN/);
+    expect(await failure(() => space.mutate((tx) => tx.insert(item, asInsert(row))))).toMatch(/NaN/);
+  }
+  holds([phone.storage, cloud], item, []);
+  expect(phone.device.private.pending()).toEqual([]);
+});
 
 // Regressions found by value property tests: the device core parsed JSON numbers with serde_json's default float parser, so a double
 // with 16 or 17 significant digits came back one ulp off wherever it entered the core (a local write's parameters, pokes, and pulls).

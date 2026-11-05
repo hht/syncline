@@ -30,6 +30,16 @@ export async function upload(space: Space, from: Device, online: Device[]) {
   if (poke) for (const device of online) await device.private.receive(poke);
 }
 
+/** Error message of a write, or undefined when it succeeds. */
+export async function failure(run: () => unknown): Promise<string | undefined> {
+  try {
+    await run();
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 type Readable = Parameters<typeof drizzle>[0];
 
 /** Rows of a table as Drizzle reads them from device or cloud storage, sorted. */
