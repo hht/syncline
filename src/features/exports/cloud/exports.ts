@@ -55,7 +55,8 @@ export function exportChunk(poll: Space['poll'], from: string | undefined, limit
  * Must write changes and save next in a single destination transaction, only writing if the stored position still matches from
  * (ensuring delayed timed-out calls or overlapping retries do not overwrite newer progress);
  * reset chunks (first chunk of a fresh full snapshot) discard previously exported rows for this space before writing.
- * Throws on failure; identical chunk is redelivered next time.
+ * Throws on failure; the next run redelivers a chunk from the same position, read from the space as it is then (identical if it did not
+ * change).
  */
 export type Exporter = {
   position(): Promise<string | undefined>;

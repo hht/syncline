@@ -126,7 +126,14 @@ Restores a private space to `at` (millisecond timestamp).
 | `class SynclineSharedSpace<Env>` | Durable Object for shared spaces: `super(ctx, env, { ...definition, broadcast, validation?, events?, retired? })` (`retired` matches `SynclineSpace`); `protected mutate(write): Promise<void>` |
 | `class SynclineBroadcast<Env>` | Durable Object for broadcast shards: `super(ctx, env, sharedNamespace, events?)`. Alarms are managed internally (closing expired connections via alarm); do not override `alarm()` or call `setAlarm` directly |
 | `abstract class SynclineSharedEntry<Env>` | Cached entrypoint: implement `protected shared()`, returning the shared space namespace |
-| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`. `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules, if a bucket exceeds 256 bytes, if the JSON-encoded subscription exceeds 8,192 bytes, or if `expiresAt` is not a finite number (integrator errors) |
+| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`, where `entry` is `ctx.exports.<YourEntry>` itself (called with the subscription as props; an entry reached without props throws). `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules, if a bucket exceeds 256 bytes, if the JSON-encoded subscription exceeds 8,192 bytes, or if `expiresAt` is not a finite number (integrator errors) |
+
+
+### Security
+
+- Access ends when the token expires: HTTP pulls call `verify` every time, but an open connection keeps the space or subscription its token granted until `expiresAt`, so keep token lifetimes short where revoking access must take effect quickly.
+- Shared space pull URLs carry bucket parameters and primary keys (in the cursor, and base64-encoded, not encrypted, in the landed subscription), so they appear wherever URLs are logged: use opaque IDs rather than emails or names as bucket parameters and as primary keys of shared tables.
+- Syncline bounds the work of each pull but not how often a valid token pulls, and every pull the cache does not answer reads billed rows: add a rate limiting rule on the sync route if tokens can fall into hostile hands.
 
 ### Types
 
