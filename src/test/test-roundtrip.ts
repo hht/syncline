@@ -19,7 +19,7 @@ import { sorted, valueTables } from './test-values.ts';
 const opened: { close(): void }[] = [];
 
 /** Returns the device, for {@link closeInstalled} to close. */
-function tracked<T extends { close(): void }>(device: T) {
+export function tracked<T extends { close(): void }>(device: T) {
   opened.push(device);
   return device;
 }
