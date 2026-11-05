@@ -129,7 +129,7 @@ impl Connection {
         }
         self.mirror().connecting(ctx.device);
         let once = self.pull_needed;
-        self.start_pull(ctx, attempt, false, once, Some(token.clone()), After::Attach(token));
+        self.start_pull(ctx, attempt, once, Some(token.clone()), After::Attach(token));
     }
 
     /// Connects WebSocket after pulling to head: URL carries cookie, subprotocol carries token (private space also carries schema fingerprint)

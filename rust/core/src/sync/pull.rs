@@ -54,10 +54,9 @@ enum Step {
     Applying,
 }
 
-/// An ongoing pull catching up to current state.
+/// An ongoing pull catching up to current state: exists only while its attempt is live, as cancelling an attempt drops its pull.
 pub(super) struct Pull {
     attempt: u64,
-    connected: bool,
     /// Pull at least once (cloud requires pull before connect).
     first: bool,
     /// Number of consecutive failures while connected.
@@ -70,6 +69,13 @@ pub(super) struct Pull {
     step: Step,
 }
 
+impl Pull {
+    /// Pulling while connected (behind after a hint or verification) rather than before connecting.
+    fn connected(&self) -> bool {
+        matches!(self.then, After::PullUp)
+    }
+}
+
 mod advance;
 
 impl Connection {
@@ -78,19 +84,20 @@ impl Connection {
         self.pull.is_some()
     }
 
-    /// Pull until caught up: errors before connecting (`connected` is false) return to connection; errors while connected retry with backoff. Caller must ensure no pull is in flight.
-    pub(super) fn start_pull(&mut self, ctx: &mut Context, attempt: u64, connected: bool, once: bool, token: Option<String>, then: After) {
+    /// Pull until caught up: errors before connecting return to connection; errors while connected retry with backoff. Caller must ensure no pull is in flight.
+    pub(super) fn start_pull(&mut self, ctx: &mut Context, attempt: u64, once: bool, token: Option<String>, then: After) {
         self.update_with_local(ctx, |status| status.downloading = true);
-        self.pull = Some(Pull {
+        let pull = Pull {
             attempt,
-            connected,
             first: once,
             retries: 0,
             token,
             before: None,
             then,
             step: Step::Idle,
-        });
+        };
+        let connected = pull.connected();
+        self.pull = Some(pull);
         if connected {
             let delay = self.backoff.of(0, ctx.random);
             self.pull_wait(ctx, delay);
@@ -115,11 +122,6 @@ impl Connection {
     /// Pulls next chunk, or completes.
     fn iterate(&mut self, ctx: &mut Context) {
         let Some(pull) = &self.pull else { return };
-        let attempt = pull.attempt;
-        if !self.live(attempt) {
-            self.pull = None;
-            return;
-        }
         let first = pull.first;
         let more = first
             || match self.mirror().behind(ctx.device, ctx.now) {
@@ -208,7 +210,7 @@ impl Connection {
         if !matches!(pull.step, Step::Fetching { request: asked, .. } if asked == request) {
             return;
         }
-        let (attempt, connected) = (pull.attempt, pull.connected);
+        let attempt = pull.attempt;
         let Step::Fetching {
             sent,
             token,
@@ -252,7 +254,7 @@ impl Connection {
                     pull.step = Step::Applying;
                 }
             }
-            Err(error) => self.unusable(ctx, connected, Failure::new(error)),
+            Err(error) => self.thrown(ctx, Failure::new(error)),
         }
     }
 

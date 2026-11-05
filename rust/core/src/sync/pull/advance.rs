@@ -15,16 +15,14 @@ impl Connection {
         let Some(Pull {
             step: Step::Applying,
             attempt: pulling,
-            connected,
             ..
         }) = &self.pull
         else {
             return;
         };
-        if *pulling != attempt || !self.live(attempt) {
+        if *pulling != attempt {
             return;
         }
-        let connected = *connected;
         let landed = (|| -> Result<Result<Landed, Failure>, Failure> {
             if !self.mirror().receive(ctx.device, pulled, ctx.now)? {
                 let now = self.mirror().cookie(ctx.device)?;
@@ -56,34 +54,17 @@ impl Connection {
         })();
         match landed {
             Ok(result) => self.stepped(ctx, result),
-            Err(error) => self.unusable(ctx, connected, error),
-        }
-    }
-
-    /// Parse or database write error: handed back to connection if before connecting (reported by connection); reported and retried with backoff if connected.
-    pub(super) fn unusable(&mut self, ctx: &mut Context, connected: bool, error: Failure) {
-        if connected {
-            ctx.out.report(error.clone());
-            self.stepped(ctx, Err(error));
-        } else {
-            self.thrown(ctx, error);
+            Err(error) => self.thrown(ctx, error),
         }
     }
 
     /// Chunk pull completed (or errored): continues pulling if progressed; otherwise hands back to connection if before connecting, or waits with backoff if connected.
     pub(super) fn stepped(&mut self, ctx: &mut Context, result: Result<Landed, Failure>) {
         let Some(pull) = &self.pull else { return };
-        let (attempt, connected, before) = (pull.attempt, pull.connected, pull.before);
-        if connected
-            && self.live(attempt)
-            && let Err(error) = &result
-        {
+        let (connected, before) = (pull.connected(), pull.before);
+        if connected && let Err(error) = &result {
             self.update_with_local(ctx, |status| status.download_error = Some(error.clone()));
             self.status.fail(ctx.out, error);
-        }
-        if !self.live(attempt) {
-            self.pull = None;
-            return;
         }
         let stalled = match &result {
             Err(_) => true,
@@ -138,27 +119,22 @@ impl Connection {
         }
     }
 
-    /// Unexpected errors such as database read/write failures: handed back to connection if before connecting (fails and reports); if
-    /// connected, reported and retried with backoff like an unusable response, so the pull (and `sync()` waiting on it) does not stop.
+    /// Unusable responses and database errors: handed back to connection if before connecting (fails and reports); if connected,
+    /// reported and retried with backoff, so the pull (and `sync()` waiting on it) does not stop.
     pub(super) fn thrown(&mut self, ctx: &mut Context, error: Failure) {
-        if self.pull.as_ref().is_some_and(|pull| matches!(pull.then, After::PullUp)) {
+        if self.pull.as_ref().is_some_and(Pull::connected) {
             ctx.out.report(error.clone());
             return self.stepped(ctx, Err(error));
         }
         let Some(pull) = self.pull.take() else { return };
-        if self.live(pull.attempt) {
-            self.fail(ctx, pull.attempt, error.clone(), Kind::Download);
-            ctx.out.report(error);
-        }
+        self.fail(ctx, pull.attempt, error.clone(), Kind::Download);
+        ctx.out.report(error);
     }
 
     /// Pull finished (pull before connecting may carry an error): no longer downloading; proceeds with post-pull actions.
     pub(super) fn finish(&mut self, ctx: &mut Context, result: Result<(), Failure>) {
         let Some(pull) = self.pull.take() else { return };
         let attempt = pull.attempt;
-        if !self.live(attempt) {
-            return;
-        }
         if result.is_ok() {
             self.update_with_local(ctx, crate::sync::status::done_downloading);
         }

@@ -195,7 +195,7 @@ impl Connection {
                 // Starts pull first (synchronously marks downloading) before marking connected: waiting callers do not succeed prematurely
                 let busy = self.pulling();
                 if !busy {
-                    self.start_pull(ctx, attempt, true, false, None, After::PullUp);
+                    self.start_pull(ctx, attempt, false, None, After::PullUp);
                 }
                 self.update_with_local(ctx, |status| status.connected = true);
                 if busy && self.mirror().stale(ctx.device) {
@@ -242,7 +242,7 @@ impl Connection {
             return;
         }
         match self.mirror().behind(ctx.device, ctx.now) {
-            Ok(true) if !self.pulling() => self.start_pull(ctx, attempt, true, false, None, After::PullUp),
+            Ok(true) if !self.pulling() => self.start_pull(ctx, attempt, false, None, After::PullUp),
             // A pull in flight keeps pulling while behind
             Ok(_) => {}
             Err(error) => self.broken(ctx, attempt, error),
