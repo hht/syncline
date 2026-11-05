@@ -10,7 +10,8 @@ publish = false
 # session: records local write changes; hooks: authorizer (rejects PRAGMAs during integrator statement execution)
 rusqlite = { version = "0.41.1", features = ["session", "hooks"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: parses every double exactly (the default parser can be an ulp off for 16 or 17 significant digits), so reals read back as written
+serde_json = { version = "1", features = ["float_roundtrip"] }
 self_cell = "1"
 wasm-bindgen = "=0.2.130"
 
