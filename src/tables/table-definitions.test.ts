@@ -209,6 +209,18 @@ test('cloud: rejects adding non-null columns without static defaults to existing
   expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
 });
 
+test('cloud: an existing table keeps its primary key, whatever order the stored columns are in, and the storage type of each synced column', () => {
+  const storage = cloud('CREATE TABLE pair ("right" TEXT, "left" TEXT, PRIMARY KEY ("left", "right")) WITHOUT ROWID');
+  expect(() => defineTables(storage, [pair])).not.toThrow();
+  const single = sqliteTable('pair', { left: text().primaryKey(), right: text().notNull() });
+  expect(() => defineTables(storage, [single])).toThrow(
+    'Primary key changed on table pair (database has left, right, schema declares left)',
+  );
+  expect(() => defineTables(cloud(...workoutWithDone), [sqliteTable('workout', { id: text().primaryKey(), done: text() })])).toThrow(
+    'Table workout.done type mismatch',
+  );
+});
+
 test('cloud: a declaration must use the case its table is stored under, as table names ignore case', () => {
   const storage = cloud(...workoutWithDone);
   const Workout = sqliteTable('Workout', { id: text().primaryKey() });

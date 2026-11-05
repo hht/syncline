@@ -3,14 +3,15 @@ import { expect, test } from 'vitest';
 import { retiredGrace } from '../../cloud/evolution.ts';
 import { Space } from '../../cloud/space.ts';
 import { expectBounded, fillCommits, fillRows, measured, type Reads, readBound, scale } from '../../cloudflare/test-reads.ts';
-import { note, tag } from '../../cloudflare/test-worker.ts';
+import { note, plan, tag } from '../../cloudflare/test-worker.ts';
 import { readRows, truncateBytes, truncateRows, writeRows } from '../../common/limits.ts';
 import { chunkLimit, type Poke, socketLimit } from '../../common/protocol.ts';
 import type { PullRequest } from '../../common/pull-url.ts';
 
 // Private space per-entrypoint rowsRead bounds independent of scale: seeds 20k items (scale) across commits, tables, held writes, and child tables.
 
-const tables = [note, tag];
+// The tables TestSpace declares, so the Space built on its storage finds them unchanged.
+const tables = [note, tag, plan];
 
 /** Runs body within a new space object. */
 const inSpace = <T>(body: Parameters<typeof measured<T>>[1]) => measured(env.SPACE.getByName(crypto.randomUUID()), body);

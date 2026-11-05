@@ -47,6 +47,18 @@ test.for(['update', 'upsert'] as const)('a server %s giving only the primary key
   expect(pushedSince(space, base).patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, name: 'squat' } }]);
 });
 
+test.for([{ name: 'squat' }, { id: null, name: 'squat' }])(
+  'a server write without its primary key (%o) throws and writes nothing, rather than letting SQLite assign a rowid devices never learn',
+  (row) => {
+    const storage = cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)');
+    const space = new Space(storage, [item]);
+    const base = space.head();
+    expect(() => space.mutate((tx) => tx.insert(item, row as never))).toThrow('Write on table item is missing primary key id');
+    expect(space.head()).toEqual(base);
+    expect(storage.sql.exec('SELECT * FROM item').toArray()).toEqual([]);
+  },
+);
+
 const pair = sqliteTable(
   'pair',
   {

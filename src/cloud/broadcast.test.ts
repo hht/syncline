@@ -176,6 +176,23 @@ test('a round arriving during a catch-up query after a shard restart reaches the
   expect(hinted(socket)).toEqual(space().head());
 });
 
+test('a query needing a newer round than the one in flight queries again rather than taking the stale result', async () => {
+  const { space, shard, connect, asked } = await setup();
+  const viewer = await connect();
+  asked.length = 0;
+  // Past the cached query's interval, the catch-up query of this connection reads the round at the current head and is still in flight.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10_000);
+  const connecting = connect('admin');
+  const base = space().mutate((tx) => tx.upsert(program, { id: 'p2', status: 'published' }), 0).cookie;
+  space().mutate((tx) => tx.upsert(program, { id: 'p3', status: 'published' }), 0);
+  await shard().notify(space().round(64_000, base));
+  await connecting;
+  vi.useRealTimers();
+  expect(asked).toEqual(['latest', 'latest']);
+  expect(hinted(viewer)).toEqual(space().head());
+});
+
 test('skips closing sockets without error during notify and delivers to open sockets without re-pushing duplicate versions', async () => {
   const { commit, connect, space, shard } = await setup();
   const closing = await connect();

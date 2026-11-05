@@ -1,8 +1,8 @@
-import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { random, stepped } from '../test/test-random.ts';
 import { ScheduleModel, type When } from '../test/test-schedule.ts';
 import { lease, Schedule } from './schedule.ts';
+import { flush, scheduleTable } from './test-schedule-table.ts';
 
 // Schedule simulation: a random seed picks the actions of model/Schedule.tla (By, Ensure, At, and cancel calls; the alarm firing;
 // tasks finishing; crashers and external resets cutting the alarm; leases and days passing) and drives the Schedule class with them
@@ -30,27 +30,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
-const sqlite3 = await sqlite3InitModule();
-
-/** In-memory schedule table with the schema the cloud creates; exec returns rows the way Durable Object SQL storage does, as the schedule reads them. */
-function scheduleTable() {
-  const db = new sqlite3.oo1.DB(':memory:');
-  db.exec(
-    'CREATE TABLE _syncline_schedule (name TEXT PRIMARY KEY, at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0, resets INTEGER NOT NULL DEFAULT 0)',
-  );
-  return {
-    exec: (sql: string, ...bind: (string | number)[]) => {
-      const rows = db.exec({ sql, bind, returnValue: 'resultRows', rowMode: 'object' });
-      return { toArray: () => rows };
-    },
-  };
-}
-
-/** Lets the alarm's promises settle (the schedule awaits storage calls between steps). */
-const flush = async () => {
-  for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
-};
 
 class Simulation {
   readonly steps: string[] = [];

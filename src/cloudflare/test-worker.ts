@@ -9,7 +9,8 @@ import {
   SynclineSpace,
 } from 'syncline/cloudflare';
 
-// Test Worker: private space with note and tag tables forwarded via {@link forward}; shared catalog space (/catalog) forwarded via {@link forwardShared}.
+// Test Worker: private space with note and tag tables (and read-only plan) forwarded via {@link forward}; shared catalog space (/catalog)
+// forwarded via {@link forwardShared}.
 
 export const note = sqliteTable('note', { id: text().primaryKey(), text: text().notNull() });
 export const tag = sqliteTable('tag', {
@@ -17,6 +18,20 @@ export const tag = sqliteTable('tag', {
   note_id: text()
     .notNull()
     .references(() => note.id),
+});
+/** Written only by the cloud. */
+export const plan = sqliteTable('plan', { id: text().primaryKey(), text: text().notNull() });
+
+/** Rejects rows whose column is "forbidden", passing every other value through to the remaining checks. */
+const allowed = (column: string) => ({
+  '~standard': {
+    version: 1 as const,
+    vendor: 'test',
+    validate: (value: unknown) =>
+      (value as Record<string, unknown>)[column] === 'forbidden'
+        ? { issues: [{ message: `forbidden ${column}`, path: [column] }] }
+        : { value },
+  },
 });
 
 /** Records triggered scheduled chore names in object storage for test inspection via RPC. */
@@ -40,8 +55,25 @@ export class TestSpace extends SynclineSpace<Env> {
         ctx.storage.kv.put(`${key}:position`, next);
       },
     });
-    // Sets alarm time budget to 1 second so hanging exporter tests avoid 10-minute timeouts.
-    super(ctx, env, { note, tag }, { exports: { stats: destination('exported'), search: destination('searched') }, exportBudget: 1000 });
+    super(
+      ctx,
+      env,
+      { note, tag, plan },
+      {
+        readOnly: [plan],
+        validation: new Map([[note, allowed('text')]]),
+        retired: ['note.color'],
+        events: (event) => ctx.storage.kv.put('events', [...(ctx.storage.kv.get<string[]>('events') ?? []), event.type]),
+        exports: { stats: destination('exported'), search: destination('searched') },
+        // Sets alarm time budget to 1 second so hanging exporter tests avoid 10-minute timeouts.
+        exportBudget: 1000,
+      },
+    );
+  }
+
+  /** Returns the types of events reported so far for test assertions via RPC. */
+  events() {
+    return this.ctx.storage.kv.get<string[]>('events') ?? [];
   }
 
   /** Returns chunks received by the exported destination for test assertions via RPC. */
@@ -99,6 +131,11 @@ export class TestSpace extends SynclineSpace<Env> {
     return this.held();
   }
 
+  /** Resubmits a held write with its original changes. */
+  retryHeld(client: string, id: number) {
+    this.resubmit(client, id);
+  }
+
   /** Server write: inserts notes; rolls back and rethrows if fail is true. */
   importNotes(notes: { id: string; text: string }[], fail = false) {
     this.mutate((tx) => {
@@ -120,7 +157,12 @@ const catalog = {
 
 export class TestCatalog extends SynclineSharedSpace<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, { ...catalog, broadcast: (bindings) => bindings.CATALOG_BROADCAST });
+    super(ctx, env, {
+      ...catalog,
+      validation: new Map([[program, allowed('status')]]),
+      retired: ['program.color'],
+      broadcast: (bindings) => bindings.CATALOG_BROADCAST,
+    });
   }
 
   /** Server write: upserts a program with the given status. */

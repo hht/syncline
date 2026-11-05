@@ -1,6 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
+import type { Event } from '../cloud/events.ts';
 import { evolve, nextDrop, retiredGrace } from '../cloud/evolution.ts';
 import type { Storage } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
@@ -63,13 +64,18 @@ test('table names ignore case in Durable Object SQLite: another case is refused,
   });
 });
 
-/** Test helper running Upkeep scenarios in an isolated Durable Object. */
-async function withUpkeep(run: (make: (options: ConstructorParameters<typeof Upkeep>[5]) => Upkeep, timetable: Schedule) => Promise<void>) {
+type Make = (options?: ConstructorParameters<typeof Upkeep>[5], indexes?: string[]) => Upkeep;
+type Query = (text: string, ...bindings: unknown[]) => Record<string, unknown>[];
+
+/** Test helper running Upkeep scenarios in an isolated Durable Object, recording the events every Upkeep it makes reports. */
+async function withUpkeep(run: (make: Make, timetable: Schedule, query: Query, events: Event[]) => Promise<void>) {
   const { name } = await online(1);
   await runInDurableObject(object(name), async (_: TestSpace, state) => {
     const timetable = new Schedule(state.storage);
-    const query = (text: string, ...bindings: unknown[]) => state.storage.sql.exec(text, ...bindings).toArray();
-    await run((options) => new Upkeep(query, [], [], timetable, () => undefined, options), timetable);
+    const query: Query = (text, ...bindings) => state.storage.sql.exec(text, ...bindings).toArray();
+    const events: Event[] = [];
+    const make: Make = (options, indexes = []) => new Upkeep(query, indexes, [], timetable, (event) => events.push(event), options);
+    await run(make, timetable, query, events);
   });
 }
 
@@ -103,5 +109,29 @@ test('schedules bucket row counting on open when work is pending, stepping until
     timetable.cancel('syncline:count');
     make({ counting: { ...counting, pending: () => false } });
     expect(timetable.when('syncline:count')).toBeUndefined();
+  });
+});
+
+test('builds pending indexes one per step, and reports a failing step to events with the step that failed', async () => {
+  await withUpkeep(async (make, _, query, events) => {
+    const chore = make(undefined, ['CREATE INDEX first ON note (text)', 'CREATE INDEX second ON note (id, text)']).chore('syncline:upkeep');
+    const built = () => query("SELECT name FROM sqlite_schema WHERE name IN ('first', 'second') ORDER BY name").map((row) => row.name);
+    expect(await chore?.run()).toBe(true);
+    expect(built()).toEqual(['first']);
+    expect(await chore?.run()).toBe(false);
+    expect(built()).toEqual(['first', 'second']);
+    const broken = make({ truncation: { commitsOverLimit: () => false, truncate: () => false } }, ['CREATE INDEX third ON missing (id)']);
+    // The schedule hands a rejected run to failed.
+    const failing = broken.chore('syncline:upkeep');
+    failing?.failed(
+      await Promise.resolve()
+        .then(() => failing.run())
+        .catch((error: unknown) => error),
+    );
+    broken.chore('syncline:truncate')?.failed('disk full');
+    expect(events).toEqual([
+      { type: 'upkeep.failed', step: 'index', reason: expect.stringContaining('no such table: main.missing') },
+      { type: 'upkeep.failed', step: 'truncate', reason: 'disk full' },
+    ]);
   });
 });

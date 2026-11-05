@@ -50,21 +50,42 @@ test('cloud history replaced after export (point-in-time recovery): exporter in 
   ]);
 });
 
-test('exporter added by a deploy: the next actor start exports an idle space to it, without waiting for a write', async () => {
+/** Exports a first write, then restarts the object after `before` leaves storage as the previous release did (a deploy). */
+async function deployedAfterExport(before: (storage: DurableObjectStorage) => void) {
   const { name, phone: device } = await online(1);
   device.push(squat);
   await device.next();
   await exportedOnce(name);
-  // Simulates a deploy adding the search exporter: the previous release knew only stats, and search has received nothing.
-  await runInDurableObject(object(name), (_: TestSpace, state) => {
-    state.storage.kv.put('syncline:exporters', ['stats']);
-    state.storage.kv.delete('searched');
-    state.storage.kv.delete('searched:position');
-  });
+  await runInDurableObject(object(name), (_: TestSpace, state) => before(state.storage));
   // Aborts in a later call: aborting inside the same call would discard its uncommitted writes.
   await runInDurableObject(object(name), (_: TestSpace, state) => state.abort('Deploy')).catch(() => undefined);
+  return name;
+}
+
+test('exporter added by a deploy: the next actor start exports an idle space to it, without waiting for a write', async () => {
+  // The previous release knew only stats, and search has received nothing.
+  const name = await deployedAfterExport((storage) => {
+    storage.kv.put('syncline:exporters', ['stats']);
+    storage.kv.delete('searched');
+    storage.kv.delete('searched:position');
+  });
   await exportedOnce(name, () => object(name).searched());
   expect(await object(name).exported()).toEqual([firstExport]);
+});
+
+test('a table entering sync with a deploy is exported by the next actor start, without waiting for a write', async () => {
+  // The previous release lacked plan in its schema: a row the cloud already held there enters sync on the next start.
+  const name = await deployedAfterExport((storage) => {
+    storage.sql.exec("DELETE FROM _syncline_synced WHERE tbl = 'plan'");
+    storage.sql.exec("INSERT INTO plan VALUES ('p1', 'upgrade')");
+  });
+  expect(await alarmAfter(object(name), maxExportDelay)).toBe(true);
+  expect(((await object(name).exported()) as { patch: unknown[] }[]).at(-1)?.patch).toContainEqual({
+    op: 'put',
+    table: 'plan',
+    key: { id: 'p1' },
+    row: { id: 'p1', text: 'upgrade' },
+  });
 });
 
 /** A device writes initial entry, stats exporter fails repeatedly. */
