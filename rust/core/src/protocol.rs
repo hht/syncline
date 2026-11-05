@@ -110,11 +110,8 @@ pub struct Chunk {
 
 /// Shared space pull response when the cookie is not in cloud current history (private spaces do not return this).
 #[derive(Clone, Debug, Deserialize)]
-#[expect(clippy::struct_field_names, reason = "field name matches cloud message key")]
 pub struct Reset {
     pub reset: bool,
-    pub space: Option<String>,
-    pub sub: Option<String>,
     pub incarnation: Option<i64>,
 }
 

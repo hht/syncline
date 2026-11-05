@@ -7,11 +7,10 @@ import type { SyncStatus } from './status.ts';
 /**
  * Bridges errors across the Worker-page boundary and from the Rust core back to JavaScript.
  *
- * Structured cloning in `postMessage` preserves only standard error names and messages (call stacks differ across browsers). Errors that
- * integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatch`, `PendingWrites`, `VersionMismatch`,
- * `SchemaMismatch`, and `Reject`) are serialized and reconstructed in the page identical to native mobile. Other errors retain only their
- * message. Errors returned by the Rust core follow this same shape, as do sync status errors (`downloadError`, `uploadError`)
- * reconstructed via `deserializeStatus`. The two device-only error classes (`AccountMismatch`, `PendingWrites`) are defined here.
+ * Structured cloning in `postMessage` preserves only standard error names and messages (call stacks differ across browsers). The Rust
+ * core reports errors that integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatch`, `PendingWrites`,
+ * `VersionMismatch`, `SchemaMismatch`, and `Reject`) in the serialized shape, and the page reconstructs them identical to native mobile,
+ * as it does sync status errors (`downloadError`, `uploadError`) via `deserializeStatus`. Errors the Worker raises retain only their message. The two device-only error classes (`AccountMismatch`, `PendingWrites`) are defined here.
  * What this module must not know: Where errors originate or how the page handles them.
  * @see https://html.spec.whatwg.org/multipage/structured-data.html#serializable-objects
  */
@@ -66,13 +65,8 @@ export type SerializedError = {
   reject?: Record<string, never>;
 };
 
+/** Serializes an error the Worker itself raised; the Worker never constructs the classes above, which only the Rust core reports. */
 export function serializeError(error: unknown): SerializedError {
-  if (error instanceof ValidationError) return { message: error.message, validation: { table: error.table, issues: error.issues } };
-  if (error instanceof AccountMismatch) return { message: error.message, account: { stored: error.stored, cloud: error.cloud } };
-  if (error instanceof PendingWrites) return { message: error.message, pending: { owner: error.owner, count: error.count } };
-  if (error instanceof VersionMismatch) return { message: error.message, version: error.cloud };
-  if (error instanceof SchemaMismatch) return { message: error.message, schema: { kind: error.kind, names: error.names } };
-  if (error instanceof Reject) return { message: error.message, reject: {} };
   if (!(error instanceof Error)) return { message: String(error) };
   return error.stack === undefined ? { message: error.message } : { message: error.message, stack: error.stack };
 }

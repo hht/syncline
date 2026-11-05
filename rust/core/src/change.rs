@@ -165,21 +165,14 @@ fn shortest(number: f64) -> (String, i32) {
     if exact_exponent != exponent || !rest.starts_with('5') || rest.bytes().skip(1).any(|digit| digit != b'0') {
         return (digits, exponent);
     }
-    // Rounds the truncated digits up when their last digit is odd; a carry past the first digit leaves Rust's digits.
+    // A tie (N + 1/2) * 10^t with truncated digits N is a double only if t < 0 and 5^-t divides 2N + 1, so N ends in 2 or 7: rounding to
+    // even adds one to a 7 and never carries.
     let mut even = exact.as_bytes()[..digits.len()].to_vec();
-    if even.last().is_some_and(|digit| (digit - b'0') % 2 == 1) {
-        for digit in even.iter_mut().rev() {
-            if *digit == b'9' {
-                *digit = b'0';
-            } else {
-                *digit += 1;
-                break;
-            }
-        }
-    }
+    let last = even.last_mut().expect("digits are not empty");
+    *last += (*last - b'0') % 2;
     let even = String::from_utf8(even).expect("ASCII digits");
-    // Only digits that read back as the number qualify.
-    if even.starts_with('0') || format!("{}.{}e{exponent}", &even[..1], &even[1..]).parse::<f64>() != Ok(number) {
+    // Below a power of two doubles are spaced half as wide, so the even digits under it may read back as another number.
+    if format!("{}.{}e{exponent}", &even[..1], &even[1..]).parse::<f64>() != Ok(number) {
         return (digits, exponent);
     }
     (even, exponent)
@@ -303,6 +296,8 @@ mod tests {
             (562_949_953_421_312.0 + 0.25, "562949953421312.2"),
             (562_949_953_421_313.0 + 0.75, "562949953421313.8"),
             (999_999_999_999_999.0 + 0.25, "999999999999999.2"),
+            // A tie whose even digits (5.960464477539062e-8) lie below the power of two and read back as the double under it.
+            (2f64.powi(-24), "5.960464477539063e-8"),
         ] {
             assert_eq!(js_number(number).as_deref(), Some(written), "{number}");
         }

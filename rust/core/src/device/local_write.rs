@@ -119,10 +119,4 @@ impl Device {
         }
         stopped.map(|_| ())
     }
-
-    /// Returns whether a local write is currently open.
-    #[must_use]
-    pub fn writing(&self) -> bool {
-        self.writing
-    }
 }

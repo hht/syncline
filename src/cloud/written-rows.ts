@@ -34,7 +34,8 @@ export class WrittenRows {
    * Measures size incrementally: if the addition exceeds limit, buffered rows are dropped to avoid holding large writes in memory.
    */
   record<T>(commit: (touched: Touched) => T): T {
-    let touched: RowOp[] | undefined = this.#ops && [];
+    const ops = this.#ops;
+    let touched: RowOp[] | undefined = ops && [];
     let bytes = this.#bytes;
     const result = commit((table, key, row) => {
       if (!touched) return;
@@ -43,19 +44,16 @@ export class WrittenRows {
       if (bytes > this.#limit) touched = undefined;
       else touched.push(op);
     });
-    if (!touched) this.#ops = undefined;
-    else for (const op of touched) this.#add(op);
+    if (!ops || !touched) this.#ops = undefined;
+    else
+      for (const op of touched) {
+        // Keeps only the latest value per row; replacing an earlier one keeps the total within the limit checked above.
+        const id = rowId(op.table, op.key);
+        const before = ops.get(id);
+        this.#bytes += utf8Bytes(JSON.stringify(op)) - (before ? utf8Bytes(JSON.stringify(before)) : 0);
+        ops.set(id, op);
+      }
     return result;
-  }
-
-  /** Adds a row operation, keeping only the latest value per row and discarding the buffer if limit is exceeded. */
-  #add(op: RowOp) {
-    if (!this.#ops) return;
-    const id = rowId(op.table, op.key);
-    const before = this.#ops.get(id);
-    this.#bytes += utf8Bytes(JSON.stringify(op)) - (before ? utf8Bytes(JSON.stringify(before)) : 0);
-    this.#ops.set(id, op);
-    if (this.#bytes > this.#limit) this.#ops = undefined;
   }
 
   /** Returns the array of operations for the poke, or undefined if the byte limit was exceeded or pokes are disabled. */

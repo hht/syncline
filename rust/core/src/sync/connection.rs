@@ -136,11 +136,6 @@ impl Connection {
         Mirror(&self.channel)
     }
 
-    #[must_use]
-    pub fn status(&self) -> &SyncStatus {
-        self.status.get()
-    }
-
     /// Emits current sync status (when app begins observing space)
     pub fn announce(&self, out: &mut Out) {
         out.push(Instruction::Status {

@@ -94,12 +94,6 @@ impl Client {
         &self.device
     }
 
-    /// Returns the sync connection for a channel.
-    #[must_use]
-    pub fn connection(&self, channel: &str) -> Option<&Connection> {
-        self.connections.get(channel)
-    }
-
     /// Dispatches an input event at `now` (in milliseconds), returning accumulated instructions.
     pub fn control(&mut self, input: Input, now: f64) -> Vec<Instruction> {
         let mut jobs = Vec::new();

@@ -15,7 +15,7 @@ use syncline::client::{Client, Failure, Unreadable, unreadable};
 use syncline::database::Database as Store;
 use syncline::error::Error;
 use syncline::tables::{self, Table};
-use syncline::{internal, limits, values};
+use syncline::{limits, values};
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "coverage")]
@@ -129,14 +129,6 @@ impl Database {
         Ok(json!({ "columns": columns, "rows": rows, "written": written }).to_string())
     }
 
-    /// Executes a semicolon-separated batch of parameterless SQL statements.
-    ///
-    /// # Errors
-    /// Returns an error if any statement in the batch fails.
-    pub fn batch(&self, sql: &str) -> Result<(), JsError> {
-        self.store().connection().execute_batch(sql).map_err(self::sql)
-    }
-
     /// Defines tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
     ///
     /// # Errors
@@ -144,14 +136,6 @@ impl Database {
     pub fn define(&self, tables: &str) -> Result<(), JsError> {
         let tables: Vec<Table> = parsed(tables).map_err(failure)?;
         tables::define(self.store().connection(), &tables).map_err(failure)
-    }
-
-    /// Prepares internal tables, upgrading or downgrading them to match the code version.
-    ///
-    /// # Errors
-    /// Returns an error if execution fails; the database remains untouched.
-    pub fn prepare(&self) -> Result<(), JsError> {
-        internal::prepare(self.store().connection()).map_err(sql)
     }
 
     #[wasm_bindgen(js_name = inTransaction)]
@@ -252,12 +236,8 @@ fn sql(error: rusqlite::Error) -> JsError {
 fn failure(error: Error) -> JsError {
     match error {
         Error::Sql(error) => sql(error),
-        Error::Reject(message) => JsError::new(&json!({ "reject": message }).to_string()),
-        Error::Invalid { table, issues } => JsError::new(&json!({ "invalid": { "table": table, "issues": issues } }).to_string()),
         Error::Failed(message) => JsError::new(&message),
         // Errors during opening: formatted identically to Failure returned by control.
-        error @ (Error::PendingWrites { .. } | Error::AccountMismatch { .. }) => {
-            JsError::new(&serde_json::to_string(&Failure::from(error)).expect("Failure always serializes to JSON"))
-        }
+        error => JsError::new(&serde_json::to_string(&Failure::from(error)).expect("Failure always serializes to JSON")),
     }
 }

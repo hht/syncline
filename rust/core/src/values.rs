@@ -57,16 +57,20 @@ pub fn run(db: &Connection, mut statement: CachedStatement<'_>, params: &[Json])
 
 /// # Errors
 /// Returns an error if not a number, string, boolean, null, byte array, or infinity.
+///
+/// # Panics
+/// Does not panic: every JSON number converts to f64.
 pub fn value_of(json: &Json) -> Result<Value, Error> {
     Ok(match json {
         Json::Null => Value::Null,
         Json::Bool(value) => Value::Integer(i64::from(*value)),
         // JS numbers are doubles: an integer past the safe range stands for the double it rounds to, and binding it as an integer
         // would compare unequal to that double in a real column (SQLite compares integers and reals exactly).
-        Json::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(integer), _) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => Value::Integer(integer),
-            (_, Some(real)) => Value::Real(real),
-            (_, None) => return Err(Error::Failed(format!("failed to parse number in parameters: {number}"))),
+        Json::Number(number) => match number.as_i64() {
+            Some(integer) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => Value::Integer(integer),
+            // Without serde_json's arbitrary_precision every number has an f64.
+            // @see https://github.com/serde-rs/json/blob/v1.0.154/src/number.rs#L162-L171
+            _ => Value::Real(number.as_f64().expect("JSON number converts to f64")),
         },
         Json::String(text) => Value::Text(text.clone()),
         Json::Array(bytes) => Value::Blob(

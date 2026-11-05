@@ -7,7 +7,6 @@
 
 use super::{Host, now};
 use crate::random;
-use std::sync::atomic::Ordering;
 use syncline::client::{Client, Failure, Input, Instruction, Opening};
 use syncline::database::Database;
 
@@ -87,12 +86,9 @@ impl Host {
         self.ticket = None;
         self.closed = true;
         self.timers.clear();
-        for (_, socket) in self.sockets.drain() {
-            socket.close();
-        }
-        for (_, aborted) in self.requests.drain() {
-            aborted.store(true, Ordering::Relaxed);
-        }
+        // Dropping a socket closes it.
+        self.sockets.clear();
+        self.requests.clear();
         // Closed while waiting to open: open call fails with closed, buffered calls fail in order, followed by close reply.
         if let Some(Waiting { id, later, .. }) = self.waiting.take() {
             self.deliver(vec![failed(id, Failure::new("local database is closed"))]);

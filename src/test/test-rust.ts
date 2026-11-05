@@ -1,12 +1,10 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { coverageOutput, wasmOutput } from '../build-wasm.mjs';
-import { Reject } from '../common/storage.ts';
 import { decodeRows, encode } from '../expo/client.ts';
 import { deserializeError } from '../expo/errors.ts';
 import type { Delivered, Input, Shell } from '../expo/shell.ts';
 import type { TableDefinition } from '../tables/table-definitions.ts';
-import { type Issue, ValidationError } from '../tables/validation.ts';
 import { cursor, savepoint } from './test-driver.ts';
 
 // Rust device engine compiled to WASM: loading, device database, and invoking entrypoints via Shell.
@@ -14,9 +12,7 @@ import { cursor, savepoint } from './test-driver.ts';
 /** WASM-exported device database: standard SQL storage before open; after open acts as sync device engine communicating via control. */
 export type Database = {
   exec(sql: string, bindings: string): string;
-  batch(sql: string): void;
   define(tables: string): void;
-  prepare(): void;
   inTransaction(): boolean;
   open(options: string, host: { randomUUID(): string; random(): number }, now: number): string;
   control(input: string, now: number): string;
@@ -31,11 +27,6 @@ export function call<T>(body: () => T): T {
     return body();
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    if (message.startsWith('{"reject":')) throw new Reject((JSON.parse(message) as { reject: string }).reject);
-    if (message.startsWith('{"invalid":')) {
-      const { table, issues } = (JSON.parse(message) as { invalid: { table: string; issues: Issue[] } }).invalid;
-      throw new ValidationError(table, issues);
-    }
     // Open database errors map to Failure objects matching control responses.
     if (message.startsWith('{"message":')) throw deserializeError(JSON.parse(message));
     throw error;
@@ -108,9 +99,8 @@ function asStorage(db: Database) {
   const inTransaction = () => db.inTransaction();
   return {
     sql,
-    transactionSync: <T>(body: () => T) => savepoint((query) => db.batch(query), inTransaction, body),
+    transactionSync: <T>(body: () => T) => savepoint((query) => db.exec(query, '[]'), inTransaction, body),
     inTransaction,
-    prepare: () => db.prepare(),
     database: db,
     define: (tables: TableDefinition[]) => db.define(JSON.stringify(tables)),
     image: (): Uint8Array<ArrayBuffer> => new Uint8Array(db.image()),

@@ -16,11 +16,10 @@ use crate::{files, http, socket};
 use lifecycle::{Waiting, failed};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use syncline::client::{Client, Failure, Input, Instruction, Opening, Unreadable, call_id, unreadable};
@@ -64,8 +63,8 @@ pub struct Host {
     closed: bool,
     timers: HashMap<u32, Instant>,
     sockets: HashMap<u32, socket::Socket>,
-    /// In-flight requests: flag set on abort to discard incoming responses.
-    requests: HashMap<u32, Arc<AtomicBool>>,
+    /// In-flight requests: responses to requests no longer here (aborted, or closed) are discarded.
+    requests: HashSet<u32>,
     network: socket::Network,
     agent: ureq::Agent,
 }
@@ -82,7 +81,7 @@ impl Host {
             closed: false,
             timers: HashMap::new(),
             sockets: HashMap::new(),
-            requests: HashMap::new(),
+            requests: HashSet::new(),
             network: socket::Network::new(),
             agent: http::agent(),
         }
@@ -167,8 +166,8 @@ impl Host {
         let live = match &input {
             Input::Opened { socket } | Input::Message { socket, .. } => self.sockets.contains_key(socket),
             Input::Closed { socket, .. } => self.sockets.remove(socket).is_some(),
-            Input::Failed { id, .. } => self.sockets.remove(id).is_some() || self.requests.remove(id).is_some(),
-            Input::Response { request, .. } => self.requests.remove(request).is_some(),
+            Input::Failed { id, .. } => self.sockets.remove(id).is_some() || self.requests.remove(id),
+            Input::Response { request, .. } => self.requests.remove(request),
             _ => unreachable!("network thread only delivers socket and request events"),
         };
         if let (true, Some(client)) = (live, &mut self.client) {
@@ -231,9 +230,7 @@ impl Host {
                     body,
                 }),
                 Instruction::Abort { request } => {
-                    if let Some(aborted) = self.requests.remove(&request) {
-                        aborted.store(true, Ordering::Relaxed);
-                    }
+                    self.requests.remove(&request);
                 }
                 Instruction::Schedule { timer, delay } => {
                     // A deadline beyond representable time never arrives, so such a timer is not kept.
@@ -254,9 +251,8 @@ impl Host {
     }
 
     fn fetch(&mut self, request: http::Request) {
-        let aborted = Arc::new(AtomicBool::new(false));
-        self.requests.insert(request.id, aborted.clone());
-        http::fetch(&self.agent, request, self.events.clone(), aborted);
+        self.requests.insert(request.id);
+        http::fetch(&self.agent, request, self.events.clone());
     }
 
     fn deliver(&self, instructions: Vec<Instruction>) {

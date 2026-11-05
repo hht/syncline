@@ -18,7 +18,10 @@ export function savepoint<T>(exec: (sql: string) => void, inTransaction: () => b
     exec('RELEASE syncline');
     return result;
   } catch (error) {
-    if (inTransaction()) exec('ROLLBACK TO syncline; RELEASE syncline');
+    if (inTransaction()) {
+      exec('ROLLBACK TO syncline');
+      exec('RELEASE syncline');
+    }
     throw error;
   }
 }

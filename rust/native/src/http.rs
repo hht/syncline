@@ -1,5 +1,5 @@
 //! HTTP pulls: spawns a thread per request, sends synchronously, reads body to completion, and delivers result to sync thread.
-//! Aborted requests discard results before delivery.
+//! The sync thread discards results of aborted requests.
 //! `timeout_per_read` triggers failure when no data arrives within the deadline (resetting timer on each socket read, matching web streaming timeouts).
 //! Address resolution and connect timeouts share this duration (resolution is otherwise unbounded, and no core deadline covers a pull). HTTP 4xx and 5xx deliver status code and body normally (interpreted by sync core).
 //! TLS uses ureq rustls (ring); certificates use the platform verifier on Apple platforms and bundled `WebPki` elsewhere.
@@ -11,8 +11,6 @@
 use crate::host::Event;
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use syncline::client::Input;
@@ -49,14 +47,11 @@ pub fn agent() -> ureq::Agent {
         .into()
 }
 
-pub fn fetch(agent: &ureq::Agent, request: Request, events: Sender<Event>, aborted: Arc<AtomicBool>) {
+pub fn fetch(agent: &ureq::Agent, request: Request, events: Sender<Event>) {
     let agent = agent.clone();
     let id = request.id;
     let thread = move || {
         let result = send(&agent, request);
-        if aborted.load(Ordering::Relaxed) {
-            return;
-        }
         let input = match result {
             Ok((status, body)) => Input::Response { request: id, status, body },
             Err(error) => Input::Failed {

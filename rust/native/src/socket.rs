@@ -141,29 +141,23 @@ fn run(
     outgoing: &Mutex<Outgoing>,
     woken: &UnixStream,
 ) {
-    let closed = || outgoing.lock().unwrap_or_else(PoisonError::into_inner).closed;
+    // Events of a socket closed meanwhile are discarded by the sync thread, which no longer holds it.
     let send = |input: Input| {
         let _ = events.send(Event::Network(input));
     };
     let mut ws = match connect(url, protocols, tls) {
         Ok(ws) => ws,
         Err(error) => {
-            if !closed() {
-                send(match error {
-                    Unconnected::Invalid(error) => Input::Failed { id, error },
-                    Unconnected::Unreachable(reason) => Input::Closed {
-                        socket: id,
-                        code: 1006,
-                        reason,
-                    },
-                });
-            }
-            return;
+            return send(match error {
+                Unconnected::Invalid(error) => Input::Failed { id, error },
+                Unconnected::Unreachable(reason) => Input::Closed {
+                    socket: id,
+                    code: 1006,
+                    reason,
+                },
+            });
         }
     };
-    if closed() {
-        return;
-    }
     send(Input::Opened { socket: id });
     if let Some((code, reason)) = pump(&mut ws, id, &send, outgoing, woken) {
         send(Input::Closed { socket: id, code, reason });

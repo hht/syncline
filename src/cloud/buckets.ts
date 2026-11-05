@@ -143,7 +143,7 @@ export class Buckets {
       { length: Math.ceil(items.length / groupArgs) },
       (_, index) => `json_array(${items.slice(index * groupArgs, (index + 1) * groupArgs).join(', ')})`,
     );
-    return groups.length === 0 ? "'[]'" : `json_array(${groups.join(', ')})`;
+    return `json_array(${groups.join(', ')})`;
   }
 
   /** Parses canonical bucket IDs from a membership SQL result, sorted lexicographically. */
