@@ -116,7 +116,7 @@ Entrypoint for sync requests in the entry Worker: extracts the token and passes 
 
 ### `restoreSpace(namespace, name, at)`
 
-Restores a private space to `at` (millisecond timestamp).
+Restores a private space to `at` (millisecond timestamp). Rejects when the object may not have restarted (such as a lost connection): the restore then stays staged and applies whenever the object next starts, so call it again; a call after a restore that did apply restores to `at` once more, discarding writes made since.
 
 ### `Shared spaces`
 

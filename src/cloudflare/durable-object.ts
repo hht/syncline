@@ -232,11 +232,17 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
  * Restores a private space to a point in time within the last 30 days:
  * stages the bookmark and restarts the Durable Object actor.
  * Disconnected devices reconnect, full-pull (refetch), and push preserved pending writes across the version jump.
+ * Rejects when the restart may not have reached the object: the restore stays staged until the object next starts, so callers retry.
  */
 export async function restoreSpace<T extends SpaceObject>(namespace: DurableObjectNamespace<T>, name: string, at: number) {
   await namespace.getByName(name).restoreTo(at);
+  // Restarting resets the object, which rejects the call; any other rejection means it may not have restarted, leaving the restore
+  // staged for whenever the object next starts, so it reaches the caller.
+  // @see https://developers.cloudflare.com/durable-objects/best-practices/error-handling/
   await namespace
     .getByName(name)
     .restart()
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      if (!(error instanceof Error && (error as { durableObjectReset?: boolean }).durableObjectReset)) throw error;
+    });
 }
