@@ -24,6 +24,15 @@ export const valueChars = valueBytes / 4;
 export const keyBytes = 512;
 
 /**
+ * Maximum length of a table name (ASCII, so characters are bytes), as in MySQL.
+ * A shared space pull URL carries the table its cursor scans beside the largest key, bucket, and landed subscription, which leave about
+ * 2 KB of Cloudflare's 16 KB URL limit; table names are otherwise unbounded.
+ * @see https://dev.mysql.com/doc/refman/8.4/en/identifier-length.html
+ * @see https://developers.cloudflare.com/workers/platform/limits/
+ */
+export const tableNameChars = 64;
+
+/**
  * Maximum length of a client ID in UTF-16 code units: devices generate UUIDs (36 characters).
  * Bounds lmid rows and live notices, which carry client IDs, against modified clients.
  */

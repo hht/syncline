@@ -1,6 +1,6 @@
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { keyBytes } from '../common/limits.ts';
+import { keyBytes, tableNameChars } from '../common/limits.ts';
 import { foldCase, quote, whereKey } from '../common/sql.ts';
 import { type Query, Reject } from '../common/storage.ts';
 import { keyBytesOf, keyColumns, keyOf, primaryKey } from './keys.ts';
@@ -103,6 +103,7 @@ export function checkDeclared(tables: SQLiteTable[]) {
   for (const table of tables) {
     const { name, columns } = getTableConfig(table);
     checkName(name);
+    if (name.length > tableNameChars) throw new Error(`Table name ${name}: names hold at most ${tableNameChars} characters`);
     const same = seen.get(foldCase(name));
     if (same !== undefined) throw new Error(`Table names ${same} and ${name} differ only by case; table names ignore case, as in SQLite`);
     seen.set(foldCase(name), name);

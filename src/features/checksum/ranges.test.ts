@@ -1,5 +1,6 @@
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
+import { tableNameChars } from '../../common/limits.ts';
 import type { Poke } from '../../common/protocol.ts';
 import type { Storage } from '../../common/storage.ts';
 import { Device, Space } from '../../test/test-checksum.ts';
@@ -243,7 +244,8 @@ test('daily row limit is not a positive integer: throws on open to avoid cloud r
 });
 
 test('mismatched segment with many tables and long names: refetch ranges are sent untruncated in POST body; refetch repairs all rows', async () => {
-  const name = (index: number) => `t${String(index).padStart(3, '0')}_${'x'.repeat(70)}`;
+  // The longest table names allowed.
+  const name = (index: number) => `t${String(index).padStart(3, '0')}_${'x'.repeat(tableNameChars - 5)}`;
   const many = Array.from({ length: 100 }, (_, index) => sqliteTable(name(index), { id: text().primaryKey() }));
   const schema = many.map((_, index) => `CREATE TABLE ${name(index)} (id TEXT PRIMARY KEY)`);
   const space = new Space(cloudStorage(...schema), many);

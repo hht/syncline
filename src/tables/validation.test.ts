@@ -183,11 +183,12 @@ test('rejects unsyncable column types at device opening and cloud table creation
   }
 });
 
-test('rejects non-alphanumeric identifiers, numbers at start, Object prototype names, missing primary keys, and internal names', () => {
+test('rejects non-alphanumeric identifiers, numbers at start, table names over 64 characters, Object prototype names, missing primary keys, and internal names', () => {
   for (const [table, message] of [
     [sqliteTable('a"b', { id: text().primaryKey() }), 'a"b'],
     [sqliteTable('a.b', { id: text().primaryKey() }), 'a.b'],
     [sqliteTable('1t', { id: text().primaryKey() }), '1t'],
+    [sqliteTable(`t${'a'.repeat(64)}`, { id: text().primaryKey() }), '64 characters'],
     [sqliteTable('t', { id: text('i"d').primaryKey() }), 't.i"d'],
     [sqliteTable('t', { id: text('i\\d').primaryKey() }), 't.i\\d'],
     [sqliteTable('t', { id: text('9').primaryKey() }), 't.9'],
