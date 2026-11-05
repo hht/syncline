@@ -18,6 +18,8 @@ use syncline::tables::{self, Table};
 use syncline::{internal, limits, values};
 use wasm_bindgen::prelude::*;
 
+#[cfg(feature = "coverage")]
+mod coverage;
 #[cfg(feature = "testing")]
 mod faults;
 #[cfg(target_family = "wasm")]

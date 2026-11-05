@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { wasmOutput } from '../build-wasm.mjs';
+import { coverageOutput, wasmOutput } from '../build-wasm.mjs';
 import { Reject } from '../common/storage.ts';
 import { decodeRows, encode } from '../expo/client.ts';
 import { deserializeError } from '../expo/errors.ts';
@@ -45,10 +45,11 @@ export function call<T>(body: () => T): T {
 /** WASM module exports: Database constructor, restoration method, and documented limits. */
 type Exports = { Database: { new (): Database; restored(image: Uint8Array): Database }; limits(): string };
 
-/** Lazy-loaded WASM module: compiled prior to running test suite. */
+/** Lazy-loaded WASM module: compiled prior to running test suite; the full check, which sets SYNCLINE_COVERAGE, runs the tests on the coverage build. */
 let loaded: Exports | undefined;
 const load = () => {
-  loaded ??= createRequire(import.meta.url)(join(wasmOutput, 'syncline_wasm.js')) as Exports;
+  const output = process.env.SYNCLINE_COVERAGE === undefined ? wasmOutput : coverageOutput;
+  loaded ??= createRequire(import.meta.url)(join(output, 'syncline_wasm.js')) as Exports;
   return loaded;
 };
 

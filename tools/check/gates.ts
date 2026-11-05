@@ -226,14 +226,16 @@ function reportProblems(cwd: string, report: string, rule: string): Problem[] {
  * fast-check counterexamples) to stdout saved in the gate log. Parsed problems retain only the first line; logs preserve reproduction details.
  * File loading failures report at line 1. TMPDIR points to the scratch directory so vitest's temporary files are cleaned up on completion.
  */
-export const tests = (cwd: string, args: string[]) => () =>
-  inScratchDir((dir) => {
-    const report = join(dir, 'report.json');
-    return runTool(
-      cwd,
-      bin('vitest'),
-      ['run', '--reporter=default', '--reporter=json', `--outputFile.json=${report}`, '--includeTaskLocation', ...args],
-      () => reportProblems(cwd, report, 'test'),
-      { TMPDIR: dir },
-    );
-  });
+export const tests =
+  (cwd: string, args: string[], env: Record<string, string> = {}) =>
+  () =>
+    inScratchDir((dir) => {
+      const report = join(dir, 'report.json');
+      return runTool(
+        cwd,
+        bin('vitest'),
+        ['run', '--reporter=default', '--reporter=json', `--outputFile.json=${report}`, '--includeTaskLocation', ...args],
+        () => reportProblems(cwd, report, 'test'),
+        { TMPDIR: dir, ...env },
+      );
+    });

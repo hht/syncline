@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 
 /**
  * Builds the Rust device-side wasm target into the Rust workspace target directory:
  * - node: for tests (Vitest globalSetup, run once per session; enables testing feature: fault injection, feed pull results and messages),
  *   loaded via {@link rustStorage};
+ * - coverage: the node build instrumented for coverage (built by the full check, which runs the tests on it), in its own target directory
+ *   so the instrumentation flags do not rebuild the other builds;
  * - web: for Syncline's dedicated Worker (compiled by {@link withSyncline} on Metro startup; optimized for size), bundled by Metro as
  *   source and assets. Cargo builds incrementally in a few seconds when unchanged.
  * Uses rustup's cargo proxy with an empty RUSTUP_TOOLCHAIN to respect the workspace toolchain configuration.
@@ -22,31 +24,70 @@ import { join, resolve } from 'node:path';
 const llvm = 'github:llvm/llvm-project@llvmorg-23.1.4';
 const workspace = resolve(import.meta.dirname, '../rust');
 export const wasmOutput = join(workspace, 'target/node');
+/** Target directory and node output of the coverage build. */
+export const coverageTarget = join(workspace, 'target/coverage');
+export const coverageOutput = join(coverageTarget, 'node');
 
 export const wasmTarget = 'wasm32-unknown-unknown';
+
+/**
+ * Returns the bin directory of the pinned LLVM, which also reads the coverage the wasm records (its major version matches rustc's).
+ * @returns {string}
+ */
+export function llvmBin() {
+  try {
+    return join(execFileSync('mise', ['where', llvm], { encoding: 'utf8' }).trim(), 'bin');
+  } catch (error) {
+    throw new Error(`Compiling SQLite for wasm requires LLVM: run mise install ${llvm}`, { cause: error });
+  }
+}
 
 /**
  * Returns environment variables for compiling wasm targets including SQLite: wasm-targeted clang and llvm-ar.
  * @returns {Record<string, string>}
  */
 export function wasmCompilers() {
-  let clang;
-  try {
-    clang = join(execFileSync('mise', ['where', llvm], { encoding: 'utf8' }).trim(), 'bin');
-  } catch (error) {
-    throw new Error(`Compiling SQLite for wasm requires LLVM: run mise install ${llvm}`, { cause: error });
-  }
+  const bin = llvmBin();
   const suffix = wasmTarget.replaceAll('-', '_');
-  return { [`CC_${suffix}`]: join(clang, 'clang'), [`AR_${suffix}`]: join(clang, 'llvm-ar') };
+  return { [`CC_${suffix}`]: join(bin, 'clang'), [`AR_${suffix}`]: join(bin, 'llvm-ar') };
 }
 
 /**
- * Builds wasm for the specified output target: node for tests, web for Syncline's dedicated Worker.
- * @param {'node' | 'web'} output
+ * Returns PATH with the pinned LLVM first, for wasm builds with the coverage feature: minicov's build script runs `clang` by name.
+ * @see https://docs.rs/crate/minicov/0.3.9/source/build.rs
+ * @returns {string}
+ */
+export function clangFirst() {
+  return `${llvmBin()}${delimiter}${process.env.PATH}`;
+}
+
+/**
+ * Instruments the coverage build: wasm has no LLVM profiler runtime, so minicov supplies it, and -Zno-profiler-runtime (unstable, enabled by
+ * RUSTC_BOOTSTRAP on the pinned stable toolchain) keeps rustc from linking one.
+ * llvm-cov cannot read the function names out of linked wasm, so the build also emits LLVM IR for the coverage gate to compile.
+ * @see https://github.com/Amanieu/minicov/blob/v0.3.9/README.md
+ * @see https://wasm-bindgen.github.io/wasm-bindgen/wasm-bindgen-test/coverage.html
+ * @see https://doc.rust-lang.org/1.99.1/rustc/instrument-coverage.html
+ * @returns {Record<string, string>}
+ */
+function coverageFlags() {
+  return {
+    RUSTC_BOOTSTRAP: '1',
+    PATH: clangFirst(),
+    [`CARGO_TARGET_${wasmTarget.replaceAll('-', '_').toUpperCase()}_RUSTFLAGS`]:
+      '-Cinstrument-coverage -Zcoverage-options=branch -Zno-profiler-runtime --emit=llvm-ir',
+  };
+}
+
+/**
+ * Builds wasm for the specified output target: node for tests, coverage for tests that record coverage, web for Syncline's dedicated Worker.
+ * @param {'node' | 'coverage' | 'web'} output
  */
 export function buildWasm(output) {
-  const testing = output === 'node';
+  const covered = output === 'coverage';
+  const testing = output !== 'web';
   const profile = testing ? 'wasm-test' : 'web';
+  const target = covered ? coverageTarget : join(workspace, 'target');
   const cargoBin = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin');
   execFileSync(
     join(cargoBin, 'cargo'),
@@ -57,13 +98,19 @@ export function buildWasm(output) {
       profile,
       '-p',
       'syncline-wasm',
-      ...(testing ? ['--features', 'testing'] : []),
+      ...(testing ? ['--features', covered ? 'coverage' : 'testing'] : []),
       '--target',
       wasmTarget,
+      '--target-dir',
+      target,
     ],
-    { cwd: workspace, stdio: 'inherit', env: { ...process.env, RUSTUP_TOOLCHAIN: '', ...wasmCompilers() } },
+    {
+      cwd: workspace,
+      stdio: 'inherit',
+      env: { ...process.env, RUSTUP_TOOLCHAIN: '', ...wasmCompilers(), ...(covered ? coverageFlags() : {}) },
+    },
   );
-  const outDir = join(workspace, 'target', output);
+  const outDir = covered ? coverageOutput : join(workspace, 'target', output);
   execFileSync(join(cargoBin, 'wasm-bindgen'), [
     '--target',
     testing ? 'nodejs' : 'web',
@@ -71,7 +118,7 @@ export function buildWasm(output) {
     ...(testing ? [] : ['--remove-name-section']),
     '--out-dir',
     outDir,
-    join(workspace, `target/${wasmTarget}/${profile}/syncline_wasm.wasm`),
+    join(target, `${wasmTarget}/${profile}/syncline_wasm.wasm`),
   ]);
   // The node target is CommonJS while this package is an ES module; mark the output directory.
   if (testing) writeFileSync(join(outDir, 'package.json'), '{ "type": "commonjs" }\n');
@@ -80,6 +127,6 @@ export function buildWasm(output) {
 /** Vitest global setup hook that builds node wasm before tests run. */
 export default () => buildWasm('node');
 
-// Executed directly by withSyncline for web builds, or with node argument for tests.
+// Executed directly by withSyncline for web builds, or with node or coverage argument for tests.
 // Integrators execute it from dependencies where Node does not strip TypeScript types, so this script is plain JavaScript.
-if (import.meta.main) buildWasm(process.argv[2] === 'node' ? 'node' : 'web');
+if (import.meta.main) buildWasm(process.argv[2] === 'node' || process.argv[2] === 'coverage' ? process.argv[2] : 'web');

@@ -1,4 +1,4 @@
-import { globSync, readFileSync, realpathSync } from 'node:fs';
+import { globSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -58,7 +58,7 @@ function longFiles(root: string, dir: string): Problem[] {
       const lines = readFileSync(join(root, dir, path), 'utf8')
         .replace(/\n$/, '')
         .split('\n');
-      const tests = lines.findIndex((line, index) => line === '#[cfg(test)]' && lines[index + 1] === 'mod tests {');
+      const tests = testModule(lines);
       const parts =
         tests === -1
           ? [{ start: 0, count: lines.length }]
@@ -77,6 +77,31 @@ function longFiles(root: string, dir: string): Problem[] {
     });
 }
 
+/** Rustup's cargo proxy, installed in CARGO_HOME/bin (default ~/.cargo). */
+export const cargo = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin', 'cargo');
+
+/** Index of the line opening a file's trailing unit test module (`#[cfg(test)]` then `mod tests {`), or -1 if it has none. */
+export const testModule = (lines: string[]) =>
+  lines.findIndex((line, index) => line === '#[cfg(test)]' && lines[index + 1] === 'mod tests {');
+
+/**
+ * Native tests run instrumented for coverage, writing profiles the coverage gate reads, in their own target directory (relative to the
+ * workspace) so the flags do not rebuild what clippy compiles. Branch coverage is unstable, enabled by RUSTC_BOOTSTRAP on the pinned toolchain.
+ * @see https://doc.rust-lang.org/1.99.1/rustc/instrument-coverage.html
+ */
+export const nativeCoverage = { target: 'target/coverage-native', profiles: 'target/coverage-native/profiles' };
+
+/** Arguments and environment of the instrumented native test run, shared with the coverage gate listing its test binaries. */
+export const nativeTests = (workspace: string) => ({
+  args: ['test', '--locked', '--target-dir', nativeCoverage.target],
+  env: {
+    RUSTUP_TOOLCHAIN: '',
+    RUSTC_BOOTSTRAP: '1',
+    RUSTFLAGS: '-Cinstrument-coverage -Zcoverage-options=branch',
+    LLVM_PROFILE_FILE: join(workspace, nativeCoverage.profiles, '%p-%m.profraw'),
+  },
+});
+
 /** Package to run clippy on for an additional target: code guarded by target cfg is excluded on host target; env provides compiler toolchain variables. */
 type Cross = { target: string; package: string; env: () => Record<string, string> };
 
@@ -89,7 +114,6 @@ type Cross = { target: string; package: string; env: () => Record<string, string
  * @see https://rust-lang.github.io/rustup/installation/index.html Proxies installed in CARGO_HOME/bin, defaulting to ~/.cargo
  */
 export const rust = (root: string, dir: string, cross?: Cross) => async () => {
-  const cargo = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin', 'cargo');
   const run = (args: string[], parse: (output: string) => Problem[], env: Record<string, string> = {}) =>
     runTool(join(root, dir), cargo, args, parse, { RUSTUP_TOOLCHAIN: '', ...env });
   const clippy = (args: string[], env?: Record<string, string>) =>
@@ -110,8 +134,11 @@ export const rust = (root: string, dir: string, cross?: Cross) => async () => {
     const args = ['-p', name, '--target', target];
     return [await clippy(args, compilers), await clippy([...args, '--all-features'], compilers)];
   };
-  // Clippy and cargo test share target directory and serialize on target locks; runs fmt, clippy, and test sequentially.
+  // Runs fmt, clippy, and test sequentially: each already uses all cores.
   const long = longFiles(root, dir);
+  const native = nativeTests(join(root, dir));
+  // Profiles of earlier runs would count code that has since changed.
+  rmSync(join(root, dir, nativeCoverage.profiles), { recursive: true, force: true });
   return together([
     { ok: long.length === 0, output: long.map((p) => `${p.file}:${p.line} ${p.message}`).join('\n'), problems: long },
     // rustfmt output contains ANSI color codes
@@ -125,15 +152,18 @@ export const rust = (root: string, dir: string, cross?: Cross) => async () => {
     ),
     // --all-features checks test-only code paths such as fault injection
     distinct(together([await clippy(['--all-targets', '--all-features']), ...(cross ? await crossClippy(cross) : [])])),
-    await run(['test', '--locked'], (output) =>
-      [...output.matchAll(/^thread '(.+?)' .*panicked at (.+?):(\d+):\d+:\n(.*)$/gm)].map(
-        ([, name = '', file = '', line = '', message = '']) => ({
-          file: located(root, dir, file),
-          line: Number(line),
-          rule: 'cargo-test',
-          message: `${name}: ${message}`,
-        }),
-      ),
+    await run(
+      native.args,
+      (output) =>
+        [...output.matchAll(/^thread '(.+?)' .*panicked at (.+?):(\d+):\d+:\n(.*)$/gm)].map(
+          ([, name = '', file = '', line = '', message = '']) => ({
+            file: located(root, dir, file),
+            line: Number(line),
+            rule: 'cargo-test',
+            message: `${name}: ${message}`,
+          }),
+        ),
+      native.env,
     ),
   ]);
 };

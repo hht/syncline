@@ -22,6 +22,16 @@ export default defineConfig({
       '**/rust/{Cargo.toml,Cargo.lock,rust-toolchain.toml}',
       '**/rust/.cargo/**',
     ],
+    // Enabled by the full check (--coverage); both projects report into one map, read with the Rust coverage by tools/check/coverage.ts.
+    // Workers tests run only under istanbul, which instruments source rather than relying on V8.
+    // @see https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#coverage
+    coverage: {
+      provider: 'istanbul',
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/test-*.ts', 'src/test/**'],
+      reporter: ['lcovonly'],
+      reportsDirectory: '.check/coverage',
+    },
     projects: [
       {
         test: {
@@ -31,6 +41,7 @@ export default defineConfig({
           include: ['{src,tools}/**/*.test.ts'],
           // Compiles Rust device side to wasm for tests.
           globalSetup: ['src/build-wasm.mjs'],
+          setupFiles: process.env.SYNCLINE_COVERAGE === undefined ? [] : ['src/test/rust-coverage.ts'],
           // Cloud tests run in the Workers runtime (vitest.workerd.config.ts).
           exclude: ['**/node_modules/**', 'src/**/*.workerd.test.ts'],
         },

@@ -14,6 +14,8 @@ rusqlite = { workspace = true, features = ["serialize", "trace"] }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
+# Coverage runtime for instrumented test builds (wasm has no LLVM profiler runtime)
+minicov = { version = "0.3.9", optional = true }
 
 # SQLite used by rusqlite on WebAssembly: host functions (sleep, random numbers, clock, local time) are implemented via its bundled wasm-bindgen; version matches rusqlite
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -26,6 +28,8 @@ wasm-bindgen-futures = "=0.4.80"
 # Enabled for test builds: inject storage faults, receive directly fed pull results and messages via client Probe
 [features]
 testing = ["syncline/testing"]
+# Exports coverage counters; built only with -Cinstrument-coverage
+coverage = ["testing", "dep:minicov"]
 
 [lints]
 workspace = true

@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, resolve } from 'node:path';
-import { wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs';
+import { clangFirst, wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs';
 import { changedFiles } from './changed-files.ts';
 import { checkCommentRules } from './comment-rules.ts';
+import { coverage } from './coverage.ts';
 import { checkCommands, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
 import { checkEnglish } from './english.ts';
 import { checkForbiddenWords } from './forbidden-words.ts';
@@ -56,7 +57,7 @@ const skip = (reason: string) => async () => ({ ok: true, output: reason, proble
 // Rust does not reference TS (the wasm referenced by TS is compiled first by the wasm gate below): only run when the Rust workspace or gates themselves change.
 const rustRelevant = !files || files.some((file) => /^(rust\/|tools\/check\/)/.test(file));
 // Tests compile wasm at the start (vitest globalSetup); when Rust changes, compile with all cores: compile it here first so its cargo has nothing left to do.
-const wasm = (output: 'node' | 'web') => runTool(root, process.execPath, ['src/build-wasm.mjs', output], () => []);
+const wasm = (output: 'node' | 'coverage' | 'web') => runTool(root, process.execPath, ['src/build-wasm.mjs', output], () => []);
 
 // Cargo building Rust (rust, wasm) uses all cores; running simultaneously with tests when Rust changes pushes timeout-bounded tests past their timeouts, so mark them first to finish before starting the rest.
 // Tests (vitest defaults to cores - 1 processes) run concurrently with other gates and workerd; running on all cores contends for CPU and stretches single tests toward their timeouts: use only two-thirds of the cores.
@@ -83,16 +84,25 @@ const gates: Gate[] = [
       ],
     ),
   },
-  { name: 'test', icon: '🧪', run: tests(root, [`--maxWorkers=${testWorkers}`, ...(changed ? ['--changed'] : [])]) },
+  // Only the full check runs every test, so only it measures coverage.
+  changed
+    ? { name: 'test', icon: '🧪', run: tests(root, [`--maxWorkers=${testWorkers}`, '--changed']) }
+    : { name: 'test', icon: '🧪', run: coverage(root, (env) => tests(root, [`--maxWorkers=${testWorkers}`, '--coverage'], env)()) },
   {
     name: 'rust',
     icon: '🦀',
     first: true,
     run: rustRelevant
-      ? rust(root, 'rust', { target: wasmTarget, package: 'syncline-wasm', env: wasmCompilers })
+      ? // --all-features includes the coverage feature, whose minicov build runs clang by name.
+        rust(root, 'rust', { target: wasmTarget, package: 'syncline-wasm', env: () => ({ ...wasmCompilers(), PATH: clangFirst() }) })
       : skip('No changes to Rust workspace or gate code'),
   },
-  { name: 'wasm', icon: '🦀', first: true, run: async () => together([await wasm('node'), await wasm('web')]) },
+  {
+    name: 'wasm',
+    icon: '🦀',
+    first: true,
+    run: async () => together([await wasm('node'), await wasm('web'), ...(changed ? [] : [await wasm('coverage')])]),
+  },
   inProcess('forbidden-words', '🏷️', () => checkForbiddenWords([...sources, ...rustSources, ...configs, ...jsons])),
   inProcess('comment-rules', '💬', () => checkCommentRules([...sources, ...rustSources, ...configs])),
   inProcess('english', '🔤', () => checkEnglish(tracked)),

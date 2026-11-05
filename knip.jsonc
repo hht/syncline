@@ -6,6 +6,8 @@
   // overrides knip's default test entries, so src/**/*.test.ts is explicitly listed as an entry.
   "entry": [
     "src/cloudflare/test-worker.ts",
+    // Vitest setup file the full check enables through an environment variable.
+    "src/test/rust-coverage.ts",
     "src/**/*.test.ts",
     "probes/cloudflare/worker.ts",
     "probes/cloudflare/push-size.ts",
