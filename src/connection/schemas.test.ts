@@ -26,6 +26,7 @@ function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?
   let server: Server<CloudEnd>;
   let conflicts = 0;
   let mismatched = false;
+  let garbled = false;
   const network: Network = new Network(
     (items) => items[0],
     () => ({
@@ -33,7 +34,7 @@ function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?
       schemaConflict: (fingerprint) => {
         const schema = server.schemaConflict(mismatched ? '' : fingerprint);
         if (schema) conflicts += 1;
-        return schema;
+        return schema && garbled ? '<html>' : schema;
       },
     }),
   );
@@ -47,7 +48,12 @@ function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?
   const mismatch = () => {
     mismatched = true;
   };
-  return { network, connection, deploy, run: (advance = true) => drain(network, { advance }), conflicts: () => conflicts, mismatch };
+  /** The cloud answers a schema mismatch with a body that is not a schema (a proxy error page). */
+  const garble = () => {
+    garbled = true;
+  };
+  const run = (advance = true) => drain(network, { advance });
+  return { network, connection, deploy, run, conflicts: () => conflicts, mismatch, garble };
 }
 
 test('device includes undeployed columns (app released ahead): HTTP pull rejected, retries with backoff without updateNeeded', async () => {
@@ -145,5 +151,15 @@ test('fails with backoff when 412 persists after adopting cloud schema (differin
   await run(false);
   expect(connection.status().downloadError?.message).toContain('schema fingerprint still mismatched');
   expect(conflicts()).toBe(2);
+  connection.stop();
+});
+
+test('a 412 whose body is not a cloud schema fails the attempt with the parse error and retries with backoff', async () => {
+  const { connection, run, garble } = setup([noteWithStars], [note], undefined, createBare);
+  garble();
+  connection.start();
+  await run(false);
+  expect(connection.status().downloadError?.message).toMatch(/^invalid cloud schema declaration format: <html>/);
+  expect(connection.status()).toMatchObject({ connected: false, connecting: true, updateNeeded: false });
   connection.stop();
 });

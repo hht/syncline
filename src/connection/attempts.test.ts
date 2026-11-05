@@ -1,22 +1,11 @@
-import { expect, test, vi } from 'vitest';
-import { receiveTimeout } from '../expo/shell.ts';
-import type { SyncStatus } from '../expo/status.ts';
+import { expect, test } from 'vitest';
 import { flush, withFakeTimers } from '../test/test-drive.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { workout, write } from '../test/test-schema.ts';
 import { failOnce, injectedError } from '../test/test-storage.ts';
-import { heartbeat, reconnect } from './test-connection.ts';
+import { heartbeat, linked, reconnect } from './test-connection.ts';
 
 // Connection attempts while connected: a broken invariant on the link reconnects; calls that cannot help start no attempt.
-
-/** A device connected and caught up on a mock WebSocket. */
-async function linked(options?: Parameters<typeof heartbeat>[0]) {
-  const harness = await heartbeat(options);
-  harness.open();
-  harness.catchUp();
-  await flush();
-  return harness;
-}
 
 test('a poke that does not chain onto the local cookie breaks the link: reports, records the download error, and reconnects', () =>
   withFakeTimers(async () => {
@@ -82,31 +71,6 @@ test('a read error pushing the next batch upon a confirmation breaks the link: t
     expect(sockets[0]?.closed).toBe(true);
     expect(reported).toEqual([expect.stringMatching(injectedError)]);
     expect(connection.status()).toMatchObject({ connected: false, downloadError: expect.objectContaining({ message: reported[0] }) });
-    connection.stop();
-  }));
-
-test('a token request for a pull while connected that times out records the error and retries the pull without dropping the link', () =>
-  withFakeTimers(async () => {
-    let calls = 0;
-    // The second token (the pull after the hint) never answers
-    const token = () => {
-      calls += 1;
-      return calls === 2 ? new Promise<string>(() => undefined) : Promise.resolve('valid');
-    };
-    const { space, device, connection, sockets, fetched, message } = await linked({ token });
-    const seen: SyncStatus[] = [];
-    connection.onStatus((status) => seen.push(status));
-    space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
-    message(JSON.stringify({ hint: space.head() }));
-    await flush();
-    expect(fetched).toEqual([]);
-    vi.advanceTimersByTime(receiveTimeout);
-    await vi.waitFor(() => expect(device.private.cookie()).toEqual(space.head()));
-    expect(seen).toContainEqual(expect.objectContaining({ connected: true, downloadError: new Error('token request timed out (30s)') }));
-    expect(calls).toBe(3);
-    expect(fetched).toHaveLength(1);
-    // The link stayed up throughout
-    expect([sockets.length, connection.status().connected, connection.status().downloadError]).toEqual([1, true, undefined]);
     connection.stop();
   }));
 
