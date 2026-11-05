@@ -179,11 +179,7 @@ impl Connection {
             Heard::Poke(poke) => Some(poke.lmids.clone()),
             Heard::Hint(_) => None,
         };
-        let received = self.mirror().heard(ctx.device, message, pulling, ctx.now);
-        if !self.live(attempt) {
-            return;
-        }
-        match received {
+        match self.mirror().heard(ctx.device, message, pulling, ctx.now) {
             Ok(true) => {}
             Ok(false) => return self.broken(ctx, attempt, Failure::new("poke does not match local cookie")),
             Err(error) => return self.broken(ctx, attempt, error),
@@ -218,9 +214,6 @@ impl Connection {
 
     /// Called after pull completes (or is already running) while connected: reconnects if landed subscription differs from heard; runs checksum if caught up
     pub(super) fn pulled_up(&mut self, ctx: &mut Context, attempt: u64) {
-        if !self.live(attempt) {
-            return;
-        }
         if self.mirror().stale(ctx.device) {
             return self.reconnect(ctx);
         }
@@ -249,8 +242,8 @@ impl Connection {
         }
         match self.mirror().behind(ctx.device, ctx.now) {
             Ok(true) if !self.pulling() => self.start_pull(ctx, attempt, true, false, None, After::PullUp),
-            Ok(true) => self.pulled_up(ctx, attempt),
-            Ok(false) => {}
+            // A pull in flight keeps pulling while behind
+            Ok(_) => {}
             Err(error) => ctx.out.report(error),
         }
     }

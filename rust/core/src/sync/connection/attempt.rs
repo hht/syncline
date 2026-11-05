@@ -24,8 +24,7 @@ pub(super) struct TokenWait {
 impl Connection {
     /// Called when integrator returns token (or error)
     pub fn token(&mut self, ctx: &mut Context, request: u32, token: Result<String, Failure>) {
-        if self.token.as_ref().is_some_and(|wait| wait.request == request) {
-            let Some(wait) = self.token.take() else { return };
+        if let Some(wait) = self.token.take_if(|wait| wait.request == request) {
             ctx.out.cancel(Some(wait.timeout));
             self.tokened(ctx, wait.attempt, token);
         } else {
@@ -42,8 +41,7 @@ impl Connection {
             }
             Timer::TokenTimeout { request, .. } => {
                 let error = Failure::new(format!("token request timed out ({}s)", RECEIVE_TIMEOUT / 1000.0));
-                if self.token.as_ref().is_some_and(|wait| wait.request == request) {
-                    let Some(wait) = self.token.take() else { return };
+                if let Some(wait) = self.token.take_if(|wait| wait.request == request) {
                     self.tokened(ctx, wait.attempt, Err(error));
                 } else {
                     self.pull_token(ctx, request, Err(error));
@@ -177,7 +175,7 @@ impl Connection {
     /// Connection attempt failed: records error, waiting `sync()` calls fail, and reconnects on backoff; stops if cloud protocol is newer, uses retired schema, or account mismatched
     #[expect(clippy::needless_pass_by_value, reason = "error is stored on connection and not reused by caller")]
     pub(in crate::sync) fn fail(&mut self, ctx: &mut Context, attempt: u64, error: Failure, kind: Kind) {
-        if !self.current(attempt) || !self.started {
+        if !self.current(attempt) {
             return;
         }
         let update_needed = error.needs_update();

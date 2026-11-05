@@ -72,7 +72,7 @@ impl SharedSpace {
             Ok(poke) => (&poke.cursor, poke.base, &poke.sub, poke.incarnation),
             Err(chunk) => (&chunk.cursor, chunk.base, &chunk.sub, chunk.incarnation),
         };
-        if !self.continues(db, cursor.as_ref(), base, pulled)? {
+        if !self.continues(db, cursor.as_ref(), base)? {
             return Ok(false);
         }
         if pulled {
@@ -148,10 +148,10 @@ impl SharedSpace {
         Ok(())
     }
 
-    /// Checks continuity: pull response carrying request cursor must match next cursor of last staged chunk; responses without cursor (first chunk) require empty stage and base matching local cookie exactly (both empty on initial full pull). Pokes have no cursor and require empty stage and base matching local cookie exactly.
-    fn continues(&self, db: &Connection, cursor: Option<&String>, base: Option<Cookie>, pulled: bool) -> rusqlite::Result<bool> {
+    /// Checks continuity: a response or poke carrying a cursor must match the next cursor of the last staged chunk; one without (first chunk, or poke) requires an empty stage and base matching local cookie exactly (both empty on initial full pull).
+    fn continues(&self, db: &Connection, cursor: Option<&String>, base: Option<Cookie>) -> rusqlite::Result<bool> {
         if let Some(cursor) = cursor {
-            return Ok(pulled && Some(cursor) == self.stage.last(db)?.as_ref());
+            return Ok(Some(cursor) == self.stage.last(db)?.as_ref());
         }
         Ok(!self.staging(db)? && base == self.cookie(db)?)
     }
