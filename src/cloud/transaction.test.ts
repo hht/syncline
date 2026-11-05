@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { ValidationError } from '../tables/validation.ts';
@@ -36,6 +36,41 @@ test('server write reuses the same object across deletions: queued deletions sna
   expect(patch).toEqual([
     { op: 'del', table: 'item', key: { id: 1 } },
     { op: 'del', table: 'item', key: { id: 2 } },
+  ]);
+});
+
+test.for(['update', 'upsert'] as const)('a server %s giving only the primary key touches the row, so devices receive it again', (write) => {
+  const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
+  space.mutate((tx) => tx.insert(item, { id: 1, name: 'squat' }));
+  const base = space.head();
+  space.mutate((tx) => tx[write](item, { id: 1 }));
+  expect(pushedSince(space, base).patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, name: 'squat' } }]);
+});
+
+const pair = sqliteTable(
+  'pair',
+  {
+    left: text().notNull(),
+    right: integer().notNull(),
+    name: text(),
+    stamp: integer().$onUpdateFn(() => 42),
+  },
+  (table) => [primaryKey({ columns: [table.left, table.right] })],
+);
+
+test.for([
+  [{ left: 'a', right: 1, name: 'renamed' }, 'renamed'],
+  [{ left: 'a', right: 1 }, 'first'],
+] as const)('a server update on a composite key %o stores %s and fills the $onUpdateFn column', ([row, name]) => {
+  const space = new Space(
+    cloudStorage('CREATE TABLE pair (left TEXT NOT NULL, right INTEGER NOT NULL, name TEXT, stamp INTEGER, PRIMARY KEY (left, right))'),
+    [pair],
+  );
+  space.mutate((tx) => tx.insert(pair, { left: 'a', right: 1, name: 'first', stamp: 0 }));
+  const base = space.head();
+  space.mutate((tx) => tx.update(pair, row));
+  expect(pushedSince(space, base).patch).toEqual([
+    { op: 'put', table: 'pair', key: { left: 'a', right: 1 }, row: { left: 'a', right: 1, name, stamp: 42 } },
   ]);
 });
 

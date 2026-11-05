@@ -4,6 +4,7 @@ import { expect, test } from 'vitest';
 import { type BucketRules, Buckets } from '../../cloud/buckets.ts';
 import { Space } from '../../cloud/space.ts';
 import { expectBounded, fillRows, measured, scale } from '../../cloudflare/test-reads.ts';
+import type { Cursor } from '../../common/storage.ts';
 import { defineTables } from '../../tables/table-definitions.ts';
 
 // Shared space scaling in real Durable Objects: chunk rowsRead does not grow with table size (even with selective filters), writes succeed with many rules.
@@ -62,3 +63,28 @@ test('single row matching 300 rules: round payload sizes by touched rows capped 
     expect(JSON.stringify(round.rows).length).toBeLessThanOrEqual(64_000);
     expect(space.round(1000, base).rows).toBeUndefined();
   }));
+
+const task = sqliteTable('task', { id: text().primaryKey(), team: text(), title: text() });
+
+test.for(['update', 'upsert'] as const)(
+  'a server %s changing only an unindexed column writes one row (the bucket index is left alone)',
+  (write) =>
+    measured(env.SPACE.getByName(crypto.randomUUID()), ({ storage }) => {
+      const buckets = { team: { task: { by: ['team'] } } } satisfies BucketRules;
+      const rules = new Buckets([task], buckets);
+      storage.sql.exec('CREATE TABLE task (id TEXT PRIMARY KEY, team TEXT, title TEXT) STRICT, WITHOUT ROWID');
+      for (const sql of defineTables(storage, [task], [task], (table) => rules.indexes(table))) storage.sql.exec(sql);
+      const space = new Space(storage, [task], { shared: { buckets } });
+      space.mutate((tx) => tx.insert(task, { id: 'a', team: 'red', title: 'old' }), 0);
+      // Only the statement writing the task row: the index rows it rewrites are billed with it.
+      const exec = storage.sql.exec;
+      const writes: Cursor[] = [];
+      storage.sql.exec = (sql, ...bindings) => {
+        const cursor = exec(sql, ...bindings);
+        if (/^(update|insert into) "task"/.test(sql)) writes.push(cursor);
+        return cursor;
+      };
+      space.mutate((tx) => tx[write](task, { id: 'a', title: 'new' }), 0);
+      expect(writes.map((cursor) => cursor.rowsWritten)).toEqual([1]);
+    }),
+);

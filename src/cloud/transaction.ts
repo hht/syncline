@@ -54,6 +54,20 @@ function locate(table: SQLiteTable, value: Record<string, unknown>) {
 }
 
 /**
+ * Values an update sets: the primary key already matches the row, and setting it anyway rewrites every index of a WITHOUT ROWID table,
+ * each billed as a row written. A row giving only its primary key still sets it, so the update touches the row as before.
+ * @see https://sqlite.org/withoutrowid.html
+ */
+function changes(table: SQLiteTable, row: Record<string, unknown>) {
+  const key = new Set(primaryKey(table).map(([field]) => field));
+  const columns = getTableColumns(table);
+  const rest = Object.fromEntries(
+    Object.entries(row).filter(([field, value]) => !key.has(field) && Object.hasOwn(columns, field) && value !== undefined),
+  );
+  return Object.keys(rest).length > 0 ? rest : row;
+}
+
+/**
  * Reports touched table names and primary keys to changed on insert and update (for the cloud to record modified rows).
  *
  * Reported keys use the values returned from RETURNING, mapped to their storage column types (for example, string "5" to integer 5),
@@ -110,10 +124,10 @@ export function transaction(
     upsert: (table: SQLiteTable, row: Record<string, unknown>) => {
       flush();
       wellFormed(table, row);
-      const target = primaryKey(table).map(([, column]) => column);
+      const conflict = { target: primaryKey(table).map(([, column]) => column), set: changes(table, row) };
       const located = locate(table, row);
       prior(table, located);
-      for (const written of db.insert(table).values(row).onConflictDoUpdate({ target, set: row }).returning(located.stored).all())
+      for (const written of db.insert(table).values(row).onConflictDoUpdate(conflict).returning(located.stored).all())
         changed(located.name, written);
     },
     update: (table: SQLiteTable, row: Record<string, unknown>) => {
@@ -121,7 +135,8 @@ export function transaction(
       wellFormed(table, row);
       const located = locate(table, row);
       prior(table, located);
-      for (const written of db.update(table).set(row).where(located.where).returning(located.stored).all()) changed(located.name, written);
+      for (const written of db.update(table).set(changes(table, row)).where(located.where).returning(located.stored).all())
+        changed(located.name, written);
     },
     delete: (table: SQLiteTable, key: Record<string, unknown>) => {
       // Enforces complete primary keys immediately on call (locate throws if incomplete) and copies the key fields so later mutations of the caller object do not affect queued deletions.
