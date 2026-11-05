@@ -13,7 +13,8 @@ import { type CloudStorage, queryOf } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader } from './forward.ts';
-import { reserved, ScheduledObject } from './schedule.ts';
+import { reserved } from './schedule.ts';
+import { ScheduledObject } from './scheduled-object.ts';
 import { type SharedDefinition, shardName, subscribedOf } from './shared-forward.ts';
 import { Upkeep } from './upkeep.ts';
 

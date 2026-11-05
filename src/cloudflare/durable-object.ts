@@ -13,7 +13,8 @@ import { defineTables, type Schema, tableName } from '../tables/table-definition
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader, spaceHeader } from './forward.ts';
 import { isSocket, schemaFingerprintOf } from './requests.ts';
-import { type Chore, reserved, ScheduledObject } from './schedule.ts';
+import { type Chore, reserved } from './schedule.ts';
+import { ScheduledObject } from './scheduled-object.ts';
 import { Upkeep } from './upkeep.ts';
 
 /**
