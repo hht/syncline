@@ -1,50 +1,29 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { defaultShards, noticeBudget, reconnectRate } from '../cloud/broadcast.ts';
+import { defaultShards, reconnectRate } from '../cloud/broadcast.ts';
 import { bucketBytes } from '../cloud/buckets.ts';
-import { rowOverhead } from '../cloud/commits.ts';
 import { defaultConnections } from '../cloud/server.ts';
 import { defaultRows } from '../cloud/shared.ts';
 import {
-  clientChars,
   commitFloor,
   keyBytes,
-  pullBytes,
-  pushBytes,
   readRows,
   sharedWriteRows,
   subscriptionBytes,
-  truncateBytes,
-  truncateRows,
   valueBytes,
   valueChars,
   writeBytes,
   writeKeyBytes,
   writeRows,
 } from '../common/limits.ts';
-import { chunkLimit, pushMutations, socketLimit } from '../common/protocol.ts';
+import { pushMutations, socketLimit } from '../common/protocol.ts';
 import { receiveTimeout as shellReceiveTimeout } from '../expo/shell.ts';
-import { rangeChars, rangeParts } from '../features/checksum/cloud/checksums.ts';
-import { rangeRows } from '../features/checksum/common/checksum.ts';
 import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../features/exports/cloud/exports.ts';
 import { rustLimits } from './test-rust.ts';
 
 // Documentation limits for integrators match code constants: each statement is computed dynamically from constants; modifying constants without updating documentation fails. Device-side values are read from the Rust core.
 
-const {
-  pushLimit,
-  receiveTimeout,
-  pingAfter,
-  pongWithin,
-  slowestRate,
-  baseDelay,
-  maxDelay,
-  maxRowBytes,
-  batch,
-  rowsPerDay,
-  interval,
-  askAgainAfter,
-} = rustLimits();
+const { receiveTimeout, pingAfter, pongWithin, slowestRate, baseDelay, maxDelay, maxRowBytes, rowsPerDay, interval } = rustLimits();
 
 const limits = readFileSync(new URL('../../docs/reference/limits.md', import.meta.url), 'utf8');
 
@@ -59,32 +38,21 @@ const kb = (bytes: number) => `${bytes / 1000} KB`;
 test.each([
   // Sizes
   `${mib(writeBytes)} (UTF-8)`,
-  `exceeding ${mib(pushBytes)} (UTF-8)`,
-  `pull request body exceeds ${mb(pullBytes)} (UTF-8)`,
-  `Roughly ${count(pushLimit)} bytes of changes`,
-  `up to ${count(pushMutations)} mutations`,
-  `At most ${count(clientChars)} characters (UTF-16 code units)`,
   `${count(defaultConnections)} concurrent connections`,
-  `${count(socketLimit)} bytes per entire message`,
-  `minimum transfer rate of ${kb(slowestRate)}/s`,
-  `does not exceed ${count(noticeBudget)}`,
-  `Roughly ${count(chunkLimit)} characters for private spaces`,
-  `reads at most ${count(readRows)} rows from the database`,
+  `fits in ${count(socketLimit)} bytes (UTF-8)`,
+  `in steps of up to ${count(readRows)} rows`,
   `every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
   `${count(keyBytes)} bytes encoded as JSON`,
   `at most ${count(subscriptionBytes)} bytes encoded as JSON`,
   `at most ${count(bucketBytes)} bytes per bucket`,
   `Synced columns total ${count(maxRowBytes)} bytes (DO rows cap at ${mb(valueBytes)}`,
   `greater of roughly ${mib(commitFloor)} and`,
-  `roughly ${count(rowOverhead)} bytes per version`,
-  `deleting at most ${count(truncateRows)} commits and ${mib(truncateBytes)} of primary keys`,
   `default ${count(defaultShards)} shards`,
   `${count(writeRows)} rows (shared spaces support only server writes, up to ${count(sharedWriteRows)} rows: each row must also maintain its buckets), and primary keys total ${mb(writeKeyBytes)}`,
-  `at most ${count(rangeRows)} rows, roughly ${count(rangeChars)} characters, and ${count(rangeParts)} tables`,
-  `halves down to ${count(batch)} rows`,
   `requests at most ${count(rowsPerDay)} rows per day`,
   // Durations
   `no data is received for ${seconds(receiveTimeout)}`,
+  `as long as its bytes take at ${kb(slowestRate)}/s`,
   `idle for ${seconds(pingAfter)}, and if no message arrives within ${seconds(pongWithin)}`,
   `min(${seconds(maxDelay)}, ${seconds(baseDelay)} * 2ⁿ)`,
   `${count(reconnectRate)} devices per second`,
@@ -95,10 +63,9 @@ test.each([
   expect(limits).toContain(sentence);
 });
 
-test('checksum verification waits a full day after completing a round, and retries failed sections at most once per minute', () => {
-  expect([interval, askAgainAfter]).toEqual([24 * 3_600_000, 60_000]);
+test('checksum verification waits a full day after completing a round', () => {
+  expect(interval).toBe(24 * 3_600_000);
   expect(limits).toContain('a full day after the previous round completed');
-  expect(limits).toContain('at most once per minute');
 });
 
 test('Rust device-side limits match cloud limits', () => {

@@ -60,7 +60,6 @@ type Limits = Record<
   | 'writeRows'
   | 'writeKeyBytes'
   | 'maxRowBytes'
-  | 'pushLimit'
   | 'receiveTimeout'
   | 'pingAfter'
   | 'pongWithin'
@@ -70,10 +69,8 @@ type Limits = Record<
   | 'socketLimit'
   | 'baseDelay'
   | 'maxDelay'
-  | 'batch'
   | 'rowsPerDay'
-  | 'interval'
-  | 'askAgainAfter',
+  | 'interval',
   number
 >;
 

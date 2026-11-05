@@ -19,10 +19,10 @@ import { plus, rangeRows, rowText } from '../common/checksum.ts';
  */
 
 /** Approximate character cap for a segment (row hash text): rows can approach the single-value limit, so segment size is capped by character count in addition to row count. */
-export const rangeChars = 8_000_000;
+const rangeChars = 8_000_000;
 
 /** Maximum tables per segment: each table is an entry in the response; on mismatch, the device places the parts into a refetch pull request, keeping responses and refetch requests bounded regardless of table count. */
-export const rangeParts = 100;
+const rangeParts = 100;
 
 /**
  * Computes a checksum segment starting at cursor, up to limit rows (capped at rangeRows).

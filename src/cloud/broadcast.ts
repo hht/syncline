@@ -56,7 +56,7 @@ export const defaultShards = 128;
  * so when notice characters × connection count exceeds this budget, the shard pushes hints instead of notices to keep memory within platform limits (128 MB per object).
  * @see https://developers.cloudflare.com/durable-objects/platform/limits/
  */
-export const noticeBudget = 16_000_000;
+const noticeBudget = 16_000_000;
 
 /**
  * Target reconnection rate (devices per second) after simultaneous disconnects (e.g. deployment restarting all objects):

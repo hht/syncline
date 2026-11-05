@@ -30,7 +30,6 @@ pub fn documented() -> serde_json::Value {
         "writeRows": WRITE_ROWS,
         "writeKeyBytes": WRITE_KEY_BYTES,
         "maxRowBytes": MAX_ROW_BYTES,
-        "pushLimit": crate::sync::pushes::PUSH_LIMIT,
         "receiveTimeout": RECEIVE_TIMEOUT,
         "pingAfter": crate::sync::heartbeat::PING_AFTER,
         "pongWithin": crate::sync::heartbeat::PONG_WITHIN,
@@ -40,9 +39,7 @@ pub fn documented() -> serde_json::Value {
         "socketLimit": crate::sync::SOCKET_LIMIT,
         "baseDelay": crate::sync::backoff::BASE_DELAY,
         "maxDelay": crate::sync::backoff::MAX_DELAY,
-        "batch": crate::checksum::BATCH,
         "rowsPerDay": crate::verifier::ROWS_PER_DAY,
         "interval": crate::verifier::INTERVAL,
-        "askAgainAfter": crate::verifier::ASK_AGAIN_AFTER,
     })
 }
