@@ -12,6 +12,7 @@ const wide = (value: unknown): value is number => typeof value === 'number' && N
  */
 function run(
   bindDouble: (statement: PreparedStatement, index: number, value: number) => void,
+  rowOf: (statement: PreparedStatement) => SqlValue[],
   statement: PreparedStatement,
   bindings: unknown[],
 ) {
@@ -21,7 +22,7 @@ function run(
       for (const [index, value] of bindings.entries()) if (wide(value)) bindDouble(statement, index + 1, value);
     }
     const rows: SqlValue[][] = [];
-    while (statement.step()) rows.push(statement.get([]));
+    while (statement.step()) rows.push(rowOf(statement));
     // Statements without result columns (DDL, DML) throw when fetching column names.
     const columns = statement.columnCount > 0 ? statement.getColumnNames() : [];
     return cursor(columns, rows);
@@ -40,6 +41,15 @@ export function sqliteWasmStorage(sqlite3: Sqlite3Static, db: Database): Storage
     if (code !== capi.SQLITE_OK) throw new Error(`SQLite returned ${capi.sqlite3_js_rc_str(code)}`);
   };
   const inTransaction = () => capi.sqlite3_get_autocommit(db) === 0;
+  // oo1 decodes text with a default TextDecoder, which drops a leading U+FEFF; Durable Object SQL returns it.
+  const text = new TextDecoder('utf-8', { ignoreBOM: true });
+  const rowOf = (statement: PreparedStatement) =>
+    Array.from({ length: statement.columnCount }, (_, index) => {
+      const pointer = statement.pointer as number;
+      if (capi.sqlite3_column_type(pointer, index) !== capi.SQLITE_TEXT) return statement.get(index);
+      const start = capi.sqlite3_column_blob(pointer, index);
+      return text.decode(sqlite3.wasm.heap8u().slice(start, start + capi.sqlite3_column_bytes(pointer, index)));
+    });
   const prepared = statementCache(
     (query) => db.prepare(query),
     (statement) => statement.finalize(),
@@ -49,6 +59,7 @@ export function sqliteWasmStorage(sqlite3: Sqlite3Static, db: Database): Storage
       exec: (query, ...bindings) =>
         run(
           (statement, index, value) => check(capi.sqlite3_bind_double(statement.pointer as number, index, value)),
+          rowOf,
           prepared(query),
           bindings,
         ),

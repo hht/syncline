@@ -4,7 +4,9 @@ import { type Bucket, type BucketRules, bucketId } from '../cloud/buckets.ts';
 import { type Confirmed, Fanout } from '../cloud/fanout.ts';
 import type { Round } from '../cloud/shared.ts';
 import { Space } from '../cloud/space.ts';
+import { socketLimit } from '../common/protocol.ts';
 import { parsePullRequest } from '../common/pull-url.ts';
+import { Seams } from './test-bounds.ts';
 import { subscribed } from './test-catalog.ts';
 import type { Cloud, CloudEnd, Network } from './test-network.ts';
 import { picker } from './test-skeleton.ts';
@@ -48,7 +50,7 @@ const inlineLimit = 300;
 const chunkChars = 120;
 const chunkRows = 2;
 /** Commit floor threshold: truncates commit log after tens of writes. */
-const commitFloor = 1_500;
+export const commitFloor = 1_500;
 
 export type Row = { id: string; status: string; title: string; team: string | null };
 
@@ -62,6 +64,24 @@ export function rowsOf(storage: ReturnType<typeof cloudStorage>, definition: Buc
   });
   const where = conditions.length > 0 ? conditions.join(' OR ') : '0';
   return storage.sql.exec(`SELECT id, status, title, team FROM program WHERE ${where} ORDER BY id`).toArray() as Row[];
+}
+
+/** Message bounds for the sizes this cloud configures. */
+export function seams() {
+  const subscriptions = subscriptionNames.map(subscriptionOf);
+  const longest = (texts: string[]) => texts.reduce((most, text) => (text.length > most.length ? text : most), '');
+  const widest = subscriptions.map(({ subscription }) => subscription).sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length);
+  return new Seams({
+    chunk: chunkChars,
+    socket: socketLimit,
+    tables: ['program'],
+    key: { id: longest(keys) },
+    shared: {
+      bucket: longest(subscriptions.flatMap(({ subscription }) => subscription)),
+      sub: longest(subscriptions.map(({ sub }) => sub)),
+      subscription: widest[0] ?? [],
+    },
+  });
 }
 
 export class SharedCloud {
@@ -150,7 +170,12 @@ export class SharedCloud {
   #open() {
     // Database size reported as 0: commitFloor acts as threshold, truncating every tens of writes.
     const storage = this.storage;
-    const sql = { exec: (query: string, ...bindings: unknown[]) => storage.sql.exec(query, ...bindings), databaseSize: 0 };
+    const exec = (query: string, ...bindings: unknown[]) => {
+      const cursor = storage.sql.exec(query, ...bindings);
+      this.#network.seams?.meter(query, cursor.rowsWritten);
+      return cursor;
+    };
+    const sql = { exec, databaseSize: 0 };
     const space = new Space({ ...storage, sql }, [program], { shared: { buckets: this.definition(), chunkRows }, commitFloor });
     this.#fanout = new Fanout(
       {
@@ -250,9 +275,9 @@ export class SharedCloud {
     this.#space.bucketRows?.step(2);
   }
 
-  /** Log truncation step (Truncate in model): cookies or cursors behind floor receive reset. */
+  /** Log truncation step (Truncate in model): cookies or cursors behind floor receive reset; returns whether more steps remain. */
   truncate() {
-    this.#space.truncate();
+    return this.#space.truncate();
   }
 
   /** Verifies completed bucket counts against actual visible rows per bucket; throws on mismatch. */

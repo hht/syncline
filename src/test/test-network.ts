@@ -1,5 +1,6 @@
 import { ping, pong } from '../common/protocol.ts';
 import { protocolVersion, versionMismatch } from '../common/version.ts';
+import type { Seams } from './test-bounds.ts';
 import type { Device } from './test-device.ts';
 import { admitSocket, answer, type Cloud, mismatched, tokens } from './test-entry.ts';
 import { garbled, type Pull, Requests } from './test-requests.ts';
@@ -24,12 +25,14 @@ export class Network {
   #links: Link[] = [];
   /** HTTP pull requests. */
   readonly #requests: Requests;
-  readonly #timers = new Set<{ run: () => void; delay: number }>();
+  readonly timers = new Set<{ run: () => void; delay: number }>();
   readonly #pick: <T>(items: T[]) => T | undefined;
   readonly #server: () => Cloud;
   readonly #crash: () => void;
   /** Records model actions during trace validation. */
   trace: Trace | undefined;
+  /** Holds requests, responses, frames, and cloud invocations to resource bounds. */
+  seams: Seams | undefined;
 
   /** crash: resets actor when storage encounters InjectedFault (SQLite error resets actor and fails request). */
   constructor(pick: <T>(items: T[]) => T | undefined, server: () => Cloud, crash: () => void = () => undefined) {
@@ -42,14 +45,14 @@ export class Network {
         answer(request, this.cloudVersion, this.#server(), () =>
           this.#call(() => this.#server().pull(new URL(request.url), request.body), undefined),
         ),
-      () => this.trace,
+      this,
     );
   }
 
   /** Invokes actor: resets actor on InjectedFault and returns failed. */
   #call<T>(call: () => T, failed: T): T {
     try {
-      return call();
+      return this.seams ? this.seams.invoke(call) : call();
     } catch (error) {
       if (!isInjected(error)) throw error;
       this.#crash();
@@ -75,10 +78,7 @@ export class Network {
           device,
           url,
           ...admitSocket(protocols),
-          client: new DeviceEnd(
-            () => link,
-            () => this.trace,
-          ),
+          client: new DeviceEnd(() => link, this),
           toCloud: [],
           toDevice: [],
         };
@@ -88,8 +88,8 @@ export class Network {
       fetch: (url: string, init: Parameters<Requests['fetch']>[2]) => this.#requests.fetch(device, url, init),
       schedule: (run: () => void, delay: number) => {
         const timer = { run, delay };
-        this.#timers.add(timer);
-        return () => this.#timers.delete(timer);
+        this.timers.add(timer);
+        return () => this.timers.delete(timer);
       },
     };
   }
@@ -117,7 +117,7 @@ export class Network {
     const refused = mismatched(url, this.cloudVersion);
     if (link.client.readyState >= 2 || (!refused && expiresAt === undefined)) return this.#break(link);
     // Mismatched protocol versions accepted by entry Worker then immediately closed without forwarding to actor.
-    link.server = new CloudEnd(link, refused ? new Set() : this.accepted, () => this.trace);
+    link.server = new CloudEnd(link, refused ? new Set() : this.accepted, this);
     const server = link.server;
     // Actor fault on accept: actor resets, closing connection.
     const crashed =
@@ -199,9 +199,9 @@ export class Network {
 
   /** Fires pending timer (reconnect, heartbeat); advances time by within ms when specified. */
   fire(within?: number) {
-    const timers = [...this.#timers];
+    const timers = [...this.timers];
     const timer = within === undefined ? this.#pick(timers) : timers.find(({ delay }) => delay <= within);
-    if (timer) this.#timers.delete(timer);
+    if (timer) this.timers.delete(timer);
     timer?.run();
     return timer !== undefined;
   }

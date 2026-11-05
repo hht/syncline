@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import { protocolVersion } from '../common/version.ts';
-import { SimulatedCloud } from './test-cloud.ts';
+import { SimulatedCloud, seams } from './test-cloud.ts';
 import { decided, WriteLedger } from './test-commits.ts';
 import { keys, labelsOf, Releases, writes } from './test-counter.ts';
 import type { Device } from './test-device.ts';
@@ -28,7 +28,7 @@ import { Tracer } from './test-trace.ts';
 // P8k lost writes are strictly those rolled back by PITR, P6/P9 convergence post-faults, and at-most-one connection per device.
 // @see https://apple.github.io/foundationdb/testing.html
 
-class Simulation {
+export class Simulation {
   /** Devices: process lifecycle, local storage, and open writes. */
   readonly #devices: SimulatedDevices;
   readonly #random: () => number;
@@ -64,6 +64,7 @@ class Simulation {
       () => this.#cloud.deploy(),
     );
     this.#network.trace = tracer && ((...event) => this.#devices.traced(tracer, ...event));
+    this.#network.seams = seams((index) => this.storage(index));
     this.#cloud = new SimulatedCloud(this.#network, this.releases, tracer, this.#random, (before, at) => {
       this.#ledger.rewound(
         before,
@@ -154,6 +155,7 @@ class Simulation {
 
   async #after() {
     await flush();
+    this.#network.seams?.check();
     this.#tracer?.observe(
       this.devices,
       this.devices.map((_, index) => this.storage(index)),
@@ -243,6 +245,16 @@ class Simulation {
    */
   async #resume(done = () => true) {
     while (this.#network.fire(0) || !done()) await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  /** Upkeep: truncates the commit log until it is within its cap; returns the databases and network state left. */
+  upkeep() {
+    while (this.#cloud.truncate());
+    return {
+      cloud: this.cloud,
+      devices: this.devices.map((_, index) => this.storage(index)),
+      network: { timers: this.#network.timers.size, accepted: this.#network.accepted.size },
+    };
   }
 
   /** Total writes rolled back by cloud PITR. */

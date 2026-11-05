@@ -1,5 +1,6 @@
 import type { Socket } from '../cloud/server.ts';
 import { ping, pong } from '../common/protocol.ts';
+import type { Seams } from './test-bounds.ts';
 import { type Message, socketMessage } from './test-trace.ts';
 
 // WebSocket ends in deterministic simulation: client conforms to WHATWG WebSocket states, server conforms to workerd Durable Object behavior.
@@ -35,6 +36,9 @@ export type Trace = (
   options?: { optional?: boolean; message?: Message; first?: boolean; opened?: boolean },
 ) => void;
 
+/** What watches the traffic: the model trace recorder (during trace validation) and resource bounds (Network). */
+export type Watch = { readonly trace: Trace | undefined; readonly seams: Seams | undefined };
+
 /**
  * Records disconnection event once per connection: deduplicates redundant closes across peers and cuts.
  * opened indicates connection reached active state in shared space model.
@@ -52,11 +56,11 @@ export class DeviceEnd {
   onclose: ((event: { code: number; reason: string }) => void) | null = null;
   readyState = 0;
   readonly #link: () => Link;
-  readonly #trace: () => Trace | undefined;
+  readonly #watch: Watch;
 
-  constructor(link: () => Link, trace: () => Trace | undefined) {
+  constructor(link: () => Link, watch: Watch) {
     this.#link = link;
-    this.#trace = trace;
+    this.#watch = watch;
   }
 
   send(message: string) {
@@ -64,7 +68,8 @@ export class DeviceEnd {
     if (this.readyState !== 1) return;
     const link = this.#link();
     // Sockets closed immediately upon accept are not considered connected in model.
-    if (message !== ping) this.#trace()?.('Push', link.device, { optional: link.server?.readyState !== 1 });
+    if (message !== ping) this.#watch.trace?.('Push', link.device, { optional: link.server?.readyState !== 1 });
+    this.#watch.seams?.frame(link.device, true, { message });
     link.toCloud.push({ message });
   }
 
@@ -77,7 +82,7 @@ export class DeviceEnd {
 
   close() {
     if (this.readyState >= 2) return;
-    traceDisconnect(this.#link(), this.#trace());
+    traceDisconnect(this.#link(), this.#watch.trace);
     this.readyState = 2;
     this.#link().toCloud.push({ close: 1000 });
   }
@@ -92,14 +97,16 @@ export class CloudEnd implements Socket {
   #attachment: unknown;
   readonly #link: Link;
   readonly #accepted: Set<CloudEnd>;
-  readonly #trace: () => Trace | undefined;
+  readonly #watch: Watch;
   /** Message index sent to device: first message is catch-up poke (for shared space trace validation). */
   #sent = 0;
 
-  constructor(link: Link, accepted: Set<CloudEnd>, trace: () => Trace | undefined) {
+  /** Checks the URL the device connects with, as the cloud receives it in the handshake. */
+  constructor(link: Link, accepted: Set<CloudEnd>, watch: Watch) {
     this.#link = link;
     this.#accepted = accepted;
-    this.#trace = trace;
+    this.#watch = watch;
+    watch.seams?.socket(link.device, link.url);
   }
 
   send(message: string) {
@@ -107,8 +114,9 @@ export class CloudEnd implements Socket {
     // Closed client sockets cannot receive messages; omitted from model trace.
     if (this.#link.client.readyState < 2 && message !== pong) {
       this.#sent += 1;
-      this.#trace()?.('Sent', this.#link.device, { message: socketMessage(message), first: this.#sent === 1 });
+      this.#watch.trace?.('Sent', this.#link.device, { message: socketMessage(message), first: this.#sent === 1 });
     }
+    this.#watch.seams?.frame(this.#link.device, false, { message });
     this.#link.toDevice.push({ message });
   }
 
@@ -120,6 +128,7 @@ export class CloudEnd implements Socket {
   close(code = 1000, reason = '') {
     if (this.readyState !== 1) return;
     this.readyState = 2;
+    this.#watch.seams?.frame(this.#link.device, false, { close: code, reason });
     this.#link.toDevice.push({ close: code, reason });
   }
 

@@ -64,18 +64,23 @@ export async function settle({
 }
 
 /**
- * Runs a deterministic simulation seed: captures reported errors, runs 300 steps, settles post-faults,
- * invokes finish (closing and writing traces), verifies reported errors match expected (injected faults and corrupted payloads).
+ * Runs a deterministic simulation seed: captures reported errors, runs epochs (by default one) of steps (by default 300), each settling
+ * post-faults and then invoking settled, invokes finish (closing and writing traces), verifies reported errors match expected (injected
+ * faults and corrupted payloads).
  */
 export async function simulated<S extends { step(): Promise<void>; settle(): Promise<void> }>(
   make: () => S,
   finish: (simulation: S) => void,
   expected: (message: string) => boolean,
+  { epochs = 1, steps = 300, settled = () => undefined }: { epochs?: number; steps?: number; settled?: (simulation: S) => void } = {},
 ) {
   const reported = captureReported();
   const simulation = make();
-  for (let step = 0; step < 300; step += 1) await simulation.step();
-  await simulation.settle();
+  for (let epoch = 0; epoch < epochs; epoch += 1) {
+    for (let step = 0; step < steps; step += 1) await simulation.step();
+    await simulation.settle();
+    settled(simulation);
+  }
   finish(simulation);
   expect(reported.filter((message) => !expected(message))).toEqual([]);
   return simulation;

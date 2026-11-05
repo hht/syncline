@@ -1,6 +1,8 @@
 import { Server } from '../cloud/server.ts';
+import { socketLimit } from '../common/protocol.ts';
 import type { Storage } from '../common/storage.ts';
 import { protocolVersion } from '../common/version.ts';
+import { Seams } from './test-bounds.ts';
 import { Space } from './test-checksum.ts';
 import { decidedTwice, head, recordDecisions } from './test-commits.ts';
 import { CloudHistory, createMemo, keys, labelsIn, type Releases, RevivalCheck, schema, serverInc } from './test-counter.ts';
@@ -16,10 +18,29 @@ import type { Tracer } from './test-trace.ts';
 const chunkLimit = 400;
 
 /** Commit log floor limit: reports zero database size so floor acts as threshold, truncating every ~10 writes. */
-const commitFloor = 600;
+export const commitFloor = 600;
 
 /** Push row batch limit: set to 2 so multi-mutation pushes process prefixes and clients push remainders. */
 const pushRows = 2;
+
+/** Message bounds for the sizes this cloud configures; storage gives a device's database, whose pending writes' clients its pulls list. */
+export function seams(storage: (device: number) => Storage) {
+  const pending = (device: number) =>
+    storage(device)
+      .sql.exec('SELECT DISTINCT client FROM _syncline_pending')
+      .toArray()
+      .map(({ client }) => String(client));
+  return new Seams({
+    chunk: chunkLimit,
+    // {@link Server} caps WebSocket messages at the smaller of its chunk limit and socketLimit.
+    socket: Math.min(chunkLimit, socketLimit),
+    tables: ['counter', 'tag', 'memo'],
+    // Counter and memo ids are single letters and tag ids are labels t<n>: 16 characters hold labels below 10^15.
+    key: { id: 't'.padEnd(16, '9') },
+    pushRows,
+    pending: (device) => new Set(pending(device)),
+  });
+}
 
 export class SimulatedCloud {
   storage = cloudStorage(...schema, createMemo);
@@ -69,7 +90,9 @@ export class SimulatedCloud {
         this.#fault -= 1;
         if (this.#fault === 0) throw new InjectedFault(sql);
       }
-      return cloud.sql.exec(sql, ...bindings);
+      const cursor = cloud.sql.exec(sql, ...bindings);
+      this.#network.seams?.meter(sql, cursor.rowsWritten);
+      return cursor;
     };
     const sql = { exec, databaseSize: 0 };
     const [tables, options] = this.#releases.deployed();
@@ -134,14 +157,18 @@ export class SimulatedCloud {
     [this.#space, this.server] = this.#serve();
   }
 
-  /** Maintenance chore: log truncation step (Truncate in model); records new low water mark in trace; resets on storage faults. */
+  /**
+   * Maintenance chore: log truncation step (Truncate in model); records new low water mark in trace; resets on storage faults.
+   * Returns whether it truncated.
+   */
   truncate() {
     const low = () => Number(this.storage.sql.exec('SELECT version FROM _syncline_low').toArray()[0]?.version ?? -1);
     const before = low();
     this.onObject(() => this.#space.truncate());
-    if (low() === before) return;
+    if (low() === before) return false;
     this.#tracer?.add('Truncate', undefined, { k: low() });
     this.history.reimage(this.storage);
+    return true;
   }
 
   /** Cloud invariants: P1 each client mutation is decided at most once; P8r rolled-back unheld writes do not revive. */
