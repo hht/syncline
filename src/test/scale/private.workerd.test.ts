@@ -216,7 +216,7 @@ const afterBigWrite = <T>(limit: number, body: (space: Space, cookie: ReturnType
     return body(space, cookie, reads);
   });
 
-// Writing K rows takes ~2s when idle; may exceed default 5s under parallel test load.
+// Writing K rows takes ~2 s when idle and several times longer under parallel test load.
 for (const [label, limit] of [
   ['catch-up on connect (single WebSocket message)', socketLimit],
   ['HTTP pull chunk', 50_000],

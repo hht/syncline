@@ -25,7 +25,7 @@ function connected(device: Device, limit?: number) {
   return { cloud, space, network, connection, addresses };
 }
 
-// 200 opens and writes take ~5s under high concurrency, requiring extended timeout.
+// 200 opens and writes take ~5 s under high concurrency; the extended timeout leaves room for heavier load.
 test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', {
   timeout: 30_000,
 }, async () => {

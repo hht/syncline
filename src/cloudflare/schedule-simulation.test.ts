@@ -49,7 +49,7 @@ function scheduleTable() {
 
 /** Lets the alarm's promises settle (the schedule awaits storage calls between steps). */
 const flush = async () => {
-  for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
 };
 
 class Simulation {

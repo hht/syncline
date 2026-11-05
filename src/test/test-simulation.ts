@@ -251,14 +251,16 @@ class Simulation {
   }
 }
 
-/** Seeds partitioned by whether cloud PITR is enabled (mod 4 >= 2 enables PITR). */
-export function seeds(restores: boolean) {
-  const first = Number(process.env.SIMULATION_SEED ?? 0);
-  return Array.from({ length: 200 }, (_, index) => first + index).filter((seed) => seed % 4 >= 2 === restores);
-}
+/** Faults a seed enables: odd seeds back up and restore devices, seeds 2 and 3 mod 4 restore the cloud to a point in time. */
+const faults = (seed: number) => ({ backups: seed % 2 === 1, restores: seed % 4 >= 2 });
 
-/** Timeout allowance for simulation runs under full CPU load in parallel test gates. */
-export const seedTimeout = { timeout: 30_000 };
+/** Seeds enabling the given faults, one test file per partition so the partitions run in parallel. */
+export function seeds({ backups, restores }: { backups: boolean; restores: boolean }) {
+  const first = Number(process.env.SIMULATION_SEED ?? 0);
+  return Array.from({ length: 200 }, (_, index) => first + index).filter(
+    (seed) => faults(seed).backups === backups && faults(seed).restores === restores,
+  );
+}
 
 /**
  * Runs a deterministic simulation seed: 300 steps, halts faults, verifies convergence and post-conditions.
@@ -268,8 +270,7 @@ export async function simulate(seed: number) {
   const traces = process.env.SIMULATION_TRACE;
   const tracer = traces ? new Tracer() : undefined;
   const simulation = await simulated(
-    // Odd seeds enable device backup and restore.
-    () => new Simulation(seed, { devices: 3, backups: seed % 2 === 1, restores: seed % 4 >= 2, tracer }),
+    () => new Simulation(seed, { devices: 3, ...faults(seed), tracer }),
     () => {
       if (traces) tracer?.write(join(traces, String(seed)));
     },

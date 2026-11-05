@@ -58,8 +58,8 @@ const rustRelevant = !files || files.some((file) => /^(rust\/|tools\/check\/)/.t
 // Tests compile wasm at the start (vitest globalSetup); when Rust changes, compile with all cores: compile it here first so its cargo has nothing left to do.
 const wasm = (output: 'node' | 'web') => runTool(root, process.execPath, ['src/build-wasm.mjs', output], () => []);
 
-// Cargo building Rust (rust, wasm) uses all cores; running simultaneously with tests when Rust changes causes 5-second timeout tests to time out, so mark them first to finish before starting the rest.
-// Tests (vitest defaults to cores - 1 processes) run concurrently with other gates and workerd; running on all cores contends for CPU and stretches single tests past the 5-second timeout: use only two-thirds of the cores.
+// Cargo building Rust (rust, wasm) uses all cores; running simultaneously with tests when Rust changes pushes timeout-bounded tests past their timeouts, so mark them first to finish before starting the rest.
+// Tests (vitest defaults to cores - 1 processes) run concurrently with other gates and workerd; running on all cores contends for CPU and stretches single tests toward their timeouts: use only two-thirds of the cores.
 const testWorkers = Math.max(1, Math.floor(availableParallelism() / 1.5));
 
 const gates: Gate[] = [

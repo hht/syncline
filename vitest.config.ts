@@ -26,6 +26,8 @@ export default defineConfig({
       {
         test: {
           name: 'fast',
+          // Gates run tests beside other CPU-bound gates, stretching second-long tests several times over; the timeout only has to catch hangs.
+          testTimeout: 15_000,
           include: ['{src,tools}/**/*.test.ts'],
           // Compiles Rust device side to wasm for tests.
           globalSetup: ['src/build-wasm.mjs'],

@@ -154,7 +154,7 @@ const rangeOf = (next: () => number) => {
   return { key: ['id'], ...(after && { after: { id: after } }), ...(until && { until: { id: until } }) };
 };
 
-// Runs ~3s standalone; in pnpm check with parallel gates and full CPU load it exceeds 5s, default 5s is insufficient
+// Runs ~2 s standalone and several times longer in pnpm check with parallel gates at full CPU load.
 test('both apply paths produce identical results: random changes applied staged in SQLite vs written one by one match exactly', {
   timeout: 30_000,
 }, async () => {
