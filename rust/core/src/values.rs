@@ -61,10 +61,12 @@ pub fn value_of(json: &Json) -> Result<Value, Error> {
     Ok(match json {
         Json::Null => Value::Null,
         Json::Bool(value) => Value::Integer(i64::from(*value)),
+        // JS numbers are doubles: an integer past the safe range stands for the double it rounds to, and binding it as an integer
+        // would compare unequal to that double in a real column (SQLite compares integers and reals exactly).
         Json::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(integer), _) => Value::Integer(integer),
-            (None, Some(real)) => Value::Real(real),
-            (None, None) => return Err(Error::Failed(format!("failed to parse number in parameters: {number}"))),
+            (Some(integer), _) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => Value::Integer(integer),
+            (_, Some(real)) => Value::Real(real),
+            (_, None) => return Err(Error::Failed(format!("failed to parse number in parameters: {number}"))),
         },
         Json::String(text) => Value::Text(text.clone()),
         Json::Array(bytes) => Value::Blob(
