@@ -123,12 +123,9 @@ pub fn js_number(number: f64) -> Option<String> {
     if number == 0.0 {
         return Some("0".to_owned());
     }
-    // Rust {:e} yields the shortest round-trippable digits: "1.025e2"
-    let scientific = format!("{:e}", number.abs());
-    let (mantissa, exponent) = scientific.split_once('e').expect("scientific notation contains e");
-    let digits = mantissa.replace('.', "");
+    let (digits, exponent) = shortest(number.abs());
     let k = i32::try_from(digits.len()).expect("digits within tens of characters");
-    let n = exponent.parse::<i32>().expect("exponent is integer") + 1;
+    let n = exponent + 1;
     let body = if k <= n && n <= 21 {
         format!("{digits}{}", "0".repeat(usize::try_from(n - k).expect("non-negative")))
     } else if 0 < n && n <= 21 {
@@ -146,6 +143,46 @@ pub fn js_number(number: f64) -> Option<String> {
         format!("{mantissa}e{}{}", if n > 1 { "+" } else { "-" }, (n - 1).abs())
     };
     Some(if number < 0.0 { format!("-{body}") } else { body })
+}
+
+/// Shortest digits of a positive finite number and its decimal exponent, as ECMAScript picks them.
+/// Rust {:e} yields the shortest round-trippable digits ("1.025e2"), but between two equally close digit strings it may not take the even
+/// one, as ECMAScript requires: the exact decimal expansion shows such a tie as the digits past the shortest ones being 5 then zeros.
+fn shortest(number: f64) -> (String, i32) {
+    let parts = |text: &str| {
+        let (mantissa, exponent) = text.split_once('e').expect("scientific notation contains e");
+        (mantissa.replace('.', ""), exponent.parse::<i32>().expect("exponent is integer"))
+    };
+    let (digits, exponent) = parts(&format!("{number:e}"));
+    // Two equally close k-digit strings both read back only if their spacing (at least the number times 10^-k) is within the spacing of
+    // normal doubles (the number times at most 2^-52), so ties need 16 digits; subnormals are spaced wider and are checked whatever k is.
+    if digits.len() < 16 && number >= f64::MIN_POSITIVE {
+        return (digits, exponent);
+    }
+    // A double's exact decimal expansion has at most 767 significant digits.
+    let (exact, exact_exponent) = parts(&format!("{number:.767e}"));
+    let rest = &exact[digits.len()..];
+    if exact_exponent != exponent || !rest.starts_with('5') || rest.bytes().skip(1).any(|digit| digit != b'0') {
+        return (digits, exponent);
+    }
+    // Rounds the truncated digits up when their last digit is odd; a carry past the first digit leaves Rust's digits.
+    let mut even = exact.as_bytes()[..digits.len()].to_vec();
+    if even.last().is_some_and(|digit| (digit - b'0') % 2 == 1) {
+        for digit in even.iter_mut().rev() {
+            if *digit == b'9' {
+                *digit = b'0';
+            } else {
+                *digit += 1;
+                break;
+            }
+        }
+    }
+    let even = String::from_utf8(even).expect("ASCII digits");
+    // Only digits that read back as the number qualify.
+    if even.starts_with('0') || format!("{}.{}e{exponent}", &even[..1], &even[1..]).parse::<f64>() != Ok(number) {
+        return (digits, exponent);
+    }
+    (even, exponent)
 }
 
 /// Returns the UTF-8 byte length of a row's primary key JSON representation, used for primary key and per-write quotas.
@@ -261,6 +298,11 @@ mod tests {
             (0.000_001, "0.000001"),
             (-2.5e300, "-2.5e+300"),
             (5e-324, "5e-324"),
+            // Two shortest digit strings equally close: ECMAScript takes the even one (expected values printed by Node).
+            (1_042_994_156_717_144.0 + 0.25, "1042994156717144.2"),
+            (562_949_953_421_312.0 + 0.25, "562949953421312.2"),
+            (562_949_953_421_313.0 + 0.75, "562949953421313.8"),
+            (999_999_999_999_999.0 + 0.25, "999999999999999.2"),
         ] {
             assert_eq!(js_number(number).as_deref(), Some(written), "{number}");
         }
