@@ -10,3 +10,12 @@ export function random(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** Runs a simulation seed, naming the steps taken so far if it fails. */
+export async function stepped(seed: number, steps: string[], body: () => Promise<void>) {
+  try {
+    await body();
+  } catch (error) {
+    throw new Error(`seed ${seed} failed after:\n${steps.join('\n')}`, { cause: error });
+  }
+}

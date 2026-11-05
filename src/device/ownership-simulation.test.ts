@@ -4,7 +4,7 @@ import type { Poke } from '../common/protocol.ts';
 import { tableName } from '../tables/table-definitions.ts';
 import { Device, type Shared } from '../test/test-device.ts';
 import { Local, None, Ownership, P } from '../test/test-ownership.ts';
-import { random } from '../test/test-random.ts';
+import { random, stepped } from '../test/test-random.ts';
 import { picker, takeStep } from '../test/test-skeleton.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 
@@ -252,10 +252,8 @@ test.for(Array.from({ length: 500 }, (_, index) => Number(process.env.SIMULATION
   'ownership simulation seed %i: rows match model/Ownership.tla after every step',
   async (seed) => {
     const simulation = new Simulation(seed);
-    try {
+    await stepped(seed, simulation.steps, async () => {
       for (let step = 0; step < 60; step++) await simulation.step();
-    } catch (error) {
-      throw new Error(`seed ${seed} failed after:\n${simulation.steps.join('\n')}`, { cause: error });
-    }
+    });
   },
 );
