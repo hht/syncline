@@ -21,7 +21,7 @@ type Ratio = { hit: number; found: number };
 export type FileCoverage = { file: string; lines: Ratio; branches: Ratio; missed: number[] };
 
 /** Minimum percentage of lines and branches tests run, per language. */
-const thresholds = { TS: { lines: 96, branches: 91 }, Rust: { lines: 92, branches: 84 } };
+const thresholds = { TS: { lines: 97, branches: 93 }, Rust: { lines: 94, branches: 85 } };
 
 /**
  * Parses an lcov tracefile into per-file coverage, counting only lines before `end(file)` (1-based; a Rust file's unit test module).

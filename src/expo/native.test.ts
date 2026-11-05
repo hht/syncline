@@ -1,17 +1,18 @@
 import { expect, test, vi } from 'vitest';
 import { PendingWrites } from './errors.ts';
-import { openSyncline } from './native.ts';
+import { openSyncline, syncOnce } from './native.ts';
 
 // Tests native client with mock native module; ordering is guaranteed natively by blocking on active core thread.
 
 const started: string[] = [];
 const removed: string[] = [];
+const sent: Record<string, unknown>[] = [];
 /** Dispatches messages from the mock native module to a specific handle on behalf of the core thread. */
 let deliver: (event: { handle: number; data: string }) => void = () => undefined;
 vi.mock('expo', () => ({
   requireNativeModule: () => ({
     start: (name: string) => started.push(name),
-    send: () => undefined,
+    send: (_: number, call: string) => sent.push(JSON.parse(call)),
     remove: async (name: string) => void removed.push(name),
     addListener: (_: string, listener: typeof deliver) => {
       deliver = listener;
@@ -46,4 +47,18 @@ test('opening blocked by PendingWrites: sync() rejects with PendingWrites and th
   expect(() =>
     openSyncline({ name: 'native-pending', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', discardPending: true }),
   ).not.toThrow();
+});
+
+test('syncOnce opens without discardPending even when given it, so a background sync never discards pending writes', () => {
+  void syncOnce({
+    name: 'native-background',
+    schema: {},
+    url: 'https://sync.test/space',
+    token: async () => 'valid',
+    discardPending: true,
+  }).catch(() => undefined);
+  expect(sent.findLast(({ type }) => type === 'open')).toMatchObject({
+    type: 'open',
+    options: expect.not.objectContaining({ discardPending: true }),
+  });
 });

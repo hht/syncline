@@ -5,6 +5,7 @@ import type { HostMessage } from './worker.ts';
 // Verifies Worker error interception and deletion guards: unhandled errors/rejections are forwarded to page to avoid killing Worker.
 
 const removed = vi.hoisted((): string[] => []);
+const freed = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
   default: async () => undefined,
   Files: {
@@ -21,6 +22,7 @@ vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
           open: traps,
           control: traps,
           free: () => {
+            freed.count += 1;
             if (trapped) throw new Error('attempted to take ownership of Rust value while it was borrowed');
           },
         };
@@ -32,6 +34,9 @@ vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
 vi.mock('../../rust/target/web/syncline_wasm_bg.wasm', () => ({ default: '' }));
 const trapOn = vi.hoisted(() => (text: string) => {
   if (text.includes('panic')) throw new WebAssembly.RuntimeError('unreachable');
+  // The core reports an open failure as Failure JSON.
+  if (text.includes('switched'))
+    throw new Error(JSON.stringify({ message: 'previous user (a) still has 2 pending writes', pending: { owner: 'a', count: 2 } }));
   return '[]';
 });
 
@@ -82,6 +87,30 @@ test('rejects deleting database while open in another instance; deletes file aft
   expect(removed).toEqual(['worker-test']);
 });
 
+test('an open the core refuses replies with its Failure as is and frees the database', async () => {
+  const before = freed.count;
+  expect(await call(6, { type: 'open', id: 1, name: 'worker-refused', options: { switched: true } })).toEqual({
+    instance: 6,
+    received: [
+      { type: 'reply', id: 1, error: { message: 'previous user (a) still has 2 pending writes', pending: { owner: 'a', count: 2 } } },
+    ],
+  });
+  expect(freed.count).toBe(before + 1);
+});
+
+test('calls from an instance other than the open one fail with "Local database is closed", and those without id get no reply', async () => {
+  await call(7, { type: 'open', id: 1, name: 'worker-other', options: {} });
+  expect(await call(8, { type: 'query', id: 1 })).toEqual({
+    instance: 8,
+    received: [{ type: 'reply', id: 1, error: expect.objectContaining({ message: 'Local database is closed' }) }],
+  });
+  const before = posted.length;
+  scope.onmessage?.({ data: { instance: 8, call: { type: 'start' } } });
+  await call(7, { type: 'close', id: 2, name: 'worker-other', remove: false });
+  expect(posted.slice(before)).toEqual([{ instance: 7, received: [{ type: 'reply', id: 2 }] }]);
+});
+
+// A trap leaves the Worker broken (the page discards it), so this runs last.
 test('a core panic (WebAssembly trap) marks the Worker broken, whether opening or handling a call', async () => {
   expect(await call(4, { type: 'open', id: 1, name: 'worker-panic', options: { panic: true } })).toEqual({
     type: 'broken',
