@@ -62,7 +62,7 @@ function bucketsOf(definition: SharedDefinition) {
  * Entry Worker router for shared spaces: compiles the authenticated identity into a subscription against the bucket rules
  * (throwing if invalid or over the byte limit, indicating a bug in `verify` or a need to re-partition buckets),
  * routes WebSockets to a random broadcast shard, and strips `Authorization` (which bypasses cache) on HTTP pulls before calling the cached entrypoint.
- * Pass `entry` as `ctx.exports.X({ props })`—calling `ctx.exports.X.fetch(request, { props })` does not forward `props` and causes all subscriptions to share one cache entry.
+ * Pass `entry` as `ctx.exports.X` itself, which this calls with the subscription as `props`: `ctx.exports.X.fetch(request, { props })` does not forward `props`.
  */
 export async function forwardShared<Broadcast extends Rpc.DurableObjectBranded>(
   request: Request,
@@ -103,6 +103,11 @@ export abstract class SynclineSharedEntry<Env = unknown> extends WorkerEntrypoin
   protected abstract shared(): DurableObjectNamespace;
 
   override fetch(request: Request) {
+    // ctx.exports.X.fetch(request, { props }) drops props: the pull would have no subscription, and its cache entry no key to split on.
+    if (this.ctx.props.subscription === undefined)
+      throw new Error(
+        'SynclineSharedEntry received no props: reach it through forwardShared with entry ctx.exports.X, not ctx.exports.X.fetch',
+      );
     const forwarded = new Request(request);
     forwarded.headers.set(subscriptionHeader, JSON.stringify(this.ctx.props.subscription));
     forwarded.headers.set(subHeader, this.ctx.props.sub);

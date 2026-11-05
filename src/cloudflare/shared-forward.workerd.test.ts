@@ -1,6 +1,7 @@
-import { env } from 'cloudflare:workers';
+import { env, exports } from 'cloudflare:workers';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterAll, expect, test } from 'vitest';
+import { subscriptionHash } from '../cloud/buckets.ts';
 import { landedAt } from '../cloud/position.ts';
 import { bearer, subprotocol } from '../common/protocol.ts';
 import { pullURL } from '../common/pull-url.ts';
@@ -83,4 +84,18 @@ test('returns 400 without forwarding to broadcast shards on unrecognized WebSock
     expect(response.status, target).toBe(400);
   }
   expect(shards).toEqual([]);
+});
+
+test('a cached entrypoint called without props fails instead of serving a pull to an unknown subscription', async () => {
+  const target = pullURL(url, { cookie: null });
+  const subscription = ['["public"]'];
+  const props = { space: 'catalog', subscription, sub: await subscriptionHash(subscription) };
+  expect((await exports.TestCatalogEntry({ props }).fetch(target)).status).toBe(200);
+  const outcome = await exports.TestCatalogEntry.fetch(target).then(
+    async (response) => `${response.status} ${await response.text()}`,
+    (error: unknown) => `threw ${String(error)}`,
+  );
+  expect(outcome).toBe(
+    'threw Error: SynclineSharedEntry received no props: reach it through forwardShared with entry ctx.exports.X, not ctx.exports.X.fetch',
+  );
 });
