@@ -1,22 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { expect, onTestFinished, test } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { expect, test } from 'vitest';
 import { biome, deadCode, duplicates, layers, tests, typecheck } from './gates.ts';
+import { writtenFiles } from './test-files.ts';
 
 const repo = resolve(import.meta.dirname, '../..');
-
-/** Creates a temporary sample project extending actual repository configs to verify real rules. */
-function project(files: Record<string, string>, parent = tmpdir()) {
-  mkdirSync(parent, { recursive: true });
-  const dir = mkdtempSync(join(parent, 'gate-'));
-  onTestFinished(() => rmSync(dir, { recursive: true }));
-  for (const [name, text] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, name)), { recursive: true });
-    writeFileSync(join(dir, name), text);
-  }
-  return dir;
-}
 
 // Sample directory is not a git repository; VCS determines file scope rather than rules.
 const biomeConfig = `{
@@ -35,7 +23,7 @@ const biomeFiles = {
 const summary = (problems: { file: string; line: number; rule: string }[]) => problems.map((p) => `${p.file}:${p.line} ${p.rule}`);
 
 test('biome: catches lint and formatting issues', async () => {
-  const dir = project({
+  const dir = writtenFiles({
     ...biomeFiles,
     'a.ts': 'export const a: any = 1;\n',
     'b.ts': 'export const b  =  1;\n',
@@ -46,7 +34,7 @@ test('biome: catches lint and formatting issues', async () => {
 });
 
 test('biome: checks only specified files', async () => {
-  const dir = project({
+  const dir = writtenFiles({
     ...biomeFiles,
     'a.ts': 'export const a: any = 1;\n',
     'ok.ts': 'export const ok = 1;\n',
@@ -56,13 +44,13 @@ test('biome: checks only specified files', async () => {
 
 test('biome: flags Hermes-unsupported toSorted in device code while allowing it in tests and tools', async () => {
   const sorted = 'export const sorted = [2, 1].toSorted((a, b) => a - b);\n';
-  const dir = project({ ...biomeFiles, 'src/a.ts': sorted, 'src/a.test.ts': sorted, 'tools/a.ts': sorted });
+  const dir = writtenFiles({ ...biomeFiles, 'src/a.ts': sorted, 'src/a.test.ts': sorted, 'tools/a.ts': sorted });
   expect(summary((await biome(dir)(undefined)).problems)).toEqual(['src/a.ts:1 plugin']);
 });
 
 test('tsc: enforces strict options and reports errors across projects', async () => {
   const tsconfig = JSON.stringify({ extends: join(repo, 'tsconfig.base.json'), include: ['*.ts'] });
-  const dir = project({
+  const dir = writtenFiles({
     'one/tsconfig.json': tsconfig,
     'one/a.ts': 'const xs: number[] = [];\nexport const n: number = xs[0];\n',
     'two/tsconfig.json': tsconfig,
@@ -74,7 +62,7 @@ test('tsc: enforces strict options and reports errors across projects', async ()
 });
 
 test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature imports, product-to-tools imports, and circular dependencies', async () => {
-  const dir = project({
+  const dir = writtenFiles({
     '.dependency-cruiser.json': JSON.stringify({ extends: join(repo, '.dependency-cruiser.json') }),
     'tsconfig.json': JSON.stringify({ include: ['src/**/*.ts', 'tools/**/*.ts'] }),
     'src/expo/native.ts': "import '../common/bridge.ts';\n",
@@ -96,7 +84,7 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
 });
 
 test('knip: catches unused files, exports, and dependencies', async () => {
-  const dir = project({
+  const dir = writtenFiles({
     'package.json': JSON.stringify({ name: 'x', private: true, type: 'module', dependencies: { 'left-pad': '1.3.0' } }),
     'knip.json': JSON.stringify({ entry: ['index.ts'], project: ['**/*.ts'] }),
     'index.ts': "import { used } from './lib.ts';\nused();\n",
@@ -123,7 +111,7 @@ test('jscpd: catches duplicate code blocks', async () => {
   return { sum, avg, max: Math.max(...xs), min: Math.min(...xs) };
 }
 `;
-  const dir = project({
+  const dir = writtenFiles({
     '.jscpd.json': readFileSync(join(repo, '.jscpd.json'), 'utf8'),
     'a.ts': body,
     'b.ts': `\n\n${body.replace('total', 'other')}`,
@@ -137,7 +125,7 @@ test('jscpd: catches duplicates in strict blocks against other code once, ignori
   // Identical code without semicolons, with preceding comments mentioning import and trailing export ... from: overly broad patterns would mistake the whole block for an import.
   const body = readFileSync(join(repo, 'tools/check/gates.test.ts'), 'utf8').match(/const body = `([^`]*)`/)?.[1] ?? '';
   const loose = `// matches by import\n${body.replaceAll(';', '')}\nexport { total as sum } from './x.ts';\n`;
-  const dir = project({
+  const dir = writtenFiles({
     '.jscpd.json': readFileSync(join(repo, '.jscpd.json'), 'utf8'),
     'strict/a.ts': loose,
     'other/b.ts': `\n\n${loose}`,
@@ -151,7 +139,7 @@ test('jscpd: catches duplicates in strict blocks against other code once, ignori
 
 test('vitest: catches failing test cases and broken test files', async () => {
   // Fixture resides inside repo so vitest resolves; provides custom config so vitest does not crawl up to repo config.
-  const dir = project(
+  const dir = writtenFiles(
     {
       'vitest.config.ts': 'export default {};\n',
       'math.test.ts': "import { expect, test } from 'vitest';\n\ntest('one plus one', () => {\n  expect(1 + 1).toBe(3);\n});\n",
@@ -173,7 +161,7 @@ test('jscpd: flags paragraphs copied across markdown documents', async () => {
     (_, i) =>
       `- Rule ${i}: delete every unnecessary abstraction, state, branch, and dependency; fewer lines for the same behavior is always better.`,
   ).join('\n');
-  const dir = project({
+  const dir = writtenFiles({
     '.jscpd.json': readFileSync(join(repo, '.jscpd.json'), 'utf8'),
     'a.md': `# One\n\n${paragraph}\n`,
     'b.md': `# Two\n\nAnother opening.\n\n${paragraph}\n`,

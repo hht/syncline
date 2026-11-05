@@ -1,17 +1,15 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { expect, onTestFinished, test, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { expect, test, vi } from 'vitest';
 import { rust } from './rust.ts';
+import { toolchain, writtenFiles } from './test-files.ts';
 
 const workspace = resolve(import.meta.dirname, '../../rust');
 
 test('flags oversized files, formatting errors, clippy issues (including cross-target code), and failing tests once each relative to repo root, ignoring external RUSTUP_TOOLCHAIN', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gate-'));
-  onTestFinished(() => rmSync(dir, { recursive: true }));
   // Replicates repo toolchain and rustfmt configs; workspace is placed in a subdirectory and paths are reported relative to root.
-  const files = {
-    'ws/rust-toolchain.toml': readFileSync(join(workspace, 'rust-toolchain.toml'), 'utf8'),
+  const dir = writtenFiles({
+    'ws/rust-toolchain.toml': toolchain,
     'ws/rustfmt.toml': readFileSync(join(workspace, 'rustfmt.toml'), 'utf8'),
     'ws/Cargo.toml': '[package]\nname = "sample"\nedition = "2024"\n',
     // Gates pass --locked; fails if lockfile is missing
@@ -42,11 +40,7 @@ test('flags oversized files, formatting errors, clippy issues (including cross-t
     // Outside module tree, ignored by cargo compilation but checked for line counts: exactly 300 lines pass; exceeding lines report at top, trailing test module counted separately.
     'ws/src/fits.rs': '// line\n'.repeat(300),
     'ws/src/long.rs': `${'// line\n'.repeat(301)}#[cfg(test)]\nmod tests {\n${'// line\n'.repeat(298)}}\n`,
-  };
-  for (const [name, text] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, name)), { recursive: true });
-    writeFileSync(join(dir, name), text);
-  }
+  });
   vi.stubEnv('RUSTUP_TOOLCHAIN', 'not-installed');
   const result = await rust(dir, 'ws', { target: 'wasm32-unknown-unknown', package: 'sample', env: () => ({}) })();
   expect(result.ok).toBe(false);

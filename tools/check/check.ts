@@ -12,7 +12,8 @@ import { checkForbiddenWords } from './forbidden-words.ts';
 import { biome, deadCode, duplicates, layers, runTool, tests, together, typecheck } from './gates.ts';
 import type { Problem } from './problem.ts';
 import { type Gate, runGates } from './run-gates.ts';
-import { rust } from './rust.ts';
+import { cargo, rust } from './rust.ts';
+import { unusedPublic } from './rust-dead-code.ts';
 
 const root = resolve(import.meta.dirname, '../..');
 const changed = process.argv.includes('--changed');
@@ -95,6 +96,17 @@ const gates: Gate[] = [
     run: rustRelevant
       ? // --all-features includes the coverage feature, whose minicov build runs clang by name.
         rust(root, 'rust', { target: wasmTarget, package: 'syncline-wasm', env: () => ({ ...wasmCompilers(), PATH: clangFirst() }) })
+      : skip('No changes to Rust workspace or gate code'),
+  },
+  {
+    name: 'rust-dead-code',
+    icon: '🧹',
+    first: true,
+    run: rustRelevant
+      ? async () => {
+          const problems = await unusedPublic(root, 'rust', 'core', 'rust/target/dead-code', cargo);
+          return { ok: problems.length === 0, output: problems.map((p) => `${p.file}:${p.line} ${p.message}`).join('\n'), problems };
+        }
       : skip('No changes to Rust workspace or gate code'),
   },
   {
