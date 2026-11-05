@@ -84,7 +84,7 @@ Must be used inside TanStack's `QueryClientProvider`.
 
 ### `class SynclineSpace<Env>`
 
-Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)`, creating tables and adding columns according to `schema` (shared with devices). As on devices, table names ignore case: a table must be declared under the case it is stored as, and declared names cannot differ from `retired` ones only by case, otherwise instantiation throws; `retired` names drop the stored table or column whatever their case.
+Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)`, creating tables and adding columns according to `schema` (shared with devices). As on devices, table names ignore case: a table must be declared under the case it is stored as, and declared names cannot differ from `retired` ones only by case, otherwise instantiation throws; `retired` names match the stored table or column whatever their case. A retired table is dropped by a background alarm 30 days after it was first retired (time to undo a mistake); a retired column stays in storage, unused (dropping a column rewrites the table).
 
 | Option | Description |
 |---|---|

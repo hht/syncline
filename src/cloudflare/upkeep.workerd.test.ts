@@ -52,6 +52,14 @@ test('drops retired tables past grace period in alarms while scheduling future a
   expect(Number(await object(name).alarmAt()) - Date.now()).toBeGreaterThan(hour - 60_000);
 });
 
+test('a retired column stays in storage after a restart, unused, as dropping a column rewrites the table', async () => {
+  const { name } = await online(1);
+  // TestSpace retires note.color.
+  await sql(name, 'ALTER TABLE note ADD COLUMN color TEXT');
+  await restart(name);
+  expect((await sql(name, "SELECT name FROM pragma_table_info('note')")).map((column) => column.name)).toEqual(['id', 'text', 'color']);
+});
+
 test('table names ignore case in Durable Object SQLite: another case is refused, and a retired name resolves to the stored one', async () => {
   const { name } = await online(1);
   await runInDurableObject(object(name), (_: TestSpace, state) => {
