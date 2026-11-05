@@ -5,7 +5,7 @@ import { Space } from '../cloud/space.ts';
 import { parsePullBody, parsePullRequest } from '../common/pull-url.ts';
 import { protocolVersion } from '../common/version.ts';
 import { Device } from '../test/test-device.ts';
-import { drain } from '../test/test-drive.ts';
+import { drain, flush } from '../test/test-drive.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { type CloudEnd, connectWithoutJitter, Network } from '../test/test-network.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
@@ -73,6 +73,10 @@ test('cloud protocol version newer than device (HTTP pull returns 409): stops re
   await run(false);
   expect(connection.status()).toMatchObject({ connected: false, connecting: false, updateNeeded: true, downloadError: expect.any(Error) });
   expect(network.fire()).toBe(false);
+  // Reconnecting cannot help until the app updates
+  connection.reconnect();
+  await flush();
+  expect(network.ready()).toEqual([]);
   await expect(connection.sync()).rejects.toThrow();
   expect(reported).toEqual([]);
 });

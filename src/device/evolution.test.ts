@@ -64,6 +64,15 @@ test('retired columns and tables: physically removed on open (including indexes 
   await upload(space, pending, [pending]);
   expect(pending.private.pending()).toEqual([]);
   expect(storage.sql.exec('SELECT id, note FROM workout').toArray()).toEqual([{ id: 'w1', note: 'box squat' }]);
+
+  // Every later open names them again and finds them gone: nothing changes, nothing is refetched
+  const cookie = pending.private.cookie();
+  pending.close();
+  const reopened = new Device(storage, [workout], { retired });
+  expect(columnsOf(storage, 'workout')).toEqual(['id', 'note', '_extra']);
+  expect(storage.sql.exec('SELECT id, note FROM workout').toArray()).toEqual([{ id: 'w1', note: 'box squat' }]);
+  expect(reopened.private.cookie()).toEqual(cookie);
+  expect(reopened.private.behind()).toBe(false);
 });
 
 test.for([

@@ -27,7 +27,7 @@ const everything = subscribed(['all']);
  * Shared space (all buckets and public non-secret bucket), one broadcast shard, and two devices; commit executes backend write and notifies;
  * token supplies device subscription.
  */
-function setup(prepare: (storage: ReturnType<typeof deviceStorage>) => void = () => undefined) {
+function setup(prepare: (storage: ReturnType<typeof deviceStorage>, device: Device) => void = () => undefined) {
   const buckets = { all: { program: {} }, public: { program: { where: "title != 'secret'" } } };
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 4 } });
   const token = { subscribed: everything };
@@ -49,7 +49,7 @@ function setup(prepare: (storage: ReturnType<typeof deviceStorage>) => void = ()
   const devices = [0, 1].map((index) => {
     const storage = deviceStorage(createProgram);
     const device = new Device(storage, []);
-    prepare(storage);
+    prepare(storage, device);
     const catalog = device.shared('catalog', [program]);
     const connection = new Connection(catalog, { url: 'https://sync.test/catalog', ...network.options(index) });
     const titles = () => drizzle(storage).select().from(program).orderBy(program.id).all();
@@ -226,4 +226,50 @@ test('shared space whose opening hits a transient storage error opens again on t
   const { first } = await connected((storage) => failOnce(storage, 'PRAGMA table_info'));
   expect(first.titles()).toEqual([{ id: 'p1', title: 'plan 1' }]);
   expect(first.connection.status()).toMatchObject({ connected: true, downloadError: undefined });
+});
+
+test('a token that arrives while the shared space tables wait behind an open local write: the attempt resumes once they are created', async () => {
+  const { promise: gate, resolve } = Promise.withResolvers<void>();
+  let open: Promise<void> | undefined;
+  const { devices, commit, network, run } = setup((_, device) => {
+    if (open === undefined) open = write(device, () => gate);
+  });
+  const [first] = devices;
+  if (!first) throw new Error('no devices configured');
+  commit([{ id: 'p1', title: 'plan 1' }]);
+  first.connection.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(network.ready()).toEqual([]);
+  resolve();
+  await open;
+  await run();
+  expect(first.titles()).toEqual([{ id: 'p1', title: 'plan 1' }]);
+  expect(first.connection.status()).toMatchObject({ connected: true, hasSynced: true });
+  first.connection.stop();
+});
+
+test('a hint heard while a pull continues past a landed subscription change reconnects before that pull finishes', async () => {
+  const { first, commit, network, run } = await resubscribed([{ id: 'p1', title: 'plan 1' }]);
+  const huge = (id: string) => commit([{ id, title: 'x'.repeat(inlineLimit) }]);
+  // Open cloud sockets as each pull response is generated
+  const open: number[] = [];
+  const [respond, arrive] = [network.respond.bind(network), network.arrive.bind(network)];
+  network.respond = () => {
+    respond();
+    // Once the first response (all buckets now) is generated, a newer write leaves the device behind when it lands
+    if (open.push(network.accepted.size) === 1) huge('p3');
+  };
+  let arrivals = 0;
+  network.arrive = () => {
+    arrive();
+    // The landed subscription differs from the one heard and the device pulls again: a hint arrives meanwhile
+    arrivals += 1;
+    if (arrivals === 1) huge('p4');
+  };
+  huge('p2');
+  await run();
+  expect(open.slice(0, 2)).toEqual([1, 0]);
+  expect(first.titles().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3', 'p4']);
+  expect(first.connection.status()).toMatchObject({ connected: true, downloading: false });
+  first.connection.stop();
 });

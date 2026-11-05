@@ -84,14 +84,19 @@ test('resync discarding pending writes notifies all synced tables when the full 
   expect(phone.changes).toEqual([['exercise', 'workout']]);
 });
 
-test('resync discarding a pending write that no longer reverts reports why before falling back to wiping synced tables', async () => {
+/** A synced device with a pending insert of w1 whose row then changed outside any local write, so reverting the insert no longer matches it. */
+async function conflictingPending() {
   const space = new Space(cloudStorage(createWorkout, createExercise), tables);
   const storage = deviceStorage(createWorkout, createExercise, createIndex);
   const device = new Device(storage, tables);
   await device.private.receive(space.pull(device.private.pullRequest(), unchunked));
   await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
-  // Changed outside any local write, so reverting the insert no longer matches the row.
   storage.sql.exec("UPDATE workout SET note = 'outside' WHERE id = 'w1'");
+  return { space, storage, device };
+}
+
+test('resync discarding a pending write that no longer reverts reports why before falling back to wiping synced tables', async () => {
+  const { device } = await conflictingPending();
   const reported = captureReported();
   await device.private.resync(true);
   expect(reported).toEqual([expect.stringContaining('revert failed')]);
@@ -155,4 +160,16 @@ test('extracts tables read by query: includes join and subquery tables, maps ind
     'exercise',
     'workout',
   ]);
+});
+
+test('reopening with a pending write that no longer reverts: reports why, opens without reverting, keeps the write, and refetches in full', async () => {
+  const { space, storage, device } = await conflictingPending();
+  device.close();
+  const reported = captureReported();
+  const reopened = new Device(storage, tables);
+  expect(reported).toEqual([expect.stringContaining('revert failed')]);
+  expect(reopened.private.pending()).toMatchObject([{ changes: [{ op: 'put', table: 'workout', row: { id: 'w1' } }] }]);
+  expect(reopened.private.pullRequest()).toMatchObject({ refetch: true });
+  await reopened.private.receive(space.pull(reopened.private.pullRequest(), unchunked));
+  expect(storage.sql.exec('SELECT id, note FROM workout').toArray()).toEqual([{ id: 'w1', note: null }]);
 });

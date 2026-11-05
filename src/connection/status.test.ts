@@ -9,7 +9,7 @@ import { privateCloud } from '../test/test-entry.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { type CloudEnd, Network } from '../test/test-network.ts';
 import { write } from '../test/test-schema.ts';
-import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+import { cloudStorage, deviceStorage, failOnce, injectedError } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 import { heartbeat } from './test-connection.ts';
 import { chunkLimit, createDraft, createNote, draft, expectConnected, idle, note, setup, url, writeOversized } from './test-status.ts';
@@ -46,14 +46,22 @@ test('HTTP pull completes before WebSocket connects (e.g. proxy blockage): marke
   connection.stop();
 });
 
-test('pending count: increments on local write, resets to zero upon cloud confirmation', async () => {
-  const { device, connection, run } = setup();
+test('pending count: increments on local write, resets to zero upon cloud confirmation; a read error on it is reported, the write still uploads', async () => {
+  const reported = captureReported();
+  const { storage, device, connection, run, cloud } = setup();
   connection.start();
   await run();
   await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
   expect(connection.status().pending).toBe(1);
   await run();
   expect(connection.status().pending).toBe(0);
+  failOnce(storage, 'SELECT count(*) FROM _syncline_pending');
+  await write(device, (tx) => tx.insert(note).values({ id: 'n10' }));
+  expect(reported).toEqual([expect.stringMatching(injectedError)]);
+  expect(connection.status().pending).toBe(0);
+  await run();
+  expect(cloud.sql.exec("SELECT id FROM note WHERE id = 'n10'").toArray()).toEqual([{ id: 'n10' }]);
+  expectConnected(connection, { pending: 0 });
   connection.stop();
 });
 

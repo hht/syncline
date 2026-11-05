@@ -38,7 +38,8 @@ export async function heartbeat({
   beforeSocket?: () => void;
 } = {}) {
   const space = new Space(cloudStorage(createWorkout), tables);
-  const device = new Device(deviceStorage(createWorkout), tables);
+  const storage = deviceStorage(createWorkout);
+  const device = new Device(storage, tables);
   const pulled = space.pull(device.private.pullRequest(), 1_000_000);
   if (!('cookie' in pulled)) throw new Error('expected single chunk pull');
   await device.private.receive(pulled);
@@ -80,7 +81,7 @@ export async function heartbeat({
     await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(100_000) }));
     await flush();
   };
-  return { space, device, connection, sockets, fetched, open, message, catchUp, confirm, pushBig, executedElsewhere };
+  return { space, storage, device, connection, sockets, fetched, open, message, catchUp, confirm, pushBig, executedElsewhere };
 }
 
 /** Advances fake clock to core receiveTimeout; verifies first socket is closed. */

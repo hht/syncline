@@ -200,6 +200,27 @@ test('commits touching rows exceeding chunkLimit split across chunks; cursor res
   expect(workouts(tablet.storage)).toHaveLength(51);
 });
 
+test('a heard poke that does not chain: refused when idle, recorded as the highest target while pulling, ignored once covered', async () => {
+  const { space, tablet } = await withWorkout(2);
+  const mirror = tablet.device.private;
+  const pokes = ['a', 'b', 'c'].map((id) => space.mutate((tx) => tx.insert(workout, { id, note: 'row' })));
+  const [first, second, third] = pokes as [(typeof pokes)[number], (typeof pokes)[number], (typeof pokes)[number]];
+  expect(await mirror.notified(third, false)).toBe(false);
+  expect(mirror.behind()).toBe(false);
+  expect(await mirror.notified({ ...first, cursor: 'unstaged' }, false)).toBe(false);
+  expect(await mirror.notified(third, true)).toBe(true);
+  expect(await mirror.notified(second, true)).toBe(true);
+  expect(mirror.behind()).toBe(true);
+  expect(await mirror.notified(first, false)).toBe(true);
+  expect(await mirror.notified(second, false)).toBe(true);
+  // The lower poke did not replace the target: landing the second version still leaves the third to pull
+  expect(mirror.behind()).toBe(true);
+  expect(await mirror.notified(third, false)).toBe(true);
+  expect(mirror.behind()).toBe(false);
+  expect(await mirror.notified(first, false)).toBe(true);
+  expect(mirror.cookie()).toEqual(space.head());
+});
+
 test('final chunk returns lmids only for clients listed in request; omitted clients do not grow unbounded', async () => {
   const { space, phone, devices } = await withWorkout(2);
   await rename(phone.device, 'front squat');

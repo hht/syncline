@@ -176,3 +176,20 @@ test('read error during a pull while connected: reported, then the pull retries 
   await connection.sync();
   connection.stop();
 });
+
+test('a resync that fails after stop() records no error and schedules no reconnect: the stopped connection stays idle', async () => {
+  const { network, storage, device, connection, run } = setup();
+  connection.start();
+  await run();
+  const { promise: gate, resolve } = Promise.withResolvers<void>();
+  const open = write(device, () => gate);
+  failOnce(storage, 'UPDATE _syncline_cookie SET refetch = 1');
+  const resynced = connection.resync();
+  connection.stop();
+  await expect(resynced).rejects.toThrow('sync has stopped');
+  resolve();
+  await open;
+  await flush();
+  expect(connection.status()).toEqual({ ...idle, hasSynced: true });
+  expect(network.fire()).toBe(false);
+});

@@ -66,6 +66,15 @@ test('cache returns stale final chunk (earlier than staged chunks): staged as in
   expectCaughtUp();
 });
 
+test('stale final chunk staged, then a hint from another incarnation: the next request targets that incarnation, not the staged floor', async () => {
+  const { space, catalog, serve, boundary } = await withStaleFinal();
+  for (let step = 0; step < 2; step += 1) expect(await catalog.receive(serve(catalog.pullRequest()))).toBe(true);
+  expect(catalog.pullRequest()).toEqual(expect.objectContaining({ cursor: boundary, atLeast: 5 }));
+  const incarnation = space.round(0).incarnation + 1;
+  await catalog.notified({ hint: { version: 2, nonce: 1 }, incarnation }, false);
+  expect(catalog.pullRequest()).toEqual(expect.objectContaining({ cursor: boundary, atLeast: 2, incarnation }));
+});
+
 test('notification on connection: applied only when idle and base matches cookie; skipped if old; records target version when behind', async () => {
   const { space, catalog, publish, programs, caughtUp } = setup();
   publish('p1');
@@ -81,6 +90,24 @@ test('notification on connection: applied only when idle and base matches cookie
   expect(programs().map(({ id }) => id)).toEqual(['p1', 'p2']);
   await catalog.notified(p2, false);
   expect(catalog.behind()).toBe(true);
+  await caughtUp(['p1', 'p2', 'p3']);
+});
+
+test('shared pull responses and pokes that do not continue the local chain are refused; a chaining poke heard mid-pull only records a target', async () => {
+  const { space, catalog, publish, programs, caughtUp } = setup();
+  publish('p1');
+  await pullRest(catalog, space);
+  const landed = catalog.pullRequest();
+  const p2 = publish('p2');
+  publish('p3');
+  expect(await catalog.notified({ ...p2, cursor: 'unstaged' }, false)).toBe(false);
+  expect(await catalog.receive({ ...p2, base: { version: 9, nonce: 9 } })).toBe(false);
+  const first = pullOne(space, landed) as Chunk;
+  expect(await catalog.receive(first)).toBe(true);
+  expect(await catalog.receive(first)).toBe(false);
+  expect(await catalog.receive({ ...first, cursor: 'elsewhere' })).toBe(false);
+  expect(await catalog.notified(p2, false)).toBe(true);
+  expect(programs().map(({ id }) => id)).toEqual(['p1']);
   await caughtUp(['p1', 'p2', 'p3']);
 });
 

@@ -24,6 +24,9 @@ function fill(storage: ReturnType<typeof cloudStorage>, children = writeRows) {
   );
 }
 
+/** Fails any delete from child that runs: the device counts cascaded rows and rejects oversized writes before deleting any. */
+const refuseDeletes = "CREATE TRIGGER refuse BEFORE DELETE ON child BEGIN SELECT RAISE(ABORT, 'deleted before counting'); END";
+
 const count = (storage: ReturnType<typeof cloudStorage>, table: string) =>
   Number(storage.sql.exec(`SELECT count(*) AS n FROM "${table}"`).toArray()[0]?.n);
 
@@ -91,6 +94,7 @@ test('aborts and rolls back local writes exceeding row limits via cascade delete
   const storage = deviceStorage(...schema);
   const device = new Device(storage, [parent, child]);
   fill(storage);
+  storage.sql.exec(refuseDeletes);
   await expect(write(device, (tx) => tx.delete(parent))).rejects.toThrow(String(writeRows));
   expect(count(storage, 'child')).toBe(writeRows);
   expect(device.private.pendingCount()).toBe(0);
@@ -142,6 +146,17 @@ test('holds pushed delete mutations exceeding key byte limits via cascade delete
   expect(poke?.held).toEqual([expect.objectContaining({ reason: expect.stringContaining(String(writeKeyBytes)) })]);
   expect(count(cloud, 'child')).toBe(rows);
   expect(read.chars).toBeLessThan(writeKeyBytes / 10);
+});
+
+test('aborts and rolls back local writes exceeding key byte limits via cascade deletes without queuing pending writes', async () => {
+  const storage = deviceStorage(...schema);
+  const device = new Device(storage, [parent, child]);
+  const rows = Math.ceil(writeKeyBytes / 400) + 1000;
+  fillLong(storage, rows, 400);
+  storage.sql.exec(refuseDeletes);
+  await expect(write(device, (tx) => tx.delete(parent))).rejects.toThrow(String(writeKeyBytes));
+  expect(count(storage, 'child')).toBe(rows);
+  expect(device.private.pendingCount()).toBe(0);
 });
 
 test('aborts and rolls back server writes when cascade deletes across multiple child tables cumulatively exceed key byte limits', () => {

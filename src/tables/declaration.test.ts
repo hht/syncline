@@ -48,6 +48,17 @@ test('marks schemas ahead when device defines undeployed tables/columns, mismatc
     kind: 'ahead',
     names: ['tag', 'workout', 'workout.notes', 'workout.reps', 'workout.title'],
   });
+  const rekeyed = sqliteTable('workout', {
+    id: text().notNull(),
+    title: text().primaryKey(),
+    program: text().references(() => program.id),
+  });
+  expect(judge([program, rekeyed])).toEqual({ kind: 'ahead', names: ['workout'] });
+});
+
+test('rejects a cloud schema body that does not parse, quoting its start', () => {
+  const device = new Device(deviceStorage(), [program]);
+  expect(() => device.private.judge(`<html>${'x'.repeat(300)}`)).toThrow(/^invalid cloud schema declaration format: <html>x{194}$/);
 });
 
 test('treats device columns declared non-null when nullable on cloud as compatible because device never writes null', () => {

@@ -104,3 +104,20 @@ test('local-only tables cannot share names with synced or shared space tables', 
   const device = new Device(storage, tables, { localOnly: [timer] });
   expect(() => device.shared('catalog', [timer])).toThrow('same name as an existing synced or local-only table: rest_timer');
 });
+
+test('a local-only table with rows that a later release syncs: its rows, which would never upload, are wiped and the space pulls in full', async () => {
+  const { storage, device } = await installed();
+  await write(device, (tx) => tx.insert(timer).values({ id: 'default', seconds: '90' }));
+  const empty = sqliteTable('empty_note', { id: text().primaryKey() });
+  storage.sql.exec('CREATE TABLE empty_note (id TEXT PRIMARY KEY)');
+  device.close();
+  const synced = new Device(storage, [...tables, timer, empty]);
+  expect(timers(storage)).toEqual([]);
+  expect(synced.private.pullRequest()).toMatchObject({ refetch: true });
+
+  // A table that was neither synced nor written joins without a refetch
+  const { storage: fresh, device: before } = await installed();
+  fresh.sql.exec('CREATE TABLE empty_note (id TEXT PRIMARY KEY)');
+  before.close();
+  expect(new Device(fresh, [...tables, empty], { localOnly: [timer] }).private.pullRequest()).not.toHaveProperty('refetch');
+});
