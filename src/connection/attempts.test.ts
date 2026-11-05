@@ -52,6 +52,39 @@ test('a read error while checking whether a landed poke left the device behind b
     connection.stop();
   }));
 
+test('a read error on the pending queue while pushing breaks the link: the write is pushed again after reconnecting', () =>
+  withFakeTimers(async () => {
+    const reported = captureReported();
+    const harness = await linked();
+    const { storage, device, connection, sockets, confirm } = harness;
+    failOnce(storage, 'SELECT p.client, p.id, p.changes');
+    await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+    await flush();
+    expect(sockets[0]?.closed).toBe(true);
+    expect(reported).toEqual([expect.stringMatching(injectedError)]);
+    await reconnect(harness);
+    confirm(0);
+    await flush();
+    expect(connection.status()).toMatchObject({ connected: true, pending: 0, downloadError: undefined });
+    connection.stop();
+  }));
+
+test('a read error pushing the next batch upon a confirmation breaks the link: the confirming poke does not mark the device connected', () =>
+  withFakeTimers(async () => {
+    const reported = captureReported();
+    const { storage, device, connection, sockets, confirm } = await linked();
+    await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+    await flush();
+    failOnce(storage, 'SELECT p.client, p.id, p.changes');
+    confirm(0);
+    await flush();
+    expect(device.private.pending()).toEqual([]);
+    expect(sockets[0]?.closed).toBe(true);
+    expect(reported).toEqual([expect.stringMatching(injectedError)]);
+    expect(connection.status()).toMatchObject({ connected: false, downloadError: expect.objectContaining({ message: reported[0] }) });
+    connection.stop();
+  }));
+
 test('a token request for a pull while connected that times out records the error and retries the pull without dropping the link', () =>
   withFakeTimers(async () => {
     let calls = 0;

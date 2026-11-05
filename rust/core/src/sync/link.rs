@@ -100,7 +100,7 @@ impl Connection {
         if !self.live(link.attempt) || !link.open {
             return;
         }
-        let socket = link.socket;
+        let (attempt, socket) = (link.attempt, link.socket);
         let mut failed = None;
         let channel = self.channel.clone();
         let mirror = crate::sync::mirror::Mirror(&channel);
@@ -111,8 +111,9 @@ impl Connection {
                 Vec::new()
             })
         });
+        // Reconnecting pushes again once the socket opens: reporting alone would leave the write pending while connected
         if let Some(error) = failed {
-            ctx.out.report(error);
+            return self.broken(ctx, attempt, error);
         }
         if let (Some(bytes), Some(link)) = (bytes, &mut self.link) {
             link.heartbeat.sent(ctx.out, bytes);
@@ -185,6 +186,10 @@ impl Connection {
             Err(error) => return self.broken(ctx, attempt, error),
         }
         self.confirm(ctx, &lmids.unwrap_or_default());
+        // Pushing the next batch may break the link
+        if !self.live(attempt) {
+            return;
+        }
         match self.mirror().behind(ctx.device, ctx.now) {
             Ok(true) => {
                 // Starts pull first (synchronously marks downloading) before marking connected: waiting callers do not succeed prematurely
@@ -193,8 +198,8 @@ impl Connection {
                     self.start_pull(ctx, attempt, true, false, None, After::PullUp);
                 }
                 self.update_with_local(ctx, |status| status.connected = true);
-                if busy {
-                    self.pulled_up(ctx, attempt);
+                if busy && self.mirror().stale(ctx.device) {
+                    self.reconnect(ctx);
                 }
             }
             Ok(false) => self.up_to_date(ctx, attempt),
@@ -212,16 +217,12 @@ impl Connection {
         ctx.out.report(error);
     }
 
-    /// Called after pull completes (or is already running) while connected: reconnects if landed subscription differs from heard; runs checksum if caught up
+    /// Called once a pull while connected leaves the device caught up: reconnects if landed subscription differs from heard; otherwise runs checksum
     pub(super) fn pulled_up(&mut self, ctx: &mut Context, attempt: u64) {
         if self.mirror().stale(ctx.device) {
             return self.reconnect(ctx);
         }
-        match self.mirror().behind(ctx.device, ctx.now) {
-            Ok(false) => self.up_to_date(ctx, attempt),
-            Ok(true) => {}
-            Err(error) => ctx.out.report(error),
-        }
+        self.up_to_date(ctx, attempt);
     }
 
     /// Caught up: clears download error, triggers range checksum verification (private space)
@@ -244,7 +245,7 @@ impl Connection {
             Ok(true) if !self.pulling() => self.start_pull(ctx, attempt, true, false, None, After::PullUp),
             // A pull in flight keeps pulling while behind
             Ok(_) => {}
-            Err(error) => ctx.out.report(error),
+            Err(error) => self.broken(ctx, attempt, error),
         }
     }
 

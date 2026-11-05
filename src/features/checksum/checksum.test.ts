@@ -7,7 +7,7 @@ import { captureReported } from '../../test/test-errors.ts';
 import { connectWithoutJitter } from '../../test/test-network.ts';
 import { filled, pullChunk, pullRest } from '../../test/test-pull.ts';
 import { serving } from '../../test/test-schema.ts';
-import { cloudStorage, deviceStorage } from '../../test/test-storage.ts';
+import { cloudStorage, deviceStorage, failOnce, injectedError } from '../../test/test-storage.ts';
 import { checksumOf, plus, rowHash } from './common/checksum.ts';
 
 // Checksum: A row hash only considers values visible to devices, independent of column order or null columns; the cloud computes on demand when requested, and the device requests once when idle or due, verifying against its local sum segment by segment.
@@ -186,25 +186,56 @@ test('checksum request with concurrent open local write (pulls not queued): dail
   }
 });
 
-test('verifies once caught up after connecting: refetches segment by range if local store corrupted, restores cloud parity, and stays connected', async () => {
+/** Synced device whose local store lost a row, connecting a minute after the initial pull requested a checksum (so it verifies once caught up). */
+async function corrupted() {
   const { space, cloud, storage, device } = await synced();
   storage.sql.exec("DELETE FROM tag WHERE id = 't2'");
   const { network } = serving(space);
   const connection = connectWithoutJitter(network, device);
-  const reported = captureReported();
-  // Checksum requested during initial full pull (cookie advanced before verify): wait at least one minute before requesting again.
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(Date.now() + 60_000);
-  try {
-    connection.start();
-    // Verification yields JS thread between batches (real timer); network activity may complete before verification finishes: run several rounds.
+  /** Verification yields the JS thread between batches (real timer) and network activity may finish first: runs several rounds. */
+  const settle = async () => {
     for (let round = 0; round < 5; round += 1) {
       await drain(network);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+  };
+  return { cloud, storage, connection, settle };
+}
+
+test('verifies once caught up after connecting: refetches segment by range if local store corrupted, restores cloud parity, and stays connected', async () => {
+  const { cloud, storage, connection, settle } = await corrupted();
+  const reported = captureReported();
+  try {
+    connection.start();
+    await settle();
     expect(reported).toHaveLength(1);
     expect(snapshot(storage)).toEqual(snapshot(cloud));
     expect(connection.status()).toMatchObject({ connected: true, hasSynced: true });
+  } finally {
+    connection.stop();
+    vi.useRealTimers();
+  }
+});
+
+test('a read error checking whether a failed verification left the device behind breaks the link: the range is refetched after reconnecting', async () => {
+  const { cloud, storage, connection, settle } = await corrupted();
+  const reported = captureReported();
+  try {
+    // Arms the fault once caught up (the landed catch-up was checked) and before the verification finishes
+    const armed = { at: false, dropped: false };
+    connection.onStatus(({ connected }) => {
+      if (connected && !armed.at) failOnce(storage, 'SELECT refetch FROM _syncline_cookie');
+      armed.dropped ||= armed.at && !connected;
+      armed.at ||= connected;
+    });
+    connection.start();
+    await settle();
+    expect(reported).toEqual([expect.stringMatching(injectedError), expect.stringContaining('local data does not match cloud')]);
+    expect(armed.dropped).toBe(true);
+    expect(snapshot(storage)).toEqual(snapshot(cloud));
+    expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined });
   } finally {
     connection.stop();
     vi.useRealTimers();
