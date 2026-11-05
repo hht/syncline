@@ -1,7 +1,7 @@
 //! Primary key serialization into text and how a primary key range forms SQL conditions: client-side mirror and staging rows are identified by text-encoded primary keys.
 //! What it should not know: how rows are written or how the tables storing them are created.
 
-use crate::change::Row;
+use crate::change::{MAX_SAFE_INTEGER, Row};
 use crate::protocol::KeyRange;
 use crate::sql::{json_path, literal};
 use rusqlite::types::Value;
@@ -15,10 +15,17 @@ pub fn key_text(key: &Row) -> String {
 }
 
 /// SQL expressions extracting each column in key order from a stored primary key (`key_text`, in column `stored`).
+/// JS numbers are doubles, so a key past the safe integers is a real that `key_text` writes without a fraction; `json_extract` reads it
+/// back as an integer, which SQLite compares unequal to the real bounds of a range: it is read back as the real it stands for.
 #[must_use]
 pub fn stored_columns(key: &[String], stored: &str) -> Vec<String> {
     key.iter()
-        .map(|column| format!("json_extract({stored}, {})", literal(&json_path(column))))
+        .map(|column| {
+            let value = format!("json_extract({stored}, {})", literal(&json_path(column)));
+            format!(
+                "iif(typeof({value}) = 'integer' AND {value} NOT BETWEEN -{MAX_SAFE_INTEGER} AND {MAX_SAFE_INTEGER}, CAST({value} AS REAL), {value})"
+            )
+        })
         .collect()
 }
 
@@ -71,6 +78,42 @@ mod tests {
         let (sql, bindings) = in_range(&[crate::sql::quote("a")], &range);
         assert_eq!(sql, r#"("a") <= (?)"#);
         assert_eq!(bindings, vec![Value::Text("x".to_owned())]);
-        assert_eq!(stored_columns(&["a".to_owned()], "key"), vec![r#"json_extract(key, '$."a"')"#]);
+    }
+
+    #[test]
+    fn stored_reals_past_the_safe_integers_fall_in_the_ranges_their_doubles_do() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute("CREATE TABLE stored (key TEXT)", []).unwrap();
+        let at = |real: f64| Row(vec![("at".to_owned(), Value::Real(real))]);
+        // key_text writes these as JSON.stringify does, integers without a fraction rounded either way ("1152921504606847000" for 2^60,
+        // "-864691128455135200" for -3 * 2^58).
+        let reals = [-3.0 * 2f64.powi(58), 2f64.powi(59), 2f64.powi(60), 2f64.powi(61)];
+        for real in reals {
+            db.execute("INSERT INTO stored VALUES (?)", [key_text(&at(real))]).unwrap();
+        }
+        let selected = |after: Option<f64>, until: Option<f64>| -> Vec<String> {
+            let range = KeyRange {
+                key: vec!["at".to_owned()],
+                after: after.map(at),
+                until: until.map(at),
+            };
+            let (condition, bindings) = in_range(&stored_columns(&range.key, "key"), &range);
+            let mut statement = db
+                .prepare(&format!("SELECT key FROM stored WHERE {condition} ORDER BY key"))
+                .unwrap();
+            statement
+                .query_map(rusqlite::params_from_iter(bindings), |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let keys = |reals: &[f64]| -> Vec<String> {
+            let mut keys: Vec<String> = reals.iter().map(|real| key_text(&at(*real))).collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(selected(Some(reals[1]), Some(reals[2])), keys(&[reals[2]]));
+        assert_eq!(selected(Some(reals[2]), None), keys(&[reals[3]]));
+        assert_eq!(selected(Some(reals[0]), Some(0.0)), keys(&[]));
     }
 }

@@ -182,3 +182,30 @@ test('a real key past 2^53 holding an integer: a server update and delete reach 
   await phone.device.private.receive(space.mutate((tx) => tx.delete(reading, { at })));
   holds([phone.storage, cloud], reading, []);
 });
+
+// A device that does not declare a table keeps its rows as JSON text; read back from that text, a real past 2^53 written without a
+// fraction is an integer, which SQLite compares unequal to the real bounds of a range.
+test('a range refetch on a device that does not declare the table drops only rows in the range, also with reals past 2^53', async () => {
+  const { cloud, space } = await synced(0);
+  space.mutate((tx) => {
+    for (const at of [2 ** 59, 2 ** 60, 2 ** 61]) tx.insert(reading, { at, note: String(at) });
+  });
+  const storage = deviceStorage();
+  const older = new Device(storage, [item]);
+  await older.private.receive(space.pull(older.private.pullRequest(), Number.POSITIVE_INFINITY));
+  // A row the cloud does not hold, in the range: the refetch must drop it.
+  const stale = JSON.stringify({ at: 2 ** 62 });
+  storage.sql.exec("INSERT INTO _syncline_unknown (name, row, space, key) VALUES ('reading', ?, '', ?)", stale, stale);
+  // Refetches the rows after 2^60, as after a checksum mismatch: the drop must keep 2^60, which no chunk of the refetch carries.
+  const ranges = [{ table: 'reading', after: { at: 2 ** 60 } }];
+  for (let step = 0; ; step += 1) {
+    if (step === 50) throw new Error('the refetch did not complete');
+    const request = JSON.parse(JSON.stringify(older.private.pullRequest()));
+    const result = space.pull(request.cursor === undefined ? { ...request, ranges } : request, Number.POSITIVE_INFINITY);
+    await older.private.receive(result);
+    if ('cookie' in result) break;
+  }
+  older.close();
+  new Device(storage, valueTables).close();
+  expect(rows(storage, reading)).toEqual(rows(cloud, reading));
+});
