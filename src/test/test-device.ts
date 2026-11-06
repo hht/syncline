@@ -125,7 +125,7 @@ export class Device {
   #deliver(instruction: Delivered) {
     switch (instruction.type) {
       case 'token':
-        return answerToken(this.#attached.get(instruction.channel)?.options.token, instruction.channel, instruction.request, (call) =>
+        return answerToken((this.#attached.get(instruction.channel) as Attachment).options.token, instruction.request, (call) =>
           this.#shell.send(call),
         );
       case 'validate':

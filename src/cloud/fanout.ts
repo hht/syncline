@@ -48,8 +48,8 @@ export class Fanout {
   constructor(host: Host, confirmed: Confirmed | null) {
     this.#host = host;
     // Compares serialized lists, so storage holding anything else also counts as another shard set.
-    const same = JSON.stringify(confirmed?.shards) === JSON.stringify(host.shards);
-    this.#confirmed = same ? (confirmed?.cookie ?? null) : null;
+    const same = confirmed !== null && JSON.stringify(confirmed.shards) === JSON.stringify(host.shards);
+    this.#confirmed = same ? confirmed.cookie : null;
   }
 
   /** Returns whether all shards have confirmed through the current head cookie. */
@@ -64,7 +64,8 @@ export class Fanout {
   }
 
   #ackedBy(shard: string) {
-    return this.#acked.has(shard) ? (this.#acked.get(shard) ?? null) : this.#confirmed;
+    const acked = this.#acked.get(shard);
+    return acked === undefined ? this.#confirmed : acked;
   }
 
   /** Delivers a round to a shard: queues at most one pending round behind an in-flight delivery; returns whether delivery succeeded. */

@@ -30,7 +30,7 @@ export class DailyWrites {
   /** Consumes all rows from a statement cursor and accumulates its written rows (rowsWritten is finalized after exhaustion). */
   count(cursor: Cursor) {
     const rows = cursor.toArray();
-    this.#written += cursor.rowsWritten ?? 0;
+    this.#written += cursor.rowsWritten;
     return rows;
   }
 

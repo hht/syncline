@@ -189,6 +189,7 @@ function touchedSince(commits: Commits, base: Cookie) {
 /** Merges commit keys into touch map (accumulating touched buckets per row); returns false if commit is unkeyed or table left sync. */
 function merge(touched: Map<string, RoundTouch>, keys: Keys) {
   if (keys.length === 0 || keys.some(([, key]) => key === null)) return false;
+  // Rows of shared space commits always carry names (withBuckets), so the default never applies.
   for (const [table, key, names = []] of keys) {
     const row = key as Record<string, unknown>;
     const known = touched.get(rowId(table, row)) ?? { table, key: row, buckets: new Set<string>() };
@@ -236,6 +237,7 @@ export function sharedRound(commits: Commits, tables: TableReads, buckets: Bucke
 export function withBuckets(buckets: Buckets, query: Query, keys: Keys, tally: Tally): Keys {
   const now = buckets.now(query, changedRows(keys));
   return keys.map((entry) => {
+    // Never defaulted nor returned: shared spaces take only server writes, which record rows with their buckets before the write.
     const [table, key, before = []] = entry;
     if (!key) return entry;
     const after = now(table, key);

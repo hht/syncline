@@ -79,6 +79,7 @@ export function pull(
   // HTTP pulls include lmids only for clients listed in the request (clients with pending writes plus current client): devices discard confirmed writes on landing; queried by primary key on client table without scaling with commit log size.
   // Held writes are delivered only for listed clients starting from their earliest pending write (or next expected write for current client without pending writes): devices process held writes only for writes confirmed in this cycle.
   // Connection catch-up is always incremental (performed only when cookie is on history): returns clients with commits since cookie (LmidsSince in model) and held writes within that range, bounded by commits read.
+  // Catch-up always carries a cookie (connections without one close first), so the 0 never applies.
   const since = catchUp ? (cookie?.version ?? 0) : undefined;
   const lmids = since === undefined ? commits.lmidsOf(request.clients ?? []) : commits.lmidsSince(since);
   const checksum = request.checksum !== undefined &&

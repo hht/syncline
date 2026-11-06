@@ -113,9 +113,9 @@ export async function localWrite<T>(write: number, call: (call: Call, id?: numbe
   return result;
 }
 
-/** Fetches token for a sync channel and sends token response, relaying thrown errors or missing channel failures to core. */
-export function answerToken(token: (() => Promise<string>) | undefined, channel: string, request: number, send: (call: Call) => void) {
-  new Promise<string>((resolve) => resolve(token ? token() : Promise.reject(new Error(`No sync channel for space: ${channel}`)))).then(
+/** Fetches token for a sync channel and sends token response, relaying thrown errors to core. */
+export function answerToken(token: () => Promise<string>, request: number, send: (call: Call) => void) {
+  new Promise<string>((resolve) => resolve(token())).then(
     (value) => send({ type: 'token', request, token: value }),
     (error: unknown) => send({ type: 'token', request, error: error instanceof Error ? error.message : String(error) }),
   );
@@ -210,8 +210,8 @@ export class Client {
       case 'warn':
         return console.warn(message.message);
       case 'token':
-        // The core asks tokens only for connected channels, which #spaces recorded first: the missing-channel answer never goes out from here
-        return answerToken(this.#spaces.get(message.channel)?.token, message.channel, message.request, this.#send);
+        // Always found: the core asks tokens only for connected channels, which #spaces recorded first, and #spaces only grows
+        return answerToken((this.#spaces.get(message.channel) as Space).token, message.request, this.#send);
       case 'validate':
         return this.#send({ type: 'validated', write: message.write, ...validated(this.#validator, message.rows) });
       case 'broken':

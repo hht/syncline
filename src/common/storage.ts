@@ -46,7 +46,7 @@ export type Cursor = {
    * Provided by Durable Object storage cursors for billing calculations.
    * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#exec
    */
-  rowsWritten?: number;
+  rowsWritten: number;
 };
 
 /** Executes a SQL statement in the active transaction and returns all result rows. */

@@ -243,7 +243,7 @@ export class Server<S extends Socket> {
    */
   #broadcast(update: Poke | Oversized) {
     // Server write touching no synced rows produces no new commit version: nothing to broadcast.
-    if (update.base && sameCookie(update.base, update.cookie)) return;
+    if (sameCookie(update.base, update.cookie)) return;
     // Oversized patches (or those exceeding socketLimit) broadcast a hint prompting clients to pull over HTTP.
     const text = ('patch' in update && this.#fitting(JSON.stringify(update))) || JSON.stringify({ hint: update.cookie });
     for (const socket of this.#sockets.getWebSockets())
@@ -255,7 +255,8 @@ export class Server<S extends Socket> {
    * If before is undefined or equal to head, no commits were committed before failure.
    */
   #pushFailed(socket: S, before: number | undefined, error: unknown) {
-    this.#events({ type: 'push.failed', reason: error instanceof Error ? error.message : String(error) });
+    // An Error: storage throws Errors, and a push rethrows only transient ones, holding anything else its write threw
+    this.#events({ type: 'push.failed', reason: (error as Error).message });
     closeSocket(this.#events, socket, pushFailed, 'push failed');
     if (before === undefined || this.#space.head().version === before) return;
     const hint = JSON.stringify({ hint: this.#space.head() });

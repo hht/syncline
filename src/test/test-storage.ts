@@ -44,19 +44,14 @@ export function restoredStorage(image: Uint8Array) {
 }
 
 /**
- * Wraps as Storage: image() exports database; statement results include rowsWritten;
+ * Wraps as Storage: image() exports database;
  * sql.databaseSize computes page_count * page_size matching Durable Object API.
  * @see https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/ (databaseSize)
  */
 function asStorage(db: Database) {
   const storage = sqliteWasmStorage(sqlite3, db);
-  const exec = storage.sql.exec;
   const sql = {
-    exec: (query: string, ...bindings: unknown[]) => {
-      const before = sqlite3.capi.sqlite3_total_changes(db);
-      const cursor = exec(query, ...bindings);
-      return { ...cursor, rowsWritten: sqlite3.capi.sqlite3_total_changes(db) - before };
-    },
+    exec: storage.sql.exec,
     get databaseSize() {
       return Number(db.selectValue('PRAGMA page_count')) * Number(db.selectValue('PRAGMA page_size'));
     },

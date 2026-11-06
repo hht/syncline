@@ -55,14 +55,10 @@ export class SchemaMismatch extends Error {
  * Retired names are excluded from the hash so additions do not trigger unnecessary round-trips.
  */
 export function schemaFingerprint(declaration: Declaration) {
+  // Sorts by UTF-16 code units; names are object keys, so no two are equal.
   const tables = Object.entries(declaration)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([name, { columns, key, references }]) => [
-      name,
-      Object.entries(columns).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-      key,
-      references,
-    ]);
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([name, { columns, key, references }]) => [name, Object.entries(columns).sort(([a], [b]) => (a < b ? -1 : 1)), key, references]);
   return longFingerprintOf(JSON.stringify(tables));
 }
 

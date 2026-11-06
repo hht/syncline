@@ -95,6 +95,7 @@ export class HeldWrites {
       id,
     );
     const [first] = parts;
+    // Never thrown: callers list held writes or check one exists first
     if (!first) throw new Error(`Held write not found for client ${client} at mutation ID ${id}; provide an existing held mutation ID.`);
     const changes: unknown = JSON.parse(parts.map((part) => String(part.changes)).join(''));
     return { client, id, reason: String(first.reason), version: Number(first.version), at: Number(first.at), changes };

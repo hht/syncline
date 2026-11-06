@@ -13,9 +13,11 @@ const wide = (value: unknown): value is number => typeof value === 'number' && N
 function run(
   bindDouble: (statement: PreparedStatement, index: number, value: number) => void,
   rowOf: (statement: PreparedStatement) => SqlValue[],
+  changes: () => number,
   statement: PreparedStatement,
   bindings: unknown[],
 ) {
+  const before = changes();
   try {
     if (bindings.length > 0) {
       statement.bind(bindings.map((value) => (wide(value) ? null : value)) as BindableValue[]);
@@ -25,7 +27,7 @@ function run(
     while (statement.step()) rows.push(rowOf(statement));
     // Statements without result columns (DDL, DML) throw when fetching column names.
     const columns = statement.columnCount > 0 ? statement.getColumnNames() : [];
-    return cursor(columns, rows);
+    return cursor(columns, rows, changes() - before);
   } finally {
     statement.reset(true);
   }
@@ -60,6 +62,7 @@ export function sqliteWasmStorage(sqlite3: Sqlite3Static, db: Database): Storage
         run(
           (statement, index, value) => check(capi.sqlite3_bind_double(statement.pointer as number, index, value)),
           rowOf,
+          () => capi.sqlite3_total_changes(db),
           prepared(query),
           bindings,
         ),

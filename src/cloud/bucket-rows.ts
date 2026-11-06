@@ -173,6 +173,7 @@ export class BucketRows {
   /** Finds the first table with stale row counts and its current generation (using MAX_SAFE_INTEGER for removed tables to purge all); returns undefined if none exist. Performs one lookup per table. */
   #stale(): [string, number] | undefined {
     for (let table = this.#nextTable(''); table !== undefined; table = this.#nextTable(table)) {
+      // Synced tables always have a count: opening restarts every table whose stored rules differ, including on its first open, so the 0 never applies.
       const below = this.#keys.has(table) ? (this.#counted.get(table)?.gen ?? 0) : Number.MAX_SAFE_INTEGER;
       if (this.#query('SELECT 1 FROM _syncline_bucket_rows WHERE tbl = ? AND gen < ? LIMIT 1', table, below).length > 0)
         return [table, below];

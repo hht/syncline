@@ -66,17 +66,17 @@ export class Step {
     this.chars = ops.reduce((total, op) => total + opChars(op), 0);
   }
 
-  /** Runs the step; returns true if caught up to head, false if paused on exhausted budget. */
+  /** Runs the step; returns true if caught up to head, false if paused on exhausted budget or at the start of the next round. */
   run() {
-    for (;;) {
-      if (!this.#scan() || !this.#tail()) return false;
-      const { to } = this.position.round;
-      if (this.#store.entered.scanSet(to, this.#head).length === 0) return true;
-      const { ranges: _first, added: _added, ...rest } = this.position;
-      this.position = { ...rest, round: { from: to, to: this.#head }, scan: { table: '' }, tail: { at: this.#head } };
-      // Opens next round in a fresh chunk: chunks do not span rounds (HandlePull halts at round start in model); requires only an extra request when tables enter sync mid-pull.
-      if (this.#moved) return false;
-    }
+    if (!this.#scan() || !this.#tail()) return false;
+    const { to } = this.position.round;
+    if (this.#store.entered.scanSet(to, this.#head).length === 0) return true;
+    const { ranges: _first, added: _added, ...rest } = this.position;
+    this.position = { ...rest, round: { from: to, to: this.#head }, scan: { table: '' }, tail: { at: this.#head } };
+    // Opens next round in a fresh chunk: chunks do not span rounds (HandlePull halts at round start in model); requires only an extra request when tables enter sync mid-pull.
+    // Positions this reader produced have made progress by now: the entry lies above the watermark, where the tail started, and a pause
+    // always leaves tail commits behind. A forged but recognized cursor may cost one chunk without progress, never a stall.
+    return false;
   }
 
   get #spent() {
@@ -208,6 +208,7 @@ export class Step {
       if (at.version >= this.#head.version) return true;
       const { commits, read } = this.#store.commits.after(at.version);
       this.#rows += read;
+      // Never true: head is above `at` and never truncated, and a commit batch holds at least one commit
       if (commits.length === 0) return true;
       for (const [order, { cookie: version, keys }] of commits.entries())
         if (!this.#commit(version, keys, order === 0 ? index : 0, scanned)) return false;

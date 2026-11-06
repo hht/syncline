@@ -26,9 +26,10 @@ export function savepoint<T>(exec: (sql: string) => void, inTransaction: () => b
   }
 }
 
-/** Wraps driver column names and row tuples into a Cursor. */
-export function cursor(columns: string[], rows: unknown[][]): Cursor {
+/** Wraps driver column names, row tuples, and the count of rows the statement wrote into a Cursor. */
+export function cursor(columns: string[], rows: unknown[][], rowsWritten: number): Cursor {
   return {
+    rowsWritten,
     toArray: () => rows.map((row) => Object.fromEntries(columns.map((column, index) => [column, row[index]]))),
     raw: () => ({ toArray: () => rows, next: () => (rows[0] ? { value: rows[0] } : { done: true }) }),
   };

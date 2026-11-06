@@ -87,7 +87,7 @@ function asStorage(db: Database) {
       const { columns, rows, written }: { columns: string[]; rows: unknown[][]; written: number } = JSON.parse(
         db.exec(query, JSON.stringify(bindings.map(encode))),
       );
-      return { ...cursor(columns, decodeRows(rows)), rowsWritten: written };
+      return cursor(columns, decodeRows(rows), written);
     },
     get databaseSize() {
       const [{ size }] = sql.exec('SELECT page_count * page_size AS size FROM pragma_page_count(), pragma_page_size()').toArray() as [
