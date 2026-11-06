@@ -18,7 +18,7 @@ export type Database = {
   control(input: string, now: number): string;
   inspect(inspect: string, now: number): string;
   image(): Uint8Array;
-  inject(rule: string): boolean;
+  inject(rules: string): boolean;
 };
 
 /** Invokes WASM functions: transforms JSON error payloads into corresponding JavaScript error instances. */

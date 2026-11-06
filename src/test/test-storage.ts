@@ -60,11 +60,11 @@ function asStorage(db: Database) {
 }
 
 /**
- * Injects a single failure on the next statement matching prefix:
- * simulates I/O errors or mid-transaction kills to verify rollback semantics.
+ * Injects a single failure on the next statement matching prefix, and for each further prefix on the next statement matching it once the
+ * one before failed: simulates I/O errors or mid-transaction kills to verify rollback semantics.
  */
-export function failOnce<S extends ReturnType<typeof deviceStorage>>(storage: S, prefix: string) {
-  storage.database.inject(JSON.stringify({ prefix }));
+export function failOnce<S extends ReturnType<typeof deviceStorage>>(storage: S, prefix: string, ...more: string[]) {
+  storage.database.inject(JSON.stringify([prefix, ...more].map((each) => ({ prefix: each }))));
   return storage;
 }
 
@@ -97,8 +97,8 @@ export function isInjected(error: unknown): boolean {
 export function faultable(storage: ReturnType<typeof deviceStorage>) {
   return {
     storage,
-    arm: (after: number) => storage.database.inject(JSON.stringify({ after })),
-    disarm: () => storage.database.inject('null'),
+    arm: (after: number) => storage.database.inject(JSON.stringify([{ after }])),
+    disarm: () => storage.database.inject('[]'),
   };
 }
 

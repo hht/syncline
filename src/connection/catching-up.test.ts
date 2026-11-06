@@ -131,27 +131,36 @@ test('a link closing while its pull waits for a token leaves no timer behind onc
     harness.connection.stop();
   }));
 
-test('a pull landing that confirms a push whose next batch cannot be read breaks the link and stops the pull; it resumes on reconnecting', () =>
-  withFakeTimers(async () => {
-    const harness = await linked();
-    const { space, storage, device, connection, sockets, message } = harness;
-    const reported = captureReported();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
-    await flush();
-    // The cloud executes the push but its confirmation reaches the device only through a pull
-    harness.executedElsewhere();
-    message(JSON.stringify({ hint: space.head() }));
-    await flush();
-    failOnce(storage, 'SELECT p.client, p.id, p.changes');
-    vi.advanceTimersByTime(0);
-    await vi.waitFor(() => expect(sockets[0]?.closed).toBe(true));
-    expect(reported).toEqual([expect.stringMatching(injectedError)]);
-    expect(connection.status()).toMatchObject({ connected: false, downloading: false, pending: 0 });
-    await reconnect(harness);
-    expect([device.private.cookie(), connection.status().connected, connection.status().downloadError]).toEqual([
-      space.head(),
-      true,
-      undefined,
-    ]);
-    connection.stop();
-  }));
+test.for([
+  ['', []],
+  // The pull is gone with the link: the read failing next, whether the landed chunk left staged chunks, is not reported.
+  [' and a read failing after it', ['SELECT next FROM _syncline_stage']],
+] as const)(
+  'a pull landing that confirms a push whose next batch cannot be read%s breaks the link and stops the pull; it resumes on reconnecting',
+  ([, after]) =>
+    withFakeTimers(async () => {
+      const harness = await linked();
+      const { space, storage, device, connection, sockets, message } = harness;
+      const reported = captureReported();
+      await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+      await flush();
+      // The cloud executes the push but its confirmation reaches the device only through a pull
+      harness.executedElsewhere();
+      message(JSON.stringify({ hint: space.head() }));
+      await flush();
+      failOnce(storage, 'SELECT p.client, p.id, p.changes', ...after);
+      vi.advanceTimersByTime(0);
+      await vi.waitFor(() => expect(sockets[0]?.closed).toBe(true));
+      // Every fault fired
+      expect(storage.database.inject('[]')).toBe(false);
+      expect(reported).toEqual([expect.stringMatching(injectedError)]);
+      expect(connection.status()).toMatchObject({ connected: false, downloading: false, pending: 0 });
+      await reconnect(harness);
+      expect([device.private.cookie(), connection.status().connected, connection.status().downloadError]).toEqual([
+        space.head(),
+        true,
+        undefined,
+      ]);
+      connection.stop();
+    }),
+);

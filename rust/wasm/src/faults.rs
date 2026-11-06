@@ -1,5 +1,6 @@
 //! Injected storage faults for tests (disk full, I/O errors; feature `testing`, enabled only for test builds).
-//! Matches statements by SQL prefix or statement count, failing them with `SQLITE_INTERRUPT` before rows are modified.
+//! Matches statements by SQL prefix or statement count, failing them with `SQLITE_INTERRUPT` before rows are modified; rules armed
+//! together fire in turn, each applying once the one before it fired.
 //! Write statements failing this way cause SQLite to roll back the entire transaction; read statements fail individually;
 //! releasing the outermost savepoint (commit) fails without committing while leaving the transaction open.
 //! Statement execution begins by firing trace with unexpanded SQL parameters, while a progress handler configured on every step
@@ -15,6 +16,7 @@
 use rusqlite::Connection;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Rules for matching statements to fail.
@@ -29,7 +31,7 @@ pub enum Rule {
 
 #[derive(Default)]
 struct State {
-    rule: Option<Rule>,
+    rules: VecDeque<Rule>,
     /// Whether the current executing statement must fail.
     failing: bool,
 }
@@ -38,7 +40,7 @@ impl State {
     /// Records a statement starting execution (trigger subprograms starting with "-- TRIGGER" are excluded).
     fn started(&mut self, sql: &str) {
         self.failing = false;
-        let hit = match &mut self.rule {
+        let hit = match self.rules.front_mut() {
             Some(Rule::Prefix { prefix }) => sql.starts_with(prefix.as_str()),
             Some(Rule::After { after })
                 if !sql.starts_with("--") && !["SAVEPOINT", "RELEASE", "ROLLBACK"].iter().any(|word| sql.starts_with(word)) =>
@@ -49,7 +51,7 @@ impl State {
             _ => false,
         };
         if hit {
-            self.rule = None;
+            self.rules.pop_front();
             self.failing = true;
         }
     }
@@ -80,10 +82,10 @@ impl Faults {
         Ok(Faults(state))
     }
 
-    /// Arms a new fault rule, or disarms injection if None; returns whether the rule it replaces never fired (false when none was armed).
-    pub fn arm(&self, rule: Option<Rule>) -> bool {
+    /// Arms fault rules to fire in turn, or disarms injection if empty; returns whether a rule it replaces never fired.
+    pub fn arm(&self, rules: Vec<Rule>) -> bool {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.failing = false;
-        std::mem::replace(&mut state.rule, rule).is_some()
+        !std::mem::replace(&mut state.rules, rules.into()).is_empty()
     }
 }
