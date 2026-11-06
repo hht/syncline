@@ -39,8 +39,8 @@ function replying(instance: number) {
   };
 }
 
-test('open carries the owner, discardPending, and checksum budget given to openSyncline', async () => {
-  const { open } = await openedWith({ owner: 'u1', discardPending: true, checksumRowsPerDay: 500 });
+test('open carries the user ID, discardPending, and checksum budget given to openSyncline', async () => {
+  const { open } = await openedWith({ userID: 'u1', discardPending: true, checksumRowsPerDay: 500 });
   expect(open).toMatchObject({ options: { owner: 'u1', discardPending: true, checksum: { rowsPerDay: 500 } } });
   const { open: plain } = await openedWith();
   expect(plain.options).not.toHaveProperty('owner');

@@ -97,7 +97,7 @@ function open<S extends Schema>(options: OpenOptions<S>) {
  * in the background without closing it; otherwise opens it, syncs, and closes cleanly without leaving idle connections or timers.
  * If the user opens the app during sync, the foreground closes this instance and opens its own, and this resolves. Aborts via signal or failure close
  * opened databases; on iOS background time expiration the app is suspended immediately, which may preclude graceful closure.
- * Synchronizes only the private space. Preserves pending writes regardless of discardPending: switching owners while pending writes
+ * Synchronizes only the private space. Preserves pending writes regardless of discardPending: switching users while pending writes
  * remain rejects with PendingWrites for resolution in the foreground.
  */
 export function syncOnce<S extends Schema>({ discardPending: _, ...options }: OpenOptions<S>, settings: { signal?: AbortSignal } = {}) {

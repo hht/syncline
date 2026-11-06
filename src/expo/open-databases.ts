@@ -6,7 +6,7 @@ import { report } from '../common/listeners.ts';
  * Opening the same database twice would create two independent device sync state machines competing for the same file.
  * When a background task wakes up while the database is already open, syncOnce shares that open instance without closing it.
  * If the user opens the app while syncOnce is running, foreground closes the background instance and opens its own, so its options
- * (token, schema, owner, validation) always take effect; the superseded syncOnce resolves.
+ * (token, schema, userID, validation) always take effect; the superseded syncOnce resolves.
  * Used only on mobile (web has no background tasks).
  * What this module must not know: How databases are opened or how sync proceeds internally.
  */

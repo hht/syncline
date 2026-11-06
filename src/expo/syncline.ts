@@ -43,7 +43,7 @@ export type Channel = {
 
 /** Platform operations supplied by native or web host bindings. */
 export type Platform = {
-  shared(name: string, tables: SQLiteTable[], url: string, token: () => Promise<string>, owner?: string): Channel;
+  shared(name: string, tables: SQLiteTable[], url: string, token: () => Promise<string>, userID?: string): Channel;
   close(): Promise<void>;
   delete(): Promise<void>;
 };
@@ -53,11 +53,11 @@ export type OpenOptions<S extends Schema> = {
   /** Database name identifying the local SQLite database file. */
   name: string;
   /**
-   * User identifier owning the private space: clearing previous owner data if changed while preserving shared spaces.
-   * If previous owner left un-uploaded pending writes, throws PendingWrites unless discardPending is set.
+   * ID of the signed-in user the private space belongs to: if it differs from the one recorded, clears the previous user's data while
+   * preserving shared spaces. If the previous user left un-uploaded pending writes, throws PendingWrites unless discardPending is set.
    */
-  owner?: string;
-  /** Discards un-uploaded pending writes from a previous owner when switching accounts; ignored by syncOnce. */
+  userID?: string;
+  /** Discards un-uploaded pending writes from a previous user when switching users; ignored by syncOnce. */
   discardPending?: boolean;
   schema: S;
   /** Local-only tables stored in the database but never uploaded or downloaded; cleared on account switch. */
@@ -94,7 +94,7 @@ const channelOf = (channel: Channel) => ({
 export function syncline(name: string, local: LocalDatabase, channel: Channel, platform: Platform, token: () => Promise<string>) {
   const db = remoteDatabase(local.query);
   /** Open shared space channels by name to deduplicate in React StrictMode effects. */
-  const opened = new Map<string, { url: string; owner: string | undefined; channel: ReturnType<typeof channelOf> & { name: string } }>();
+  const opened = new Map<string, { url: string; userID: string | undefined; channel: ReturnType<typeof channelOf> & { name: string } }>();
   return {
     name,
     /** Read-only Drizzle database proxy. */
@@ -114,18 +114,18 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
      * Table names must not collide with private space or other shared spaces. Reopening returns the open instance.
      * If token is omitted, defaults to the private space token getter.
      * Row visibility is determined by the cloud space according to authorized buckets.
-     * If owner differs from the previous session, previously viewed shared data is cleared to prevent data leakage across users.
+     * If userID differs from the previous session, previously viewed shared data is cleared to prevent data leakage across users.
      * Query shared tables through db as usual; onChange notifications fire together.
      */
-    shared: (sharedName: string, options: { schema: Schema; url: string; token?: () => Promise<string>; owner?: string }) => {
+    shared: (sharedName: string, options: { schema: Schema; url: string; token?: () => Promise<string>; userID?: string }) => {
       const known = opened.get(sharedName);
-      if (known?.url === options.url && known.owner === options.owner) return known.channel;
-      if (known) throw new Error(`Shared space ${sharedName} is already open with a different URL or owner`);
+      if (known?.url === options.url && known.userID === options.userID) return known.channel;
+      if (known) throw new Error(`Shared space ${sharedName} is already open with a different URL or user`);
       const shared = {
         name: sharedName,
-        ...channelOf(platform.shared(sharedName, Object.values(options.schema), options.url, options.token ?? token, options.owner)),
+        ...channelOf(platform.shared(sharedName, Object.values(options.schema), options.url, options.token ?? token, options.userID)),
       };
-      opened.set(sharedName, { url: options.url, owner: options.owner, channel: shared });
+      opened.set(sharedName, { url: options.url, userID: options.userID, channel: shared });
       return shared;
     },
     /** Stops synchronization and closes the database; subsequent operations fail. */

@@ -44,7 +44,7 @@ export const decodeRows = (rows: unknown[][]) =>
 
 /** Serializes opening options for the core: encodes tables as metadata; leaves daily checksum rows to core defaults unless specified. */
 function opening<S extends Schema>(options: OpenOptions<S>) {
-  const { schema, localOnly = {}, retired = [], readOnly = [], validation, owner, discardPending, checksumRowsPerDay } = options;
+  const { schema, localOnly = {}, retired = [], readOnly = [], validation, userID, discardPending, checksumRowsPerDay } = options;
   const tables = Object.values(schema);
   const localTables = Object.values(localOnly);
   checkDeclared(tables);
@@ -56,7 +56,7 @@ function opening<S extends Schema>(options: OpenOptions<S>) {
       retired,
       schemas: [...tables, ...localTables].filter((table) => validation?.has(table)).map(tableName),
     },
-    ...(owner !== undefined && { owner }),
+    ...(userID !== undefined && { owner: userID }),
     ...(discardPending && { discardPending }),
     checksum: checksumRowsPerDay === undefined ? {} : { rowsPerDay: checksumRowsPerDay },
   };
@@ -281,11 +281,16 @@ export class Client {
   };
 
   /** Initializes shared space synchronization. */
-  readonly share = (name: string, tables: SQLiteTable[], url: string, token: () => Promise<string>, owner?: string) =>
-    this.channel(name, url, token, { tables, owner });
+  readonly share = (name: string, tables: SQLiteTable[], url: string, token: () => Promise<string>, userID?: string) =>
+    this.channel(name, url, token, { tables, userID });
 
   /** Initializes synchronization for a channel after database open finishes; records errors as downloadError. */
-  channel(name: string, url: string, token: () => Promise<string>, shared?: { tables: SQLiteTable[]; owner: string | undefined }): Channel {
+  channel(
+    name: string,
+    url: string,
+    token: () => Promise<string>,
+    shared?: { tables: SQLiteTable[]; userID: string | undefined },
+  ): Channel {
     const space: Space = { status: connecting(), listeners: new Set(), token };
     this.#spaces.set(name, space);
     if (shared) checkDeclared(shared.tables);
@@ -293,9 +298,9 @@ export class Client {
       type: 'shared',
       name,
       tables: deviceDefinitions(shared.tables),
-      ...(shared.owner !== undefined && { owner: shared.owner }),
+      ...(shared.userID !== undefined && { owner: shared.userID }),
     };
-    // The shared call goes out at once, queued behind open: queries issued after it then run after an owner switch cleared the rows.
+    // The shared call goes out at once, queued behind open: queries issued after it then run after a user switch cleared the rows.
     // Calls on the space wait for it to connect (the core rejects them before connect) and fail with the reason it could not.
     const connected = Promise.all([this.#opened, share && this.call(share)])
       .then(() => this.call({ type: 'connect', channel: name, url, ...(this.#options.allowCleartext && { allowCleartext: true }) }))

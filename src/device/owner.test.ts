@@ -31,7 +31,7 @@ const programs = (storage: ReturnType<typeof deviceStorage>) => storage.sql.exec
 
 test('opened with different owner and previous owner has pending writes: throws PendingWrites (who and how many), clears nothing; reopened by same owner, private data, pending writes, and cookie intact', async () => {
   const storage = await used();
-  expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(expect.objectContaining({ owner: 'alice', count: 1 }));
+  expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(expect.objectContaining({ userID: 'alice', count: 1 }));
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(PendingWrites);
   const device = new Device(storage, tables, { owner: 'alice' });
   expect(workouts(storage)).toHaveLength(2);

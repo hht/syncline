@@ -38,6 +38,7 @@ test('opening blocked by PendingWrites: sync() rejects with PendingWrites and th
   const pending = { message: 'pending writes', pending: { owner: 'u0', count: 2 } };
   native.deliver({ handle: started.length, data: JSON.stringify([{ type: 'reply', id: 1, error: pending }]) });
   expect(await syncing).toBeInstanceOf(PendingWrites);
+  expect(await syncing).toMatchObject({ userID: 'u0', count: 2 });
   expect(blocked.status().downloadError).toBeInstanceOf(PendingWrites);
   expect(() =>
     openSyncline({ name: 'native-pending', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', discardPending: true }),

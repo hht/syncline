@@ -20,7 +20,7 @@ import type { SyncStatus } from './status.ts';
  *
  * Occurs when switching accounts on the device while the local database belongs to the previous user (for example, another web tab
  * signed in with a different token). Sync stops without pushing pending writes into the other space. The app should reopen with the
- * current account (owner) or prompt the user to sign in again.
+ * current account (`userID`) or prompt the user to sign in again.
  */
 export class AccountMismatch extends Error {
   readonly stored: string;
@@ -35,21 +35,21 @@ export class AccountMismatch extends Error {
 }
 
 /**
- * Thrown when opening a database for a different owner while un-uploaded pending writes remain from the previous owner.
+ * Thrown when opening a database for a different user while un-uploaded pending writes remain from the previous user.
  *
- * Prevents clearing or opening the database so pending writes are not lost. The app should prompt the user to sign back in as `owner` to
+ * Prevents clearing or opening the database so pending writes are not lost. The app should prompt the user to sign back in as `userID` to
  * finish syncing, or explicitly pass `discardPending` when opening.
  */
 export class PendingWrites extends Error {
-  /** Previous owner. */
-  readonly owner: string;
+  /** ID of the previous user. */
+  readonly userID: string;
   /** Number of pending writes waiting to upload. */
   readonly count: number;
 
-  constructor(owner: string, count: number) {
-    super(`Previous user (${owner}) still has ${count} pending writes waiting to upload`);
+  constructor(userID: string, count: number) {
+    super(`Previous user (${userID}) still has ${count} pending writes waiting to upload`);
     this.name = 'PendingWrites';
-    this.owner = owner;
+    this.userID = userID;
     this.count = count;
   }
 }

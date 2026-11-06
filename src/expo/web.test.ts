@@ -137,10 +137,10 @@ test('marks downloadError on private space and shared spaces when open fails wit
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open', 'shared']);
 });
 
-test('opening a shared space reaches the core before queries issued after it, so an owner switch clears rows before they are read', async () => {
+test('opening a shared space reaches the core before queries issued after it, so a user switch clears rows before they are read', async () => {
   const { space } = await opened();
   worker().posted.length = 0;
-  space.shared('catalog', { schema: { note }, url: 'https://sync.test/catalog', owner: 'u2' });
+  space.shared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
   void space.db
     .select()
     .from(note)
@@ -154,14 +154,14 @@ test('opening a shared space reaches the core before queries issued after it, so
   ).toEqual(['shared', 'query']);
 });
 
-test('reopening identical shared space returns open instance without reopening; throws when url or owner differs', async () => {
+test('reopening identical shared space returns open instance without reopening; throws when url or user differs', async () => {
   const { space } = await opened();
-  const options = { schema: {}, url: 'https://sync.test/catalog', owner: 'u1' };
+  const options = { schema: {}, url: 'https://sync.test/catalog', userID: 'u1' };
   const first = space.shared('catalog', options);
   expect(space.shared('catalog', options)).toBe(first);
   await flush();
   expect(worker().posted.filter(({ call }) => call.type === 'shared')).toHaveLength(1);
-  expect(() => space.shared('catalog', { ...options, owner: 'u2' })).toThrow('already open');
+  expect(() => space.shared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
 });
 
 test('in-flight calls fail with "Local database is closed" when close reply arrives without waiting indefinitely', async () => {
