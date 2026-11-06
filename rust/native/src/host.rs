@@ -191,7 +191,10 @@ impl Host {
             if self.timers.remove(&timer).is_none() {
                 continue;
             }
-            let Some(client) = &mut self.client else { return };
+            let client = self
+                .client
+                .as_mut()
+                .expect("timers come only from the client's instructions, and serving stops once closing drops the client");
             let instructions = client.control(Input::Fired { timer }, now());
             self.execute(instructions);
         }
@@ -206,11 +209,11 @@ impl Host {
                     let opened = socket::Socket::open(socket, url, protocols, self.events.clone(), &self.network);
                     self.sockets.insert(socket, opened);
                 }
-                Instruction::Send { socket, data } => {
-                    if let Some(socket) = self.sockets.get(&socket) {
-                        socket.send(data);
-                    }
-                }
+                Instruction::Send { socket, data } => self
+                    .sockets
+                    .get(&socket)
+                    .expect("the client sends only on sockets it has neither disconnected nor heard closed or failed")
+                    .send(data),
                 Instruction::Disconnect { socket } => {
                     if let Some(socket) = self.sockets.remove(&socket) {
                         socket.close();
