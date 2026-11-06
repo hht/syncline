@@ -1,8 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { expect, test } from 'vitest';
+import type { Execute } from '../expo/remote-database.ts';
 import { Device } from '../test/test-device.ts';
+import { captureReported } from '../test/test-errors.ts';
 import { upload, write } from '../test/test-schema.ts';
-import { deviceStorage, failOnce, restoredDeviceStorage } from '../test/test-storage.ts';
+import { deviceStorage, failOnce, faultable, injectedError, restoredDeviceStorage } from '../test/test-storage.ts';
 import { exercise, read, statements, tables, w1, withWorkout, workout } from './test-workout.ts';
 
 // Local writes: standard Drizzle reads and writes, uploads modified rows; cloud and replay overwrite by column.
@@ -194,6 +196,57 @@ test('closing the database while a write is validated fails that write as closed
   device = new Device(storage, tables, { validation: new Map([[workout, closing]]) });
   await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }))).rejects.toThrow('local database is closed');
   expect(read(storage).workouts).toEqual([]);
+});
+
+test('closing the database while a write is open reports a failure to read what the write recorded, and still rolls the write back', async () => {
+  const { storage, arm } = faultable(deviceStorage(...statements));
+  const device = new Device(storage, tables);
+  const reported = captureReported();
+  const { promise: started, resolve: start } = Promise.withResolvers<void>();
+  void device.write(async (execute) => {
+    execute("INSERT INTO workout (id) VALUES ('w2')", []);
+    start();
+    await new Promise(() => undefined);
+  });
+  await started;
+  // Fails the first statement SQLite runs to read the recorded changes
+  arm(1);
+  device.close();
+  expect(reported).toEqual([expect.stringMatching(injectedError)]);
+  expect(storage.inTransaction()).toBe(false);
+  expect(read(storage).workouts).toEqual([]);
+});
+
+test('a statement run through a local write while it is validated is refused, so the write commits only the rows validated', async () => {
+  const storage = deviceStorage(...statements);
+  let execute: Execute | undefined;
+  let queued: unknown;
+  const straying = {
+    '~standard': {
+      version: 1 as const,
+      vendor: 'test',
+      validate: (value: unknown) => {
+        // This host answers a nested call only after the validation returns: the core takes the statement while the write awaits the
+        // validation result, as it does from an app that runs a statement asynchronously
+        try {
+          execute?.("INSERT INTO workout (id) VALUES ('w9')", []);
+        } catch (error) {
+          queued = error;
+        }
+        return { value };
+      },
+    },
+  };
+  const device = new Device(storage, tables, { validation: new Map([[workout, straying]]) });
+  await device.write(async (run) => {
+    execute = run;
+    await run("INSERT INTO workout (id) VALUES ('w2')", []);
+  });
+  expect(queued).toEqual(new Error('execute did not reply synchronously'));
+  expect(read(storage).workouts.map(({ id }) => id)).toEqual(['w2']);
+  expect(device.private.pending().flatMap(({ changes }) => changes)).toEqual([
+    { op: 'put', table: 'workout', row: expect.objectContaining({ id: 'w2' }) },
+  ]);
 });
 
 test('client ID retrieved via provided randomUUID (Hermes lacks Web Crypto, avoids mutating global crypto): generated on startup and resync', async () => {

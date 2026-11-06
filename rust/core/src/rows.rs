@@ -247,6 +247,7 @@ fn returning(db: &Connection, sql: &str, values: Vec<Value>, columns: &[String])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::limits::WRITE_ROWS;
     use serde_json::json;
 
     /// Three tables (workout, exercise, set) with chained foreign keys
@@ -389,6 +390,26 @@ mod tests {
                 .starts_with("write modifies more than 2 rows")
         );
         assert_eq!(count(&db, "set"), 1);
+    }
+
+    #[test]
+    fn primary_keys_beyond_the_write_byte_budget_reject_well_within_the_row_budget() {
+        let db = Connection::open_in_memory().unwrap();
+        let rows = rows(&db);
+        // Each key serializes as {"id":"…"}: 509 bytes, so 31,000 keys take 15,779,000 of the 16,000,000 bytes and 1,000 more exceed them partway.
+        let puts = |from: usize, count: usize| {
+            changes(serde_json::Value::Array(
+                (from..from + count)
+                    .map(|index| json!({ "op": "put", "table": "workout", "row": { "id": format!("{index:0>500}") } }))
+                    .collect(),
+            ))
+        };
+        let mut room = Room::new(WRITE_ROWS);
+        rows.write(&db, &puts(0, 31_000), &mut room).unwrap();
+        assert!(
+            reject(rows.write(&db, &puts(31_000, 1_000), &mut room))
+                .starts_with("write modifies more than 100000 rows, or primary keys exceed")
+        );
     }
 
     #[test]

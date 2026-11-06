@@ -65,7 +65,7 @@ test('staging dedupes by primary key: multiple modifications to same row stored 
   expect(storage.sql.exec('SELECT row FROM _syncline_unknown').toArray()).toEqual([{ row: '{"b":2,"a":1,"note":"last"}' }]);
 });
 
-test('refuses a chunk or final poke whose cursor does not continue the staged chain: a duplicate chunk and a stale final leave the stage as is', async () => {
+test('refuses a chunk or final poke that does not continue the staged chain or the cookie, and a reset, which the cloud never sends a private space: they leave the stage as is', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables);
   const final = { base: null, cookie: { version: 9, nonce: 1 }, lmids: {}, patch: [putWorkout('b', 'final')] };
@@ -73,6 +73,10 @@ test('refuses a chunk or final poke whose cursor does not continue the staged ch
   expect(await device.private.receive({ base: null, next: 'n1', patch: [{ op: 'clear' }] })).toBe(false);
   expect(await device.private.receive(final)).toBe(false);
   expect(await device.private.receive({ ...final, cursor: 'n0' })).toBe(false);
+  expect(
+    await device.private.receive({ base: { version: 3, nonce: 3 }, cursor: 'n1', next: 'n2', patch: [putWorkout('c', 'stale')] }),
+  ).toBe(false);
+  expect(await device.private.receive({ base: null, reset: true })).toBe(false);
   expect(device.private.cookie()).toBeNull();
   expect(await device.private.receive({ ...final, cursor: 'n1' })).toBe(true);
   expect(workouts(storage).map(({ id }) => id)).toEqual(['a', 'b']);

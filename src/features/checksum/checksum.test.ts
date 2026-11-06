@@ -4,6 +4,7 @@ import { Device, Space } from '../../test/test-checksum.ts';
 import { schema, serverInc, snapshot, synced, tables, writes } from '../../test/test-counter.ts';
 import { captureReported } from '../../test/test-errors.ts';
 import { filled, pullChunk, pullRest } from '../../test/test-pull.ts';
+import { unchunked } from '../../test/test-schema.ts';
 import { cloudStorage, deviceStorage, failOnce, injectedError } from '../../test/test-storage.ts';
 import { checksumOf, plus, rowHash } from './common/checksum.ts';
 
@@ -138,6 +139,16 @@ test('skips verification with pending mutations; aborts and defers to next cycle
   await writes.inc(device, 'a', 't3');
   expect(await verifying).toBeUndefined();
   expect(await device.private.verify()).toBeUndefined();
+});
+
+test('a verification does not start while a pull is staged, and runs once the pull lands', async () => {
+  const { space, device } = await synced();
+  await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, unchunked));
+  for (const id of ['c', 'd']) space.mutate((tx) => serverInc(tx, id, `t-${id}`));
+  expect((await pullChunk(space, device, 1)).result).toHaveProperty('next');
+  expect(await device.private.verify()).toBeUndefined();
+  expect(await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, unchunked))).toBe(true);
+  expect(await device.private.verify()).toBe(true);
 });
 
 test('closing the database during a verification ends it without a result', async () => {

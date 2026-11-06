@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../cloud/space.ts';
-import type { Chunk, Poke } from '../common/protocol.ts';
+import type { Chunk } from '../common/protocol.ts';
 import type { PullRequest } from '../common/pull-url.ts';
 import { createProgram, program, pullOne, pullRest, viewer } from '../test/test-catalog.ts';
 import { Device } from '../test/test-device.ts';
@@ -29,50 +29,6 @@ test('full pull followed by incremental sync: only visible rows; subsequent requ
   const [request] = await pullRest(catalog, space);
   expect(request).toEqual({ cookie: { version: 3, nonce: expect.any(Number) }, landed: expect.any(String) });
   expect(programs()).toEqual([{ id: 'p3', status: 'published' }]);
-});
-
-/**
- * Device pulls version 1 and later versions publish up to 5; another device at version 3 pulled from version 1,
- * where the second chunk position was "tail caught up to version 2", and cache stored the final chunk computed at version 3.
- * serve answers from cache: URL without lower bound gets stale final chunk, remainder computed live;
- * boundary is next given by stale final chunk (at version 3).
- */
-async function withStaleFinal() {
-  const context = setup();
-  const { space, catalog, publish } = context;
-  publish('p1');
-  await pullRest(catalog, space);
-  publish('p2');
-  publish('p3');
-  const landed = catalog.pullRequest();
-  const first = pullOne(space, landed) as Chunk;
-  const cached = pullOne(space, { ...landed, cursor: first.next }) as Poke;
-  const boundary = cached.next;
-  for (const id of ['p4', 'p5']) publish(id);
-  const serve = (request: PullRequest) =>
-    request.cursor === first.next && request.atLeast === undefined ? cached : pullOne(space, request);
-  /** Finally stops at version 5 from cloud, consistent with cloud. */
-  const expectCaughtUp = () => {
-    expect(catalog.cookie()?.version).toBe(5);
-    expect(context.programs().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
-  };
-  return { ...context, boundary, cached, serve, expectCaughtUp };
-}
-
-test('cache returns stale final chunk (earlier than staged chunks): staged as intermediate chunk, continues pull with lower bound, stops at a valid cloud version, consistent with cloud', async () => {
-  const { space, catalog, boundary, serve, expectCaughtUp } = await withStaleFinal();
-  const requests = await pullRest(catalog, space, serve);
-  expect(requests).toContainEqual(expect.objectContaining({ cursor: boundary, atLeast: 5 }));
-  expectCaughtUp();
-});
-
-test('stale final chunk staged, then a hint from another incarnation: the next request targets that incarnation, not the staged floor', async () => {
-  const { space, catalog, serve, boundary } = await withStaleFinal();
-  for (let step = 0; step < 2; step += 1) expect(await catalog.receive(serve(catalog.pullRequest()))).toBe(true);
-  expect(catalog.pullRequest()).toEqual(expect.objectContaining({ cursor: boundary, atLeast: 5 }));
-  const incarnation = space.round(0).incarnation + 1;
-  await catalog.notified({ hint: { version: 2, nonce: 1 }, incarnation }, false);
-  expect(catalog.pullRequest()).toEqual(expect.objectContaining({ cursor: boundary, atLeast: 2, incarnation }));
 });
 
 test('notification on connection: applied only when idle and base matches cookie; skipped if old; records target version when behind', async () => {
@@ -185,27 +141,6 @@ test('error mid-write when staging a chunk: intermediate chunk completely droppe
   expect(programs().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
 });
 
-test('error mid-write when staging stale final chunk as intermediate: completely dropped, re-staged as intermediate on resume, continues pull with lower bound, consistent with cloud', async () => {
-  const { storage, catalog, cached, serve, expectCaughtUp } = await withStaleFinal();
-  let failed = false;
-  for (let round = 0; round < 20 && (catalog.staging() || !failed); round += 1) {
-    const request = catalog.pullRequest();
-    const response = serve(request);
-    if (response === cached && !failed) {
-      failed = true;
-      // The statement that stages this chunk (stale final chunk may have no changes, not necessarily having staged rows)
-      failOnce(storage, 'INSERT INTO _syncline_stage (');
-      await expect(catalog.receive(response)).rejects.toThrow(injectedError);
-      // Nothing staged: next request is identical
-      expect(catalog.pullRequest()).toEqual(request);
-      continue;
-    }
-    expect(await catalog.receive(response)).toBe(true);
-  }
-  expect(failed).toBe(true);
-  expectCaughtUp();
-});
-
 test('opening shared space while local write in progress: table creation and migration queued after it, table persists even if write rolls back', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, [workout]);
@@ -302,4 +237,25 @@ test('space rebuilt mid-full-download: new space rejects old position, redownloa
   await pullRest(catalog, rebuilt);
   expect(programs().map(({ id }) => id)).toEqual(['p3']);
   expect(catalog.cookie()).toEqual(rebuilt.head());
+});
+
+test('an app update adding a column to a shared table mid-download discards the partial download and restarts it, landing the new column', async () => {
+  const noted = sqliteTable('program', { id: text().primaryKey(), status: text().notNull(), note: text() });
+  const space = new Space(cloudStorage('CREATE TABLE program (id TEXT PRIMARY KEY, status TEXT NOT NULL, note TEXT)'), [noted], {
+    shared: { buckets },
+  });
+  for (const id of ['p1', 'p2', 'p3']) space.mutate((tx) => tx.upsert(noted, { id, status: 'published', note: `${id} note` }), 0);
+  const storage = deviceStorage(createWorkout);
+  const older = new Device(storage, [workout]);
+  const catalog = older.shared('catalog', [program]);
+  expect(await catalog.receive(pullOne(space, catalog.pullRequest()))).toBe(true);
+  expect(catalog.staging()).toBe(true);
+  older.close();
+  const updated = new Device(storage, [workout]).shared('catalog', [noted]);
+  await updated.opened();
+  expect(updated.staging()).toBe(false);
+  await pullRest(updated, space);
+  expect(drizzle(storage).select().from(noted).orderBy(noted.id).all()).toEqual(
+    ['p1', 'p2', 'p3'].map((id) => ({ id, status: 'published', note: `${id} note` })),
+  );
 });

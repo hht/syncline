@@ -102,14 +102,29 @@ test('referenced row deleted by another device: rejected early during local repl
   }
 });
 
-test('foreign keys must reference the parent primary key: cloud and device both refuse other columns when defining tables', () => {
+const coded = sqliteTable('parent', { id: text().primaryKey(), code: text() });
+
+test.for([
+  [
+    'another column',
+    sqliteTable('child', { id: text().primaryKey(), parent_id: text(), parent_code: text().references(() => coded.code) }),
+    'child.parent_code references parent.code, which is not its primary key',
+  ],
+  [
+    'the primary key with another column',
+    sqliteTable('child', { id: text().primaryKey(), parent_id: text(), parent_code: text() }, (table) => [
+      foreignKey({ columns: [table.parent_id, table.parent_code], foreignColumns: [coded.id, coded.code] }),
+    ]),
+    'child.parent_id,parent_code references parent.id,code, which is not its primary key',
+  ],
+] as const)('a foreign key referencing %s of the parent: cloud and device both refuse it when defining tables', ([, child, message]) => {
   // Offline devices cannot keep a non-key column unique, so a row referencing it by value has no single parent.
-  const coded = sqliteTable('parent', { id: text().primaryKey(), code: text() });
-  const byCode = sqliteTable('child', { id: text().primaryKey(), parent_code: text().references(() => coded.code) });
-  const statements = ['CREATE TABLE parent (id TEXT PRIMARY KEY, code TEXT)', 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_code TEXT)'];
-  const message = 'child.parent_code references parent.code, which is not its primary key';
-  expect(() => new Space(cloudStorage(...statements), [coded, byCode])).toThrow(message);
-  expect(() => new Device(deviceStorage(...statements), [coded, byCode])).toThrow(message);
+  const statements = [
+    'CREATE TABLE parent (id TEXT PRIMARY KEY, code TEXT)',
+    'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT, parent_code TEXT)',
+  ];
+  expect(() => new Space(cloudStorage(...statements), [coded, child])).toThrow(message);
+  expect(() => new Device(deviceStorage(...statements), [coded, child])).toThrow(message);
 });
 
 test('composite foreign key modifies only one column (patch carries only changed column): parent checked against resulting row, rejected and held if pair missing', () => {
