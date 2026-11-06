@@ -69,14 +69,13 @@ impl Database {
     }
 
     /// Injects storage faults for tests: rule is a JSON string of `{"prefix"}` (next matching statement fails once) or
-    /// `{"after"}` (after-th read/write statement fails once); null disarms injection.
+    /// `{"after"}` (after-th read/write statement fails once); null disarms injection. Returns whether the rule it replaces never fired (false when none was armed).
     ///
     /// # Errors
     /// Returns an error if the rule JSON cannot be parsed.
     #[cfg(feature = "testing")]
-    pub fn inject(&self, rule: &str) -> Result<(), JsError> {
-        self.faults.arm(parsed(rule).map_err(failure)?);
-        Ok(())
+    pub fn inject(&self, rule: &str) -> Result<bool, JsError> {
+        Ok(self.faults.arm(parsed(rule).map_err(failure)?))
     }
 
     #[cfg_attr(

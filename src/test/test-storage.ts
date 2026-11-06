@@ -92,7 +92,7 @@ export function isInjected(error: unknown): boolean {
 
 /**
  * Device storage wrapper with armed fault injection:
- * arm(after) causes the after-th read/write statement to fail with interrupt; disarm clears.
+ * arm(after) causes the after-th read/write statement to fail with interrupt; disarm clears, returning whether the fault never fired.
  */
 export function faultable(storage: ReturnType<typeof deviceStorage>) {
   return {
@@ -100,6 +100,17 @@ export function faultable(storage: ReturnType<typeof deviceStorage>) {
     arm: (after: number) => storage.database.inject(JSON.stringify({ after })),
     disarm: () => storage.database.inject('null'),
   };
+}
+
+/**
+ * Fails each read/write statement of a scenario in turn: runs `scenario(after)` for after = 1, 2, … until a run reports its fault never
+ * fired. The scenario must arm `after` and return its `disarm()`, which is false when nothing was armed, so it would never end.
+ * Returns the number of statements failed.
+ */
+export async function eachStatement(scenario: (after: number) => Promise<boolean>) {
+  let after = 1;
+  while (!(await scenario(after))) after++;
+  return after - 1;
 }
 
 /** Counts executed statements: take() returns and resets statements executed since prior call. */

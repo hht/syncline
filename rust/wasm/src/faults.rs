@@ -5,6 +5,7 @@
 //! Statement execution begins by firing trace with unexpanded SQL parameters, while a progress handler configured on every step
 //! is invoked before rows are modified. Statements that never invoke the progress handler (such as releasing inner savepoints)
 //! succeed normally; the fault does not carry over to subsequent statements.
+//! EXPLAIN statements never fire trace (SQLite lists their bytecode without running it), so rules never see them.
 //! What this module should not know: which test is executing, or why a fault is injected.
 //! @see <https://sqlite.org/c3ref/trace_v2.html>
 //! @see <https://sqlite.org/c3ref/progress_handler.html>
@@ -79,10 +80,10 @@ impl Faults {
         Ok(Faults(state))
     }
 
-    /// Arms a new fault rule, or disarms injection if None.
-    pub fn arm(&self, rule: Option<Rule>) {
+    /// Arms a new fault rule, or disarms injection if None; returns whether the rule it replaces never fired (false when none was armed).
+    pub fn arm(&self, rule: Option<Rule>) -> bool {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        state.rule = rule;
         state.failing = false;
+        std::mem::replace(&mut state.rule, rule).is_some()
     }
 }

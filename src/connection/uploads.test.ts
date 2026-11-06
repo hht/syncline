@@ -155,3 +155,29 @@ test('persistent push rejection (1011): exponential backoff continues across rec
     }
     connection.stop();
   }));
+
+test('heartbeat: a push an HTTP pull confirms while a ping awaits its pong keeps the pong deadline, closing the link when no pong arrives', () =>
+  withFakeTimers(async () => {
+    // The second token request (the pull after the hint) answers only once the ping is out.
+    const pulling = Promise.withResolvers<string>();
+    let tokens = 0;
+    const token = () => (++tokens === 2 ? pulling.promise : Promise.resolve('valid'));
+    const { device, connection, sockets, message, space, executedElsewhere, open, catchUp } = await heartbeat({ token });
+    open();
+    catchUp();
+    await flush();
+    await write(device, (tx) => tx.insert(workout).values({ id: 'small' }));
+    await flush();
+    executedElsewhere();
+    message(JSON.stringify({ hint: space.head() }));
+    await flush();
+    pingsAfterUpload(sockets[0]?.sent ?? [], 0);
+    pulling.resolve('valid');
+    for (let step = 0; step < 10; step += 1) await flush();
+    expect(device.private.pendingCount()).toBe(0);
+    vi.advanceTimersByTime(rustLimits().pongWithin - 1);
+    expect(sockets[0]?.closed).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(sockets[0]?.closed).toBe(true);
+    connection.stop();
+  }));
