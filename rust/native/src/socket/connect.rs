@@ -3,7 +3,7 @@
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -203,10 +203,16 @@ impl Read for Stream {
 }
 
 impl Write for Stream {
+    /// Over TLS, rustls accepts nothing once 64 KiB of records are unsent, which happens only after the socket would block;
+    /// tungstenite takes 0 for a reset connection, so this reports `WouldBlock`.
+    /// @see <https://docs.rs/rustls/0.23.46/rustls/struct.ConnectionCommon.html#method.set_buffer_limit>
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Stream::Plain(tcp) => tcp.write(buf),
-            Stream::Tls(tls) => tls.write(buf),
+            Stream::Tls(tls) => match tls.write(buf)? {
+                0 => Err(ErrorKind::WouldBlock.into()),
+                written => Ok(written),
+            },
         }
     }
 

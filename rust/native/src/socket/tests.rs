@@ -1,8 +1,13 @@
-//! WebSocket tests against a local server (tungstenite handshake and frames): verifies send/receive, close codes, and post-close delivery.
+//! WebSocket tests against a local server (tungstenite handshake and frames, plain or over TLS): verifies send/receive, close codes,
+//! post-close delivery, and certificate verification.
 
 use super::{Network, Socket};
 use crate::host::Event;
-use std::net::TcpListener;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{ClientConfig, RootCertStore, ServerConfig, ServerConnection, StreamOwned};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use syncline::client::Input;
@@ -12,17 +17,25 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::{Message, accept_hdr};
 
 /// Spawns a server accepting a single connection; passes it to `serve`, returns its port and received subprotocols channel.
+fn server(serve: impl FnOnce(&mut tungstenite::WebSocket<TcpStream>) + Send + 'static) -> (u16, Receiver<String>) {
+    server_over(|tcp| tcp, serve)
+}
+
+/// Like [`server`], over the stream `wrap` makes of the accepted connection; a failed handshake ends the server without serving.
 #[expect(
     clippy::result_large_err,
     reason = "handshake callback error response type is defined by tungstenite"
 )]
-fn server(serve: impl FnOnce(&mut tungstenite::WebSocket<std::net::TcpStream>) + Send + 'static) -> (u16, Receiver<String>) {
+fn server_over<S: Read + Write + 'static>(
+    wrap: impl FnOnce(TcpStream) -> S + Send + 'static,
+    serve: impl FnOnce(&mut tungstenite::WebSocket<S>) + Send + 'static,
+) -> (u16, Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (protocols, seen) = channel();
     std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut ws = accept_hdr(stream, |request: &Request, mut response: Response| {
+        let Ok(mut ws) = accept_hdr(wrap(stream), |request: &Request, mut response: Response| {
             let offered = request
                 .headers()
                 .get("Sec-WebSocket-Protocol")
@@ -34,8 +47,9 @@ fn server(serve: impl FnOnce(&mut tungstenite::WebSocket<std::net::TcpStream>) +
             response.headers_mut().insert("Sec-WebSocket-Protocol", first);
             let _ = protocols.send(offered);
             Ok(response)
-        })
-        .unwrap();
+        }) else {
+            return;
+        };
         serve(&mut ws);
     });
     (port, seen)
@@ -68,8 +82,45 @@ fn opened(port: u16) -> (Socket, Receiver<Event>) {
 }
 
 fn open(port: u16, events: std::sync::mpsc::Sender<Event>) -> Socket {
+    open_at(&format!("ws://127.0.0.1:{port}/sync"), events, &Network::new())
+}
+
+fn open_at(url: &str, events: std::sync::mpsc::Sender<Event>, network: &Network) -> Socket {
     let protocols = vec!["syncline".to_owned(), "bearer.token".to_owned()];
-    Socket::open(7, format!("ws://127.0.0.1:{port}/sync"), protocols, events, &Network::new())
+    Socket::open(7, url.to_owned(), protocols, events, network)
+}
+
+// A test root and a leaf it issued for IP address 127.0.0.1, both P-256 and valid for 100 years, generated once with openssl.
+const ROOT: &[u8] = include_bytes!("tls/root.der");
+const LEAF: &[u8] = include_bytes!("tls/leaf.der");
+const LEAF_KEY: &[u8] = include_bytes!("tls/leaf.key.der");
+
+fn ring() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
+}
+
+/// Wraps an accepted connection in TLS presenting the test leaf; the handshake runs on the first read or write.
+fn tls(tcp: TcpStream) -> StreamOwned<ServerConnection, TcpStream> {
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(LEAF_KEY.to_vec()));
+    let config = ServerConfig::builder_with_provider(ring())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![CertificateDer::from(LEAF.to_vec())], key)
+        .unwrap();
+    StreamOwned::new(ServerConnection::new(Arc::new(config)).unwrap(), tcp)
+}
+
+/// A network trusting only the test root, standing in for a device whose trusted roots include the server's.
+fn trusting() -> Network {
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(ROOT.to_vec())).unwrap();
+    let config = ClientConfig::builder_with_provider(ring())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Network { tls: Arc::new(config) }
 }
 
 #[test]
@@ -149,4 +200,40 @@ fn message_sent_after_thread_exits_does_not_trigger_sigpipe() {
     socket.send("sent after close".to_owned());
     socket.close();
     unsafe { libc::signal(libc::SIGPIPE, previous) };
+}
+
+#[test]
+fn a_server_whose_certificate_the_device_does_not_trust_gets_an_abnormal_close_and_never_the_token() {
+    let (port, seen) = server_over(tls, |_| panic!("handshake must fail"));
+    let (sender, events) = channel();
+    let _socket = open_at(&format!("wss://127.0.0.1:{port}/sync"), sender, &Network::new());
+    assert!(matches!(next(&events), Input::Closed { socket: 7, code: 1006, reason } if reason.contains("certificate")));
+    // The server ended without receiving the upgrade request carrying the token.
+    assert!(matches!(
+        seen.recv_timeout(Duration::from_secs(5)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    ));
+}
+
+#[test]
+fn over_tls_messages_larger_than_the_socket_and_tls_buffers_flow_both_ways_while_the_peer_echoes_them() {
+    const COUNT: usize = 4;
+    let (port, _) = server_over(tls, |ws| {
+        for _ in 0..COUNT {
+            let message = ws.read().unwrap();
+            ws.send(message).unwrap();
+        }
+        while ws.read().is_ok() {}
+    });
+    let (sender, events) = channel();
+    let socket = open_at(&format!("wss://127.0.0.1:{port}/sync"), sender, &trusting());
+    assert!(matches!(next(&events), Input::Opened { socket: 7 }));
+    let sent: Vec<String> = (0..COUNT).map(|index| index.to_string().repeat(1 << 20)).collect();
+    // Queued at once: the device is still writing, blocked, when the echoes start arriving.
+    for message in &sent {
+        socket.send(message.clone());
+    }
+    for message in &sent {
+        assert!(matches!(next(&events), Input::Message { socket: 7, data } if data == *message));
+    }
 }
