@@ -1,49 +1,94 @@
 # Syncline
 
-Syncs relational SQLite tables between Expo devices (iOS, Android, web) and Cloudflare. Reads and writes run against the local database on device without waiting for the network; the cloud is the single source of truth.
+English | [简体中文](README.zh-CN.md)
 
-- **Local-first**: The UI reads and writes local SQLite, works offline as usual, and syncs automatically when online.
-- **Standard Drizzle**: Define tables with Drizzle and write queries as usual; queries reading those tables automatically refresh when data changes.
-- **One Durable Object per user**: Uses Durable Object SQLite on the cloud with hibernatable WebSockets that incur no duration charges while idle.
-- **Shared data over CDN**: Shared data (such as catalogs) downloads by subscription (a set of buckets); devices with identical subscriptions share edge cache entries, letting millions of devices load data from a single computation at the origin.
-- **Zero data loss on errors**: Writes that fail cloud execution are held intact for inspection and can be resubmitted after fixes; network drops, duplicates, out-of-order delivery, and crashes never lose writes or execute them twice. The protocol is modeled in TLA+ and exhaustively checked with TLC.
+Offline-first SQLite sync for Expo apps, backed by Cloudflare.
 
-## How it works
+Your app reads and writes a local SQLite database. Syncline keeps it in sync with the cloud in the background. It works offline and catches up when the network returns.
 
-Local writes take effect immediately and are recorded in pending writes. The cloud executes writes in sequence, records one version per commit, and pushes changes and confirmations back to each online device. When a device receives an update, it reverts unconfirmed writes, applies the cloud changes, and replays unconfirmed writes on top. As a result, the UI always observes cloud data plus its own unconfirmed local writes.
+> [!WARNING]
+> Syncline is pre-release. It is not on npm yet, and breaking changes can land without migrations.
 
-## Install
+## Features
 
-Not yet published to a package registry. Reference it via a local directory path (pnpm links it into `node_modules`, resolving dependencies and peer dependencies against the app; run `pnpm install` again in the app after modifying Syncline):
+- **Local first.** Reads and writes never wait for the network.
+- **Plain Drizzle.** Declare tables with Drizzle once and use them on the device and in the cloud.
+- **Live queries.** Queries re-run when the tables they read change.
+- **No lost writes.** Network drops, retries, and crashes never lose a write or apply it twice.
+- **iOS, Android, and web.** One API on every platform.
+- **Cheap to run.** One Durable Object per user. Idle connections are not billed for duration.
+- **Shared data.** Catalogs and other shared data download through the CDN.
 
-```json
-{ "dependencies": { "syncline": "file:../syncline" } }
+## Quick start
+
+### 1. Install
+
+Install it from GitHub:
+
+```sh
+pnpm add github:hht/syncline
 ```
 
-The package entrypoints export TypeScript source directly: Metro and wrangler bundle it as usual. For Jest, add `syncline` to `transformIgnorePatterns`. Its `postinstall` script is only for internal development; set `syncline: false` under `allowBuilds` in `pnpm-workspace.yaml`.
+Append `#<tag>` to pin a [release](https://github.com/hht/syncline/tags).
 
-The app also requires `expo`, `react`, and `@tanstack/react-query`. Wrap the Metro configuration with `withSyncline`:
+Syncline's `postinstall` script is for its own development. pnpm refuses to install until you decide on it, so turn it off in `pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  syncline: false
+```
+
+For Jest, add `syncline` to `transformIgnorePatterns`: the package ships TypeScript source.
+
+Your app also needs `expo`, `react`, `@tanstack/react-query`, and `drizzle-orm` 1.0.0-rc.4. Then wrap your Metro config:
 
 ```js
+// metro.config.js
 const { getDefaultConfig } = require('expo/metro-config');
 const { withSyncline } = require('syncline/metro');
+
 module.exports = withSyncline(getDefaultConfig(__dirname));
 ```
 
-The device runtime is written in Rust (native modules on iOS and Android requiring a development build; WebAssembly on web), compiled at build time. Install rustup (toolchain version specified in `rust/rust-toolchain.toml`). When Metro starts, it builds the web WebAssembly bundle (even when running only mobile targets), which requires LLVM installed via mise (see `src/build-wasm.mjs` for the version; prints installation commands if missing) and the wasm-bindgen CLI (matching the `wasm-bindgen` version in `rust/Cargo.toml`). Android also requires `cargo-ndk`. The cloud runtime runs on Cloudflare Workers with Durable Objects backed by SQLite storage.
+<details>
+<summary>Build requirements</summary>
 
-## At a glance
+Syncline builds its device runtime from source for now:
 
-The cloud and devices share the same Drizzle table definitions:
+- Node.js 26 or later
+- [rustup](https://rustup.rs)
+- LLVM, installed with [mise](https://mise.jdx.dev) (Metro prints the command if it is missing)
+- The `wasm-bindgen` CLI at the exact version Syncline uses: `cargo install wasm-bindgen-cli --version 0.2.130`
+- `cargo-ndk` (Android only)
+
+iOS and Android need a [development build](https://docs.expo.dev/develop/development-builds/introduction/). Expo Go is not supported.
+
+</details>
+
+### 2. Declare your tables
+
+Share one schema between the app and the cloud:
 
 ```ts
-export const schema = { workout: sqliteTable('workout', { id: text().primaryKey(), title: text().notNull() }) };
+// schema.ts
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+
+export const note = sqliteTable('note', {
+  id: text().primaryKey(),
+  body: text().notNull(),
+});
+
+export const schema = { note };
 ```
 
-Cloud: Extend `SynclineSpace`. The entry Worker verifies the token and forwards the request.
+### 3. Set up the cloud
+
+Create a Durable Object class for user data, and a Worker that checks the token:
 
 ```ts
+// worker.ts
 import { forward, SynclineSpace } from 'syncline/cloudflare';
+import { schema } from './schema';
 
 export class UserSpace extends SynclineSpace<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -52,46 +97,72 @@ export class UserSpace extends SynclineSpace<Env> {
 }
 
 export default {
-  fetch: (request: Request, env: Env) => forward(request, env.USER_SPACE, async (token) => lookUp(token)), // → { space: userId, expiresAt }
+  // Return { space: userID, expiresAt } (epoch milliseconds), or undefined to reject the token.
+  fetch: (request: Request, env: Env) =>
+    forward(request, env.USER_SPACE, async (token) => verifyToken(token)),
 };
 ```
 
-App: Open the database, pass it to React, and read and write with hooks.
+Register the class in `wrangler.jsonc`:
 
-```tsx
-import { openSyncline } from 'syncline/expo';
-import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
-
-const space = openSyncline({ name: 'app', owner: uid, schema, url: 'https://api.example.com/sync', token: getIdToken });
-
-<SynclineProvider value={space}>…</SynclineProvider>;
-
-function Workouts() {
-  const { data } = useQuery((db) => db.select().from(workout)); // Automatically refreshes when read tables change
-  const { write } = useSyncline();
-  const add = () => write(async (tx) => tx.insert(workout).values({ id: crypto.randomUUID(), title: 'squat' }));
-  // …
+```jsonc
+{
+  "name": "my-sync",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-30",
+  "durable_objects": { "bindings": [{ "name": "USER_SPACE", "class_name": "UserSpace" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSpace"] }]
 }
 ```
 
-## What else it does
+Run `npx wrangler dev` to try it locally, or `npx wrangler deploy` to ship it.
 
-| Feature | Summary |
-|---|---|
-| Live queries | Re-runs queries when read tables change, powered by TanStack Query |
-| Foreign keys and validation | Cascades deletes to child rows and validates full rows on write using identical rules on both ends |
-| Local-only tables | Unsynced tables created in the same database, queryable and writable alongside synced tables |
-| Server writes | Cloud-side mutations on user data pushed immediately to online devices |
-| Read-only tables | Server-writable tables (billing, trials) that devices cannot modify; modifications from modified clients are held |
-| Sync status | Connection state, download progress, and pending write counts; manual sync and resync |
-| Held writes | Stores writes that failed cloud execution intact, notifies the user, and resubmits them once repaired |
-| Schema evolution | Automatically creates tables and adds columns from Drizzle schemas; deploy cloud first, un-upgraded apps continue syncing; app upgrades do not redownload data; adding tables or columns re-downloads only the modified table |
-| Shared spaces | Server-written data shared across users, downloaded over CDN and pushed live through broadcast shards |
-| Web | Same API with the local database on OPFS and sync running in Syncline's dedicated Web Worker |
-| Exports | Streams per-user mutations to external destinations for cross-user analytics |
-| Point-in-time recovery | Restores a user's data to any bookmark within the last 30 days |
-| Observability | Dispatches cloud events to your logging and alerting infrastructure |
+### 4. Use it in your app
+
+```tsx
+import { randomUUID } from 'expo-crypto';
+import { openSyncline } from 'syncline/expo';
+import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
+import { schema, note } from './schema';
+
+const space = openSyncline({
+  name: 'app',
+  userID,
+  schema,
+  url: 'https://api.example.com/sync',
+  token: getIdToken,
+});
+
+export function App() {
+  return (
+    <SynclineProvider value={space}>
+      <Notes />
+    </SynclineProvider>
+  );
+}
+
+function Notes() {
+  const { data } = useQuery((db) => db.select().from(note));
+  const { write } = useSyncline();
+  const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
+  // Render data and call add()
+}
+```
+
+The sample makes IDs with `expo-crypto`; any unique string works.
+
+`SynclineProvider` must sit inside TanStack Query's `QueryClientProvider`.
+
+Against `wrangler dev`, add `allowCleartext: true` and use:
+
+- `http://localhost:8787` from the iOS simulator or a browser
+- `http://10.0.2.2:8787` from the Android emulator
+- your computer's LAN address from a phone, after starting `npx wrangler dev --ip 0.0.0.0`
+
+Open the app on two devices. Add a note on one, and it shows up on the other.
 
 ## Documentation
 
-Reference: [API](docs/reference/api.md), [Limits](docs/reference/limits.md). Protocol verification: [Models and model checking](docs/internals/model.md); design trade-offs: [Architecture decisions](docs/internals/adr.md).
+- [Limits](docs/reference/limits.md): what Syncline does not support, and what happens past each limit. Read it before you design your schema.
+- [FAQ](docs/reference/faq.md): common questions and errors.
+- [API](docs/reference/api.md): every export and option.

@@ -2,7 +2,7 @@
 
 Organized by package entrypoint based on execution environment: app (`syncline/expo`, `syncline/expo/background`, `syncline/react`, `syncline/metro`) and cloud (`syncline/cloudflare`).
 
-Most integrations require only `openSyncline` (`syncline/expo`) and `SynclineProvider`, `useQuery`, and `useSyncline` (`syncline/react`) on the app, plus `SynclineSpace` and `forward` (`syncline/cloudflare`) on the cloud. Start with the [README](../../README.md) section "At a glance", and refer below and to [Limits](limits.md) as needed.
+Most integrations require only `openSyncline` (`syncline/expo`) and `SynclineProvider`, `useQuery`, and `useSyncline` (`syncline/react`) on the app, plus `SynclineSpace` and `forward` (`syncline/cloudflare`) on the cloud. Start with the [README](../../README.md) section "Quick start", and refer below and to [Limits](limits.md) as needed.
 
 ## `syncline/expo`
 

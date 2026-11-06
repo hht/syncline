@@ -38,26 +38,29 @@ const mb = (bytes: number) => `${bytes / 1_000_000} MB`;
 const kb = (bytes: number) => `${bytes / 1000} KB`;
 
 test.each([
-  // Sizes
-  `${mib(writeBytes)} (UTF-8)`,
-  `${count(defaultConnections)} concurrent connections`,
-  `fits in ${count(socketLimit)} bytes (UTF-8)`,
-  `in steps of up to ${count(readRows)} rows`,
-  `every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
-  `${count(keyBytes)} bytes encoded as JSON`,
-  `table names hold at most ${count(tableNameChars)} characters`,
-  `at most ${count(subscriptionBytes)} bytes encoded as JSON`,
+  // Schema and writes
+  `Table names hold at most ${count(tableNameChars)} characters.`,
+  `takes at most ${count(keyBytes)} bytes encoded as JSON (UTF-8)`,
+  `total at most ${count(maxRowBytes)} bytes.`,
+  `a server write past Cloudflare's ${mb(valueBytes)} row limit fails`,
+  `One local write holds at most ${mib(writeBytes)} (UTF-8).`,
+  `One write changes at most ${count(writeRows)} rows.`,
+  `total at most ${mb(writeKeyBytes)} encoded as JSON.`,
+  `Shared spaces accept only server writes, up to ${count(sharedWriteRows)} rows each.`,
+  `A private space accepts ${count(defaultConnections)} concurrent connections (\`connections\`).`,
+  // Downloads, storage, and shared spaces
+  `requests at most ${count(rowsPerDay)} rows per day (\`checksumRowsPerDay\`)`,
+  `the greater of roughly ${mib(commitFloor)} and 1/4 of the data`,
+  `takes at most ${count(subscriptionBytes)} bytes encoded as JSON`,
   `at most ${count(bucketBytes)} bytes per bucket`,
-  `Synced columns total ${count(maxRowBytes)} bytes (DO rows cap at ${mb(valueBytes)}`,
-  `greater of roughly ${mib(commitFloor)} and`,
-  `default ${count(defaultShards)} shards`,
-  `(\`#${defaultShards - 1}\` with the default ${count(defaultShards)} shards) fits in ${count(nameBytes)} bytes (UTF-8)`,
-  `${count(writeRows)} rows (shared spaces support only server writes, up to ${count(sharedWriteRows)} rows: each row must also maintain its buckets), and primary keys total ${mb(writeKeyBytes)}`,
-  `requests at most ${count(rowsPerDay)} rows per day`,
-  // Durations
-  `no data is received for ${seconds(receiveTimeout)}`,
-  `as long as its bytes take at ${kb(slowestRate)}/s`,
+  `(\`#${defaultShards - 1}\` with the default ${count(defaultShards)} shards), fits in ${count(nameBytes)} bytes (UTF-8)`,
+  `recorded every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
+  `in steps of up to ${count(readRows)} rows`,
+  // Timing
+  `when a message fits in ${count(socketLimit)} bytes (UTF-8)`,
+  `If no data is received for ${seconds(receiveTimeout)}`,
   `idle for ${seconds(pingAfter)}, and if no message arrives within ${seconds(pongWithin)}`,
+  `as long as its bytes take at ${kb(slowestRate)}/s`,
   `min(${seconds(maxDelay)}, ${seconds(baseDelay)} * 2ⁿ)`,
   `${count(reconnectRate)} devices per second`,
   `${seconds(defaultExportDelay)} after a write (\`exportDelay\`)`,
@@ -70,6 +73,21 @@ test.each([
 test('checksum verification waits a full day after completing a round', () => {
   expect(interval).toBe(24 * 3_600_000);
   expect(limits).toContain('a full day after the previous round completed');
+});
+
+test('the Chinese translation states the same numbers as the English limits', () => {
+  const translation = readFileSync(new URL('../../docs/reference/zh-CN/limits.md', import.meta.url), 'utf8');
+  const numbers = (text: string) => (text.match(/\d+(?:[.,:/-]\d+)*/g) ?? []).sort();
+  expect(numbers(translation)).toEqual(numbers(limits));
+});
+
+test('the READMEs install the wasm-bindgen CLI at the version the Rust crates pin', () => {
+  const cargo = readFileSync(new URL('../../rust/Cargo.toml', import.meta.url), 'utf8');
+  const version = cargo.match(/^wasm-bindgen = "=([\d.]+)"$/m)?.[1];
+  for (const readme of ['README.md', 'README.zh-CN.md'])
+    expect(readFileSync(new URL(`../../${readme}`, import.meta.url), 'utf8')).toContain(
+      `cargo install wasm-bindgen-cli --version ${version}`,
+    );
 });
 
 test('Rust device-side limits match cloud limits', () => {
