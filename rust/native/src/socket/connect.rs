@@ -76,6 +76,7 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
     };
     let (ws, _) = tungstenite::client(request, stream).map_err(|error| {
         Unconnected::Unreachable(match error {
+            // Untested: reaching it takes a server silent during the handshake for `CONNECT_TIMEOUT`.
             HandshakeError::Interrupted(_) => format!("handshake timed out ({}s)", CONNECT_TIMEOUT.as_secs()),
             HandshakeError::Failure(error) => error.to_string(),
         })
@@ -91,9 +92,6 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
 /// Connects to one of the resolved addresses (racing address families; see [`race`]) and configures read/write timeouts
 fn tcp(host: &str, port: u16) -> Result<TcpStream, String> {
     let addresses: Vec<SocketAddr> = (host, port).to_socket_addrs().map_err(|error| error.to_string())?.collect();
-    if addresses.is_empty() {
-        return Err(format!("could not resolve address for {host}"));
-    }
     let tcp = race(addresses, Instant::now() + CONNECT_TIMEOUT, |address, timeout| {
         TcpStream::connect_timeout(&address, timeout)
     })?;

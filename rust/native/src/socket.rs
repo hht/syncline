@@ -78,6 +78,7 @@ impl Socket {
         });
         let (wake, woken) = match pair {
             Ok(pair) => pair,
+            // Only when the process or system is out of descriptors or memory; the core retries a failed socket after backoff.
             Err(error) => {
                 let _ = events.send(Event::Network(Input::Failed {
                     id,
@@ -183,6 +184,7 @@ fn pump(
         };
         // Frames that cannot be flushed immediately remain buffered in tungstenite for next flush.
         for data in messages {
+            // A connection reset here is usually noticed by the flush or read below instead, with the same close.
             if let Err(error) = ws.write(Message::text(data))
                 && !would_block(&error)
             {
@@ -242,11 +244,7 @@ fn would_block(error: &tungstenite::Error) -> bool {
 
 /// Connection dropped without a close frame: 1006 abnormal closure matching browsers.
 fn abnormal(error: &tungstenite::Error) -> (u16, String) {
-    let reason = match error {
-        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => String::new(),
-        error => error.to_string(),
-    };
-    (1006, reason)
+    (1006, error.to_string())
 }
 
 #[cfg(test)]
