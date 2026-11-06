@@ -37,3 +37,15 @@ test('a pushed row whose integrator validator throws something other than an Err
   space.push([{ client: 'c1', id: 1, changes: [{ op: 'put', table: 'entry', row: { id: 'e1' } }] }]);
   expect(space.held()).toEqual([expect.objectContaining({ id: 1, reason: 'validator crashed' })]);
 });
+
+test('a resubmitted patch giving only the primary key writes nothing and makes no version, and the held write is gone', () => {
+  const storage = cloudStorage('CREATE TABLE entry (id TEXT PRIMARY KEY, done INTEGER, settings TEXT)');
+  const space = new Space(storage, [entry]);
+  space.mutate((tx) => tx.insert(entry, { id: 'e1', done: true }));
+  space.push([{ client: 'c1', id: 1, changes: [{ op: 'put', table: 'entry', row: { id: 'e1', done: 2 } }] }]);
+  const head = space.head();
+  space.resubmit('c1', 1, [{ op: 'patch', table: 'entry', row: { id: 'e1' } }]);
+  expect(space.held()).toEqual([]);
+  expect(space.head()).toEqual(head);
+  expect(storage.sql.exec('SELECT id, done FROM entry').toArray()).toEqual([{ id: 'e1', done: 1 }]);
+});

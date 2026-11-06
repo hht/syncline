@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { remoteDatabase } from '../expo/remote-database.ts';
@@ -175,4 +176,14 @@ test('local writes fail on the 64-bit minimum integer like any integer beyond th
   ])
     await expect(device.write(async (execute) => execute(sql, []))).rejects.toThrow('exceeds safe JS');
   expect(device.private.pending()).toEqual([]);
+});
+
+test('a Drizzle get in a local write returns the first matching row, or undefined when none match', async () => {
+  const { device } = opened();
+  const found = await device.write(async (execute) => {
+    const db = remoteDatabase(execute);
+    await db.insert(note).values([{ id: 'n1', body: 'first' }, { id: 'n2' }]);
+    return [await db.select().from(note).orderBy(note.id).get(), await db.select().from(note).where(eq(note.id, 'n9')).get()];
+  });
+  expect(found).toEqual([{ id: 'n1', body: 'first' }, undefined]);
 });

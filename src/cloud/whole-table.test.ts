@@ -4,7 +4,7 @@ import { Device } from '../test/test-device.ts';
 import { workout } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
-import { catchUp, createTag, createWorkout, rows, tag } from './test-evolution.ts';
+import { catchUp, createTag, createWorkout, rows, tag, workoutWithReps } from './test-evolution.ts';
 
 // Sync scope evolution records table entry in scope table: on pull, devices drop the table and stage current rows in bounded chunks.
 
@@ -48,4 +48,32 @@ test('concurrent cloud writes/deletes/inserts across scanned and unscanned keys 
   expect(device.private.cookie()).toEqual(space.head());
   expect(rows(storage, 'tag')).toEqual(cloud.sql.exec('SELECT *, NULL AS _extra FROM tag ORDER BY id').toArray());
   expect(rows(storage, 'tag')).toHaveLength(60);
+});
+
+test('a table leaving sync mid incremental pull drops only its own rows from those sent: a synced row touched again after the drop is sent once', () => {
+  const cloud = cloudStorage(createWorkout, createTag);
+  const both = new Space(cloud, [workout, tag]);
+  const base = both.head();
+  both.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'a' }));
+  const space = new Space(cloud, [workout]);
+  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'b' }));
+  expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
+    { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } },
+    { op: 'drop', table: 'tag' },
+  ]);
+});
+
+test('a column leaving sync mid incremental pull sends rows of its table sent before the drop again after it: the drop invalidates them', () => {
+  const cloud = cloudStorage(createWorkout);
+  const before = new Space(cloud, [workoutWithReps]);
+  const base = before.head();
+  before.mutate((tx) => tx.insert(workoutWithReps, { id: 'w1', note: 'a', reps: 5 }));
+  const space = new Space(cloud, [workout]);
+  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'b' }));
+  const put = { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } };
+  expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
+    put,
+    { op: 'drop', table: 'workout', columns: ['reps'] },
+    put,
+  ]);
 });

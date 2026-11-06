@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Chunk } from '../common/protocol.ts';
-import { admin, catalog, contents, day, program, pullAll, rules, type subscribed, viewer } from '../test/test-catalog.ts';
+import { admin, catalog, contents, day, program, pullAll, rules, subscribed, viewer } from '../test/test-catalog.ts';
 import { Space } from './space.ts';
 
 // Row counts per bucket in shared spaces: used to compute total rows for full-pull progress; updated on writes,
@@ -93,4 +93,13 @@ test('purges superseded row counts from prior generations and removed synced tab
   const only = new Space(cloud, [program], { shared: { buckets: { all: { program: {} } }, chunkRows: 3 } });
   countAll(only);
   expect(stored()).toEqual(before.filter(({ tbl, bucket }) => tbl === 'program' && bucket === '["all"]'));
+});
+
+test('a synced table no bucket rule covers needs no background count: one step counts the covered table and leaves no work', () => {
+  const { cloud, publish } = catalog();
+  for (const id of ['p1', 'p2', 'p3']) publish(id);
+  const programs = new Space(cloud, [program, day], { shared: { buckets: { all: { program: {} } }, chunkRows: 3 } });
+  // Day holds three rows too, but they are in no bucket.
+  expect(programs.bucketRows?.step(4)).toBe(false);
+  expect(firstProgress(programs, subscribed(['all']))?.total).toBe(3);
 });

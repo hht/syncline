@@ -142,3 +142,11 @@ test('resubmitting held write with unparseable changes: throws and remains held 
   space.resubmit('c1', 1, put(1).changes);
   expect(space.held()).toEqual([]);
 });
+
+test('a server write touching no synced row makes no version and sends connections nothing, while one that does reaches them', () => {
+  const { phone, server } = serving();
+  server.mutate(() => undefined);
+  expect(phone.sent).toEqual([]);
+  server.mutate((tx) => tx.insert(note, { id: 's1' }));
+  expect(phone.sent).toHaveLength(1);
+});

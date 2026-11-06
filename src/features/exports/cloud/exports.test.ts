@@ -156,3 +156,10 @@ test('a failing exporter is reported by name with the message it threw, or with 
     { type: 'export.failed', name: 'search', reason: 'timeout' },
   ]);
 });
+
+test('an integrator task is no export task, even when its name past the length of the export prefix is an exporter name', () => {
+  const exporter = { position: async () => undefined, write: async () => undefined };
+  const exports = new Exports({ reserved: 'syncline:' } as never, { exports: { stats: exporter } });
+  expect(exports.chore(`${'x'.repeat('syncline:export:'.length)}stats`, Date.now())).toBeUndefined();
+  expect(exports.chore('syncline:export:stats', Date.now())).toBeDefined();
+});
