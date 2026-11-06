@@ -82,6 +82,9 @@ export const injectedPrefix = 'SQLITE_IOERR: injected fault on statement ';
 /** Error message for injected device fault: SQLite interrupted. */
 export const injectedError = /Error code 9: interrupted/;
 
+/** Message prefix of a device statement that ran out of memory compiling under injection. */
+export const starvedPrefix = 'Error code 7: ';
+
 /** Distinguishes injected storage faults (cloud InjectedFault or device SQLite interrupt) across Drizzle error wrapping. */
 export function isInjected(error: unknown): boolean {
   return (
@@ -92,12 +95,14 @@ export function isInjected(error: unknown): boolean {
 
 /**
  * Device storage wrapper with armed fault injection:
- * arm(after) causes the after-th read/write statement to fail with interrupt; disarm clears, returning whether the fault never fired.
+ * arm(after) causes the after-th read/write statement to fail with interrupt; starve(compile) causes the statement compiling at the
+ * compile-th action counted to run out of memory ({@link starvedPrefix}); disarm clears, returning whether the fault never fired.
  */
 export function faultable(storage: ReturnType<typeof deviceStorage>) {
   return {
     storage,
     arm: (after: number) => storage.database.inject(JSON.stringify([{ after }])),
+    starve: (compile: number) => storage.database.inject(JSON.stringify([{ compile }])),
     disarm: () => storage.database.inject('[]'),
   };
 }

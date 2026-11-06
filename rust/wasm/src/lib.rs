@@ -24,8 +24,17 @@ mod coverage;
 mod faults;
 #[cfg(all(feature = "testing", target_family = "wasm"))]
 mod faulty;
+#[cfg(all(feature = "testing", target_family = "wasm"))]
+mod memory;
 #[cfg(target_family = "wasm")]
 mod opfs;
+
+/// Installs the allocator that injected faults starve before anything initializes SQLite.
+#[cfg(all(feature = "testing", target_family = "wasm"))]
+#[wasm_bindgen(start)]
+fn start() {
+    memory::install();
+}
 
 /// External host random number generator: provides client IDs via `randomUUID()` and backoff jitter via `random()` (0.0 to 1.0).
 #[wasm_bindgen]
@@ -82,14 +91,18 @@ impl Database {
     }
 
     /// Injects storage faults for tests: rules is a JSON array of `{"prefix"}` (next matching statement fails once),
-    /// `{"after"}` (after-th read/write statement fails once), or `{"io"}` (file I/O of the next matching statement fails, on a database
-    /// opened by `faulty`), firing in turn; an empty array disarms injection. Returns whether a rule it replaces never fired.
+    /// `{"after"}` (after-th read/write statement fails once), `{"io"}` (file I/O of the next matching statement fails, on a database
+    /// opened by `faulty`), or `{"compile"}` (a statement compiling runs out of memory once, at the compile-th action counted), firing in turn; an empty
+    /// array disarms injection. Empties the statement cache, so each statement compiles again when next used. Returns whether a rule it
+    /// replaces never fired.
     ///
     /// # Errors
     /// Returns an error if the rule JSON cannot be parsed.
     #[cfg(feature = "testing")]
     pub fn inject(&self, rules: &str) -> Result<bool, JsError> {
-        Ok(self.faults.arm(parsed(rules).map_err(failure)?))
+        let rules = parsed(rules).map_err(failure)?;
+        self.store().connection().flush_prepared_statement_cache();
+        Ok(self.faults.arm(rules))
     }
 
     #[cfg_attr(
@@ -99,8 +112,11 @@ impl Database {
     pub(crate) fn of(mut connection: Connection) -> Result<Database, JsError> {
         #[cfg(feature = "testing")]
         let faults = faults::Faults::install(&mut connection).map_err(sql)?;
+        let store = Store::new(connection).map_err(sql)?;
+        #[cfg(feature = "testing")]
+        store.watch_compiling(faults.compiling());
         Ok(Database {
-            store: Some(Store::new(connection).map_err(sql)?),
+            store: Some(store),
             client: None,
             #[cfg(feature = "testing")]
             faults,

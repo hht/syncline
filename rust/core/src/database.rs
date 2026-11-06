@@ -12,6 +12,7 @@
 //! (lexical semicolon scanning also fails on constructs like `$name(...)` containing semicolons).
 //! PRAGMAs are rejected only during compile: SQLite compiles PRAGMAs internally at runtime (such as session extension inspecting table schemas).
 //! The authorizer remains registered and toggles via an atomic switch: re-registering an authorizer invalidates all compiled statements.
+//! Test builds let fault injection watch statements compile through it ([`Database::watch_compiling`]), SQLite allowing one authorizer.
 //! The connection turns off SQLite's foreign key enforcement, which native builds enable by default (`libsqlite3-sys` compiles with
 //! `SQLITE_DEFAULT_FOREIGN_KEYS=1`) and the web does not: tables Syncline creates declare no `REFERENCES` (it enforces declared foreign keys
 //! itself), so enforcement reaches only the app's own tables, where a reference to a synced row would fail every download deleting that row.
@@ -36,6 +37,12 @@ use self_cell::self_cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "testing")]
+use std::sync::{Mutex, PoisonError};
+
+/// Told, in test builds, of each action a statement compiling takes.
+#[cfg(feature = "testing")]
+type Compiling = Arc<Mutex<Box<dyn FnMut(&AuthAction<'_>) + Send>>>;
 
 /// Active session recordings by ID.
 type Sessions<'conn> = HashMap<u32, Session<'conn>>;
@@ -56,6 +63,8 @@ pub struct Database {
     guarding: Arc<AtomicBool>,
     /// Indicates a revert is applying: the commit hook turns every commit into a rollback.
     reverting: Arc<AtomicBool>,
+    #[cfg(feature = "testing")]
+    compiling: Compiling,
 }
 
 impl Database {
@@ -80,7 +89,13 @@ impl Database {
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         let guarding = Arc::new(AtomicBool::new(false));
         let refusing = guarding.clone();
+        #[cfg(feature = "testing")]
+        let compiling: Compiling = Arc::new(Mutex::new(Box::new(|_: &AuthAction<'_>| {})));
+        #[cfg(feature = "testing")]
+        let watching = compiling.clone();
         connection.authorizer(Some(move |context: AuthContext<'_>| {
+            #[cfg(feature = "testing")]
+            (watching.lock().unwrap_or_else(PoisonError::into_inner))(&context.action);
             let refused = match context.action {
                 AuthAction::Pragma { .. } => true,
                 AuthAction::Insert { table_name } | AuthAction::Delete { table_name } | AuthAction::Update { table_name, .. } => {
@@ -102,7 +117,15 @@ impl Database {
             next: 0,
             guarding,
             reverting,
+            #[cfg(feature = "testing")]
+            compiling,
         })
+    }
+
+    /// Tells `watch` from now on of each action a statement compiling takes (fault injection).
+    #[cfg(feature = "testing")]
+    pub fn watch_compiling(&self, watch: impl FnMut(&AuthAction<'_>) + Send + 'static) {
+        *self.compiling.lock().unwrap_or_else(PoisonError::into_inner) = Box::new(watch);
     }
 
     /// Compiles an integrator statement (cached): rejects if statement or tail contains PRAGMA or writes an internal table.

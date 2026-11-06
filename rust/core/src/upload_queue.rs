@@ -113,6 +113,7 @@ impl UploadQueue {
                FROM (SELECT seq, octet_length(changes) AS bytes FROM _syncline_pending ORDER BY seq LIMIT ?)
              ) w JOIN _syncline_pending p ON p.seq = w.seq WHERE w.before < ? ORDER BY p.seq",
         )?;
+        // Never fails: binding numbers allocates nothing, so it fails only when the parameter count is wrong.
         let rows = statement.query_map(
             params![limit.map_or(-1, |_| PUSH_MUTATIONS), limit.unwrap_or(f64::INFINITY)],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)),

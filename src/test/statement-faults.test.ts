@@ -7,50 +7,15 @@ import { setup as catalog } from '../device/test-shared-mirror.ts';
 import { program, pullRest } from './test-catalog.ts';
 import { snapshot, synced } from './test-counter.ts';
 import { Device } from './test-device.ts';
-import { captureReported } from './test-errors.ts';
 import { pulled, putWorkout, unchunked, upload } from './test-schema.ts';
-import { cloudStorage, deviceStorage, eachStatement, faultable, isInjected } from './test-storage.ts';
+import { everyStatementFailing, type Scenario } from './test-statement-faults.ts';
+import { cloudStorage, deviceStorage } from './test-storage.ts';
 
 // Storage faults at every statement: each scenario runs once per read/write statement its steps execute (EXPLAIN aside, which the
-// injector never sees), failing that statement once
-// (disk full, I/O error). Every fault surfaces, thrown or reported; a step that throws is retried, and every run ends where the run
-// without faults ends: a fault leaves no partial effects, loses nothing, and stalls nothing.
-
-type Scenario = { storage: ReturnType<typeof deviceStorage>; steps: (() => Promise<unknown>)[]; state: () => unknown };
-
-/**
- * Fails each statement of a fresh scenario in turn, checking every run against the run without faults; returns how many statements
- * failed and the state the run without faults ends in.
- */
-async function everyStatementFailing(setup: () => Promise<Scenario>) {
-  const reported = captureReported();
-  const clean = await setup();
-  for (const step of clean.steps) await step();
-  const expected = clean.state();
-  const reports = new Set(reported);
-  const failed = await eachStatement(async (after) => {
-    const { storage, steps, state } = await setup();
-    reported.length = 0;
-    const faults = faultable(storage);
-    faults.arm(after);
-    let thrown = false;
-    for (const step of steps)
-      await step().catch((error: unknown) => {
-        expect(isInjected(error), String(error)).toBe(true);
-        thrown = true;
-        return step();
-      });
-    const unfired = faults.disarm();
-    const injected = reported.filter((message) => message.startsWith('Error code 9: '));
-    expect(unfired || thrown || injected.length > 0, `statement ${after} failed silently`).toBe(true);
-    expect(injected.length, `statement ${after} reported more than once`).toBeLessThanOrEqual(1);
-    expect(storage.inTransaction()).toBe(false);
-    expect(state(), `statement ${after}`).toEqual(expected);
-    expect(reported.filter((message) => !reports.has(message) && !injected.includes(message))).toEqual([]);
-    return unfired;
-  });
-  return { failed, landed: expected };
-}
+// injector never sees), failing that statement once (disk full, I/O error), and once or more per statement its steps compile, failing the
+// compile (out of memory), which leaves the transaction open where a failing statement may have rolled it back. Every fault surfaces, thrown or
+// reported; a step that throws is retried, and every run ends where the run without faults ends: a fault leaves no partial effects, loses
+// nothing, and stalls nothing.
 
 const workout = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
 const later = sqliteTable('later', { id: text().primaryKey(), n: integer() });
@@ -178,6 +143,78 @@ test('opening a new release over a lagging device with a pending write: columns 
       { id: 'w2', note: 'bench', reps: 'heavy' },
     ],
   ]);
+});
+
+test('a local write updating a synced row and inserting another', async () => {
+  const { failed, landed } = await everyStatementFailing(async () => {
+    const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT');
+    const device = new Device(storage, [workout]);
+    await device.private.receive({
+      base: null,
+      cookie: { version: 1, nonce: 1 },
+      lmids: {},
+      patch: [{ op: 'clear' }, putWorkout('a', 'one')],
+    });
+    const steps = [
+      () =>
+        device.write(async (execute) => {
+          execute("UPDATE workout SET reps = 5 WHERE id = 'a'", []);
+          execute("INSERT INTO workout (id, note) VALUES ('b', 'two')", []);
+        }),
+    ];
+    const state = () => ({ workouts: rows(storage, 'workout'), pending: device.private.pending().map(({ changes }) => changes) });
+    return { storage, steps, state };
+  });
+  expect(failed).toBeGreaterThan(0);
+  expect(landed).toEqual({
+    workouts: [
+      { id: 'a', note: 'one', reps: 5, _extra: null },
+      { id: 'b', note: 'two', reps: null, _extra: null },
+    ],
+    pending: [
+      [
+        { op: 'put', table: 'workout', row: { id: 'b', note: 'two', reps: null } },
+        { op: 'patch', table: 'workout', row: { id: 'a', reps: 5 } },
+      ],
+    ],
+  });
+});
+
+/** A device holding rows pulled for one user, a table no release declares any more, and a local-only row, opened for another user. */
+async function switching(): Promise<Scenario> {
+  const cloud = cloudStorage(
+    'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)',
+    'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
+  );
+  cloud.sql.exec("INSERT INTO workout VALUES ('w1', 'squat', 5)");
+  cloud.sql.exec("INSERT INTO plan VALUES ('p1', 'base')");
+  const storage = deviceStorage(
+    'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT',
+    'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
+    'CREATE TABLE tag (id TEXT PRIMARY KEY)',
+  );
+  const first = new Device(storage, [workout, plan], { owner: 'u1', localOnly: [tag] });
+  await first.private.receive(pulled(new Space(cloud, [workout, plan]), first));
+  storage.sql.exec("INSERT INTO tag VALUES ('t1')");
+  first.close();
+  let device: Device | undefined;
+  const steps = [
+    async () => {
+      device = new Device(storage, [workout], { owner: 'u2', localOnly: [tag] });
+    },
+    async () => {
+      const opened = device as Device;
+      await opened.private.receive(pulled(new Space(cloud, [workout]), opened));
+    },
+  ];
+  const state = () => ['workout', 'plan', 'tag', '_syncline_owner'].map((table) => rows(storage, table));
+  return { storage, steps, state };
+}
+
+test('opening for another user: rows pulled for the previous one, a table no release declares any more, and local-only rows wiped', async () => {
+  const { failed, landed } = await everyStatementFailing(switching);
+  expect(failed).toBeGreaterThan(0);
+  expect(landed).toEqual([[{ id: 'w1', note: 'squat', reps: 5, _extra: null }], [], [], [{ space: '', owner: 'u2' }]]);
 });
 
 /** Verifies, pulling the ranges a mismatch asks for, until a verification passes. */
