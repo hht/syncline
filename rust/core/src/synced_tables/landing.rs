@@ -56,7 +56,7 @@ impl SyncedTables {
                         }
                         continue;
                     }
-                    Err(error) if error.is_constraint() => {}
+                    Err(error) if error.is_constraint(db) => {}
                     Err(error) => return Err(error),
                 }
             }

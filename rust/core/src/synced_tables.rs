@@ -134,7 +134,10 @@ impl SyncedTables {
         match db.prepare_cached(&synced.put)?.execute(params_from_iter(values)) {
             Ok(_) => Ok(()),
             // Reported as JS reports SQLite errors: "Error code N: ..."
-            Err(rusqlite::Error::SqliteFailure(code, message)) if code.code == rusqlite::ErrorCode::ConstraintViolation => {
+            // A violation that ended the transaction fails the landing (`Error::is_constraint`).
+            Err(rusqlite::Error::SqliteFailure(code, message))
+                if code.code == rusqlite::ErrorCode::ConstraintViolation && !db.is_autocommit() =>
+            {
                 effects.report(format!(
                     "syncline: a row in {table} does not fit the local column, retained in unknown rows: Error code {}: {}",
                     code.extended_code,

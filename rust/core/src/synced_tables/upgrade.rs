@@ -87,7 +87,7 @@ fn upgrade_table(db: &Connection, table: &SyncedTable, before: Option<&Vec<Strin
         if let Err(error) = db.execute(&mv, params![path, path, path]) {
             // Some values do not fit this column (incompatible column types across sides): move row-by-row, leaving incompatible values in `_extra` and reporting without failing open (which would fail repeatedly).
             let error = Error::from(error);
-            if !error.is_constraint() {
+            if !error.is_constraint(db) {
                 return Err(error);
             }
             move_each(db, &table.name, column, &mv, &path, effects)?;
@@ -120,7 +120,7 @@ fn move_each(db: &Connection, name: &str, column: &str, mv: &str, path: &str, ef
         for id in ids {
             if let Err(error) = db.execute(&format!("{mv} AND rowid = ?"), params![path, path, path, id]) {
                 let error = Error::from(error);
-                if !error.is_constraint() {
+                if !error.is_constraint(db) {
                     return Err(error);
                 }
                 kept += 1;

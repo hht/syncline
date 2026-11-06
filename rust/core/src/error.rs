@@ -88,11 +88,15 @@ impl From<rusqlite::Error> for Error {
 }
 
 impl Error {
-    /// Constraint violation (`SQLITE_CONSTRAINT`, primary result code 19): device synced tables declare column types; reported when a value cannot fit.
+    /// Constraint violation (`SQLITE_CONSTRAINT`, primary result code 19) that left the transaction on `db` open: device synced tables declare
+    /// column types; reported when a value cannot fit. A violation resolved by ROLLBACK (`RAISE(ROLLBACK)` in an app trigger,
+    /// `ON CONFLICT ROLLBACK`) ends the transaction, so the statements after it would each commit alone: it fails the whole operation.
     /// @see <https://sqlite.org/rescode.html#constraint>
+    /// @see <https://sqlite.org/lang_createtrigger.html#the_raise_function>
     #[must_use]
-    pub fn is_constraint(&self) -> bool {
-        matches!(self, Error::Sql(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::ConstraintViolation)
+    pub fn is_constraint(&self, db: &rusqlite::Connection) -> bool {
+        !db.is_autocommit()
+            && matches!(self, Error::Sql(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::ConstraintViolation)
     }
 
     /// Transient storage errors that may succeed on retry (BUSY, LOCKED, NOMEM, INTERRUPT, IOERR, FULL).

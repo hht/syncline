@@ -1,0 +1,99 @@
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { expect, test } from 'vitest';
+import { Space } from '../cloud/space.ts';
+import type { Transaction } from '../cloud/transaction.ts';
+import { Device } from '../test/test-device.ts';
+import { captureReported } from '../test/test-errors.ts';
+import { createWorkout, pulled, tables, workout, workouts } from '../test/test-schema.ts';
+import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+
+// App triggers on synced tables that raise errors: RAISE(ROLLBACK) rolls back everything the device wrote so far, so the device fails what
+// it was doing as a whole instead of carrying on statement by statement, each then committing alone; RAISE(ABORT) sets an arriving row
+// aside, but fails a pull deleting the row.
+
+const blocking = (event: 'INSERT' | 'UPDATE') =>
+  `CREATE TRIGGER blocking BEFORE ${event} ON workout BEGIN SELECT RAISE(ROLLBACK, 'blocked by the app'); END`;
+
+/** A device synced with an empty space: `pull` pulls once, and `local` gives the device cookie and workouts. */
+async function synced() {
+  const space = new Space(cloudStorage(createWorkout), tables);
+  const storage = deviceStorage(createWorkout);
+  const device = new Device(storage, tables);
+  const pull = () => device.private.receive(pulled(space, device));
+  await pull();
+  return { space, storage, pull, local: () => [device.private.cookie(), workouts(storage)] };
+}
+
+test.for([
+  {
+    trigger: blocking('INSERT'),
+    change: (tx: Transaction) => tx.insert(workout, { id: 'w2', note: 'bench' }),
+    error: 'blocked by the app',
+    landed: [
+      { id: 'w1', note: 'squat' },
+      { id: 'w2', note: 'bench' },
+    ],
+  },
+  {
+    trigger: "CREATE TRIGGER blocking BEFORE DELETE ON workout BEGIN SELECT RAISE(ABORT, 'kept by the app'); END",
+    change: (tx: Transaction) => tx.delete(workout, { id: 'w1' }),
+    error: 'kept by the app',
+    landed: [],
+  },
+])(
+  'a pull an app trigger fails ($error) lands nothing: the cookie and rows stay, and it lands once the trigger is gone',
+  async ({ trigger, change, error, landed }) => {
+    captureReported();
+    const { space, storage, pull, local } = await synced();
+    space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
+    await pull();
+    const before = local();
+    storage.sql.exec(trigger);
+    space.mutate(change);
+    await expect(pull()).rejects.toThrow(error);
+    expect([local(), storage.inTransaction()]).toEqual([before, false]);
+    storage.sql.exec('DROP TRIGGER blocking');
+    await pull();
+    expect(local()).toEqual([space.head(), landed]);
+  },
+);
+
+test('an app update whose restored columns an app trigger rolls back fails to open without restoring any, and restores them all once the trigger is gone', async () => {
+  captureReported();
+  const withReps = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
+  const cloud = cloudStorage('CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)');
+  cloud.sql.exec("INSERT INTO workout VALUES ('w1', 'squat', 5), ('w2', 'bench', 3)");
+  const space = new Space(cloud, [withReps]);
+  const storage = deviceStorage(createWorkout);
+  const device = new Device(storage, tables);
+  await device.private.receive(pulled(space, device));
+  device.close();
+  storage.sql.exec('ALTER TABLE workout ADD COLUMN reps INTEGER');
+  storage.sql.exec(blocking('UPDATE'));
+  const extras = () => storage.sql.exec('SELECT id, reps, _extra FROM workout ORDER BY id').toArray();
+  const before = extras();
+  expect(() => new Device(storage, [withReps])).toThrow('blocked by the app');
+  expect([extras(), storage.inTransaction()]).toEqual([before, false]);
+  storage.sql.exec('DROP TRIGGER blocking');
+  new Device(storage, [withReps]);
+  expect(extras()).toEqual([
+    { id: 'w1', reps: 5, _extra: null },
+    { id: 'w2', reps: 3, _extra: null },
+  ]);
+});
+
+test('a pull row an app trigger aborts (RAISE(ABORT)) is kept aside with a warning while the rest of the pull lands', async () => {
+  const reported = captureReported();
+  const { space, storage, pull, local } = await synced();
+  storage.sql.exec(
+    "CREATE TRIGGER aborting BEFORE INSERT ON workout WHEN NEW.note = 'late' BEGIN SELECT RAISE(ABORT, 'aborted by the app'); END",
+  );
+  space.mutate((tx) => {
+    tx.insert(workout, { id: 'w1', note: 'late' });
+    tx.insert(workout, { id: 'w2', note: 'bench' });
+  });
+  await pull();
+  expect(local()).toEqual([space.head(), [{ id: 'w2', note: 'bench' }]]);
+  expect(storage.sql.exec('SELECT key FROM _syncline_unknown').toArray()).toEqual([{ key: '{"id":"w1"}' }]);
+  expect(reported).toEqual([expect.stringContaining('aborted by the app')]);
+});

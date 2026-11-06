@@ -85,7 +85,7 @@ fn write_shadow(db: &Connection, table: &SyncedTable, ops: Vec<Op>) -> Result<Ve
         Ok(_) => Ok(Vec::new()),
         Err(error) => {
             let error = Error::from(error);
-            if error.is_constraint() {
+            if error.is_constraint(db) {
                 insert_each(db, table, &shadow, &insert, puts)
             } else {
                 Err(error)
@@ -122,7 +122,7 @@ fn insert_each(db: &Connection, table: &SyncedTable, shadow: &str, insert: &str,
         let Op::Put { key, row, .. } = &op else { continue };
         if let Err(error) = db.execute(insert, [rows_json(&[row])]) {
             let error = Error::from(error);
-            if !error.is_constraint() {
+            if !error.is_constraint(db) {
                 return Err(error);
             }
             db.execute(
