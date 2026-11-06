@@ -141,7 +141,7 @@ impl SyncedTables {
                 effects.report(format!(
                     "syncline: a row in {table} does not fit the local column, retained in unknown rows: Error code {}: {}",
                     code.extended_code,
-                    message.unwrap_or_else(|| code.to_string())
+                    message.unwrap_or_else(|| rusqlite::ffi::code_to_str(code.extended_code).to_owned())
                 ));
                 delete_row(db, synced, table, key)?;
                 self.unknown.put(db, table, key, row)?;

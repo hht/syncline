@@ -91,7 +91,7 @@ impl From<Error> for Failure {
             Error::Sql(rusqlite::Error::SqliteFailure(code, detail)) => {
                 // Preserves extended result code so caller can distinguish transient errors from constraint errors
                 // @see <https://sqlite.org/rescode.html>
-                let detail = detail.unwrap_or_else(|| code.to_string());
+                let detail = detail.unwrap_or_else(|| rusqlite::ffi::code_to_str(code.extended_code).to_owned());
                 return Failure::new(format!("Error code {}: {detail}", code.extended_code));
             }
             Error::Sql(_) | Error::Failed(_) => None,
@@ -127,5 +127,12 @@ mod tests {
             count: 2,
         });
         assert_eq!(pending["pending"], serde_json::json!({ "owner": "a", "count": 2 }));
+    }
+
+    #[test]
+    fn a_sqlite_error_without_a_message_names_its_code_once() {
+        // Errors SQLite returns without a connection message (such as a changeset apply the conflict handler aborts)
+        let aborted = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ABORT), None);
+        assert_eq!(Failure::from(aborted).message, "Error code 4: query aborted");
     }
 }

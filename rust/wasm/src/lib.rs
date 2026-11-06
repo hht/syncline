@@ -240,7 +240,7 @@ fn sql(error: rusqlite::Error) -> JsError {
         rusqlite::Error::SqliteFailure(code, message) => JsError::new(&format!(
             "Error code {}: {}",
             code.extended_code,
-            message.unwrap_or_else(|| code.to_string())
+            message.unwrap_or_else(|| rusqlite::ffi::code_to_str(code.extended_code).to_owned())
         )),
         other => JsError::new(&other.to_string()),
     }
