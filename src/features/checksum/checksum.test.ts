@@ -99,6 +99,52 @@ test('device only verifies against current version checksum: skips requesting fo
   }
 });
 
+/** Synced device whose verification failed on a corrupted row, reported once: its next new pull asks to redownload ranges. */
+async function mismatched() {
+  const setup = await synced();
+  const { space, storage, device } = setup;
+  const reported = captureReported();
+  await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000));
+  storage.sql.exec("UPDATE counter SET n = 99 WHERE id = 'a'");
+  expect(await device.private.verify()).toBe(false);
+  return { ...setup, reported };
+}
+
+test('a range redownload whose ranges fail to clear lands nothing: cookie and ranges stay, and the next pull repairs the rows', async () => {
+  const { space, cloud, storage, device, reported } = await mismatched();
+  const before = [device.private.cookie(), snapshot(storage)];
+  const request = device.private.pullRequest();
+  failOnce(storage, 'UPDATE _syncline_verified SET ranges = NULL');
+  await expect(device.private.receive(space.pull(request, 1_000_000))).rejects.toThrow(injectedError);
+  expect([device.private.cookie(), snapshot(storage), device.private.pullRequest().ranges]).toEqual([...before, request.ranges]);
+  await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000));
+  expect(snapshot(storage)).toEqual(snapshot(cloud));
+  expect(device.private.pullRequest()).not.toHaveProperty('ranges');
+  expect(reported).toHaveLength(1);
+});
+
+test('a chunked range redownload whose landing rolls back after clearing its ranges clears them when its final chunk lands on retry', async () => {
+  const { space, cloud, storage, device, reported } = await mismatched();
+  await writes.inc(device, 'b', 't9');
+  let chunk = space.pull(device.private.pullRequest(), 1);
+  for (; !('cookie' in chunk); chunk = space.pull(device.private.pullRequest(), 1)) await device.private.receive(chunk);
+  failOnce(storage, 'UPDATE _syncline_pending SET changeset');
+  await expect(device.private.receive(chunk)).rejects.toThrow(injectedError);
+  expect(device.private.pullRequest()).toHaveProperty('cursor');
+  await device.private.receive(space.pull(device.private.pullRequest(), 1));
+  const counter = snapshot(cloud).counter.map((row) => (row.id === 'b' ? { ...row, n: row.n + 1 } : row));
+  expect([snapshot(storage).counter, device.private.pullRequest().ranges, reported.length]).toEqual([counter, undefined, 1]);
+});
+
+test('a poke heard while a pull redownloading ranges is in flight lands without clearing them', async () => {
+  const { space, device, reported } = await mismatched();
+  const { ranges } = device.private.pullRequest();
+  const poke = space.mutate((tx) => serverInc(tx, 'b', 't9'));
+  expect(await device.private.notified(poke, true)).toBe(true);
+  expect([device.private.cookie(), device.private.pullRequest().ranges]).toEqual([poke.cookie, ranges]);
+  expect(reported).toHaveLength(1);
+});
+
 test('requested checksum not yet verified: pulls within one minute omit checksum, re-requesting after one minute; full pull after resync requests checksum as usual', async () => {
   const { device } = await synced();
   vi.useFakeTimers({ toFake: ['Date'] });

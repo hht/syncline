@@ -113,14 +113,11 @@ impl Device {
     pub fn receive(&mut self, pulled: &Pulled, now: f64) -> Result<bool, Error> {
         let received = match pulled {
             Pulled::Reset(_) => false,
-            Pulled::Poke(poke) => self.receive_poke(poke, now)?,
+            Pulled::Poke(poke) => self.receive_poke(poke, true, now)?,
             Pulled::Chunk(chunk) => self.receive_chunk(chunk)?,
         };
         if let (true, Pulled::Poke(poke)) = (received, pulled) {
             self.reached(poke.cookie);
-            if let Some(verifier) = &mut self.verifier {
-                verifier.pulled(self.db.connection())?;
-            }
         }
         Ok(received)
     }
@@ -144,7 +141,7 @@ impl Device {
         // Notifications arriving during staged pulls do not advance cookie: record as target version to pull over HTTP
         let staging = self.staging()?;
         if !staging && poke.base == cookie {
-            let received = self.receive_poke(&poke, now)?;
+            let received = self.receive_poke(&poke, false, now)?;
             if received {
                 self.reached(poke.cookie);
             }
@@ -199,7 +196,8 @@ impl Device {
         Ok(true)
     }
 
-    fn receive_poke(&mut self, poke: &Poke, now: f64) -> Result<bool, Error> {
+    /// `pulled` marks the answer to a pull, which redownloaded the ranges its request asked for.
+    fn receive_poke(&mut self, poke: &Poke, pulled: bool, now: f64) -> Result<bool, Error> {
         self.admit(poke.space.as_deref())?;
         let db = self.db.connection();
         if poke.base != self.cookie()? {
@@ -212,7 +210,7 @@ impl Device {
         let staged = last.is_some();
         // Empty patch without pending write confirmations (empty catch-up or renewal reconnect): advance cookie without rebasing
         if poke.patch.is_empty() && poke.cursor.is_none() && !UploadQueue::confirms(db, &poke.lmids)? {
-            self.commit(|device| device.advance(poke, now))?;
+            self.commit(|device| device.advance(poke, pulled, now))?;
             return Ok(true);
         }
         // Full pulls (starting with Clear) skip revert: all rows are overwritten by cloud, replaying pending writes directly
@@ -223,7 +221,7 @@ impl Device {
                 freed = device
                     .synced
                     .write_patch(device.db.connection(), &poke.patch, &device.stage, staged, &mut device.effects)?;
-                device.advance(poke, now)
+                device.advance(poke, pulled, now)
             },
             &poke.lmids,
             !full,
@@ -246,8 +244,8 @@ impl Device {
         Ok(true)
     }
 
-    /// Advances cookie to the version in `poke` and updates checksum verifier.
-    fn advance(&mut self, poke: &Poke, now: f64) -> Result<(), Error> {
+    /// Advances cookie to the version in `poke` and updates checksum verifier, clearing the ranges a landing pull redownloaded.
+    fn advance(&mut self, poke: &Poke, pulled: bool, now: f64) -> Result<(), Error> {
         let db = self.db.connection();
         db.execute("DELETE FROM _syncline_cookie WHERE space = ''", [])?;
         db.execute(
@@ -256,6 +254,9 @@ impl Device {
         )?;
         if let Some(verifier) = &mut self.verifier {
             verifier.advanced(db, poke.cookie, poke.checksum.clone(), now)?;
+            if pulled {
+                verifier.pulled(db)?;
+            }
         }
         Ok(())
     }

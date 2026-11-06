@@ -72,7 +72,7 @@ pub struct Verifier {
     asked_at: f64,
     /// Range start and max rows requested in this pull (from first chunk when chunked).
     asking: Option<(String, i64)>,
-    /// Key ranges requested to redownload in this pull (raw JSON); cleared after final chunk lands.
+    /// Key ranges requested to redownload in this pull (raw JSON), set by each new pull; its final chunk landing clears them from the database.
     ranges_asked: Option<String>,
     /// Rows requested today not yet recorded in database: committed in transaction on landing.
     unrecorded: i64,
@@ -155,12 +155,13 @@ impl Verifier {
         Ok(self.expected_at(cookie).is_none() && idle && now - self.asked_at >= ASK_AGAIN_AFTER && self.due(&state, now))
     }
 
-    /// Final chunk of pull landed: requested ranges have been redownloaded; ranges recorded afterwards are retained.
+    /// Final chunk of pull landed (within landing transaction): requested ranges have been redownloaded; ranges recorded afterwards are
+    /// retained. Keeps the ranges asked: a rolled-back landing retried as a continued pull asks nothing anew.
     ///
     /// # Errors
     /// Returns an error if writing to the database fails.
-    pub fn pulled(&mut self, db: &Connection) -> rusqlite::Result<()> {
-        if let Some(ranges) = self.ranges_asked.take() {
+    pub fn pulled(&self, db: &Connection) -> rusqlite::Result<()> {
+        if let Some(ranges) = &self.ranges_asked {
             db.execute(
                 "UPDATE _syncline_verified SET ranges = NULL WHERE space = '' AND ranges = ?",
                 [ranges],
