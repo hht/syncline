@@ -112,6 +112,7 @@ async function closeLibrary(instance: number, name: string, remove: boolean) {
 }
 
 async function handle(instance: number, call: HostMessage['call']) {
+  // Replies go only to calls with ids (the page sends open and close as calls awaiting replies), so the 0 never goes out
   const reply = (error?: unknown) =>
     post({ instance, received: [{ type: 'reply', id: call.id ?? 0, ...(error !== undefined && { error: failureOf(error) }) }] });
   if (call.type === 'open' || call.type === 'close') {

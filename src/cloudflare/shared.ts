@@ -54,6 +54,7 @@ const roundLimit = 10 * socketLimit;
 /** Computes Cache-Control header based on pull request and chunk properties. */
 function cacheControl(request: PullRequest, chunk: Poke | Chunk | Reset) {
   // Requests with floor versions cannot be served before the cloud reaches that version (model/Shared.tla): bypass cache if not reached.
+  // Shared chunks always carry seen (the type shares the optional field with private spaces), so the 0 never applies.
   if (request.atLeast !== undefined && !('reset' in chunk) && (chunk.seen ?? 0) < request.atLeast) return 'no-store';
   // Requests with incarnations bypass cache if the space incarnation has changed.
   if (request.incarnation !== undefined && chunk.incarnation !== request.incarnation) return 'no-store';
@@ -121,7 +122,8 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     );
     // Dispatches immediately if unacknowledged shards or pending rescans exist, else keeps the scheduled time. Replaces the entry outright on
     // every start, clearing the lease and reset count a reset left: rounds are bounded by shard timeouts, so delivery is never the task
-    // whose reset restarted the object, and runs other resets cut must not pause it.
+    // whose reset restarted the object, and runs other resets cut must not pause it. Once acknowledged the entry exists (confirming writes it
+    // in the same turn as the acknowledgment, and every delivery run reschedules it), so the fallback time never applies.
     const when = this.#fanout.allAcked() ? (this.timetable.when(deliverName) ?? Date.now() + refreshInterval) : Date.now();
     this.timetable.at(deliverName, when);
     // Re-arms the alarm on startup to recover scheduled times if the actor restarted before setting the alarm.

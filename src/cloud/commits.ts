@@ -33,19 +33,15 @@ export type Entry = [string, Key] | [string, Key, string[]] | [string, null] | [
 /** Touched items for a single commit. */
 export type Keys = Entry[];
 
-/** Returns the primary key of a touched row item, or undefined for dropped table/column entries. */
-const rowKeyOf = ([, key]: Entry) => key ?? undefined;
-
-/** Extracts touched rows [table, key] from commit entries, skipping dropped table/column entries. */
-export const changedRows = (keys: Keys) =>
-  keys.flatMap((entry): [string, Key][] => {
-    const key = rowKeyOf(entry);
-    return key ? [[entry[0], key]] : [];
-  });
+/**
+ * Extracts touched rows [table, key] from commit entries, skipping dropped table/column entries.
+ * Callers pass a write's entries, which are all rows (evolution records drops on its own), so nothing is skipped in practice.
+ */
+export const changedRows = (keys: Keys) => keys.flatMap(([table, key]): [string, Key][] => (key ? [[table, key]] : []));
 /** Cumulative rows written today (UTC calendar day) by device pushes, recorded on device commits. */
 export type Used = { day: number; rows: number };
 
-/** Generates a 53-bit integer random nonce representable accurately in JS numbers. */
+/** Generates a 53-bit integer random nonce representable accurately in JS numbers (the array holds one value, so 0n never applies). */
 const nonce = () => Number((crypto.getRandomValues(new BigUint64Array(1))[0] ?? 0n) >> 11n);
 
 const keysOf = (keys: unknown) => JSON.parse(String(keys)) as Keys;

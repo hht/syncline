@@ -210,6 +210,7 @@ export class Client {
       case 'warn':
         return console.warn(message.message);
       case 'token':
+        // The core asks tokens only for connected channels, which #spaces recorded first: the missing-channel answer never goes out from here
         return answerToken(this.#spaces.get(message.channel)?.token, message.channel, message.request, this.#send);
       case 'validate':
         return this.#send({ type: 'validated', write: message.write, ...validated(this.#validator, message.rows) });
@@ -248,11 +249,13 @@ export class Client {
   /** Records open failure for a channel as downloadError in its status snapshot. */
   failed(channel: string, error: Error) {
     const space = this.#spaces.get(channel);
+    // Always found: callers pass channels taken from #spaces, which only grows
     if (space) this.#report(channel, { ...space.status, connecting: false, downloadError: error });
   }
 
   #report(channel: string, status: SyncStatus) {
     const space = this.#spaces.get(channel);
+    // Always found: the core reports status only for channels connected after #spaces recorded them, and #spaces only grows
     if (!space) return;
     space.status = status;
     notifyAll(space.listeners, status);

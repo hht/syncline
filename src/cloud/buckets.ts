@@ -238,6 +238,7 @@ export class Buckets {
    * @see https://sqlite.org/partialindex.html
    */
   indexes(table: string) {
+    // Always found: the space asks only for the tables these rules were built from
     const key = this.#keys.get(table) ?? [];
     return this.#on(table).flatMap(([name, member]) => {
       if (member.where === undefined && member.by.length === 0) return [];
