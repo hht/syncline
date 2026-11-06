@@ -111,7 +111,7 @@ impl Verifier {
     pub fn request(&mut self, db: &Connection, idle: bool, continued: bool, now: f64) -> Result<Asked, Error> {
         if continued {
             return Ok(match &self.asking {
-                Some((checksum, rows)) if now - self.asked_at < ASK_AGAIN_AFTER && idle => Asked {
+                Some((checksum, rows)) if !elapsed(self.asked_at, ASK_AGAIN_AFTER, now) && idle => Asked {
                     checksum: Some(checksum.clone()),
                     checksum_rows: Some(*rows),
                     ranges: None,
@@ -132,7 +132,7 @@ impl Verifier {
             ranges,
             ..Asked::default()
         };
-        if now - self.asked_at >= ASK_AGAIN_AFTER && self.due(&state, now) && idle {
+        if elapsed(self.asked_at, ASK_AGAIN_AFTER, now) && self.due(&state, now) && idle {
             let rows = state.rows.min(self.budget(&state, now).2);
             self.asking = Some((state.next.clone().unwrap_or_default(), rows));
             self.asked_at = now;
@@ -152,7 +152,7 @@ impl Verifier {
         if state.ranges.is_some() {
             return Ok(true);
         }
-        Ok(self.expected_at(cookie).is_none() && idle && now - self.asked_at >= ASK_AGAIN_AFTER && self.due(&state, now))
+        Ok(self.expected_at(cookie).is_none() && idle && elapsed(self.asked_at, ASK_AGAIN_AFTER, now) && self.due(&state, now))
     }
 
     /// Final chunk of pull landed (within landing transaction): requested ranges have been redownloaded; ranges recorded afterwards are
@@ -211,17 +211,24 @@ impl Verifier {
             .map(|(_, checksum)| checksum)
     }
 
-    /// Verification due: never verified, after reset, or 24 hours after previous round completed; daily row budget not exhausted.
+    /// Verification due: never verified, after reset, or 24 hours after previous round completed (or once the clock is set back
+    /// before it); daily row budget not exhausted.
     fn due(&self, state: &State, now: f64) -> bool {
-        now - state.at >= INTERVAL && self.budget(state, now).2 > 0
+        elapsed(state.at, INTERVAL, now) && self.budget(state, now).2 > 0
     }
 
     /// Daily budget tracking: start timestamp, rows requested today (including unrecorded), and remaining budget; resets when day elapsed.
     fn budget(&self, state: &State, now: f64) -> (f64, i64, i64) {
-        let fresh = now - state.day >= INTERVAL;
+        let fresh = elapsed(state.day, INTERVAL, now);
         let used = if fresh { 0 } else { state.spent } + self.unrecorded;
         (if fresh { now } else { state.day }, used, self.rows_per_day - used)
     }
+}
+
+/// Whether `span` has passed since `since`; a clock set back before `since` counts as passed, so a clock that once ran ahead
+/// does not hold verification off until it catches up again.
+fn elapsed(since: f64, span: f64, now: f64) -> bool {
+    now - since >= span || now < since
 }
 
 fn state(db: &Connection) -> rusqlite::Result<State> {

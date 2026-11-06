@@ -59,6 +59,17 @@ async function cycle(space: Space, device: Device) {
   throw new Error('Verification round did not complete within 10 segments');
 }
 
+/** A device that downloaded a one-tag space and verified it in one segment, completing a round. */
+async function verifiedTag() {
+  const space = new Space(cloudStorage(createTag), [tag]);
+  space.mutate((tx) => tx.insert(tag, { id: 't1' }));
+  const storage = deviceStorage(createTag);
+  const device = new Device(storage, [tag]);
+  await download(space, device);
+  expect(await device.private.verify()).toBe(true);
+  return { space, storage, device };
+}
+
 const verified = (storage: Storage) => storage.sql.exec("SELECT at, next FROM _syncline_verified WHERE space = ''").toArray()[0];
 
 test('large spaces complete verification across two segments: declared tables read matching local segments by primary key, undeclared table rows (stored separately) filter by stored primary keys and match; records timestamp when complete and stops requesting', async () => {
@@ -126,13 +137,7 @@ test('active connection with matching segment and remaining segments: connection
 });
 
 test('local storage retains leftover rows from tables no longer synced by cloud: included in final segment and fails verification', async () => {
-  const cloud = cloudStorage(createTag);
-  const space = new Space(cloud, [tag]);
-  space.mutate((tx) => tx.insert(tag, { id: 't1' }));
-  const storage = deviceStorage(createTag);
-  const device = new Device(storage, [tag]);
-  await download(space, device);
-  expect(await device.private.verify()).toBe(true);
+  const { space, storage, device } = await verifiedTag();
   storage.sql.exec(`INSERT INTO _syncline_unknown (name, row, space, key) VALUES ('gone', '{"id":"g1"}', '', '{"id":"g1"}')`);
   await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000));
   const reported = captureReported();
@@ -223,7 +228,7 @@ test('aborts and halves segment size when database mutates during verification, 
     expect(other.private.pullRequest()).toMatchObject({ checksum: '', checksumRows: 20_000 });
   }, ['Date']));
 
-test('verifies at most checksumRowsPerDay rows per day: requested segment does not exceed remaining daily budget, waiting until next day once exhausted', () =>
+test('verifies at most checksumRowsPerDay rows per day: requested segment does not exceed remaining daily budget, waiting until next day once exhausted, or until the device clock is set back before the budget day started', () =>
   withFakeTimers(async () => {
     const { space, storage, device } = await downloaded({ checksumRowsPerDay: 300 });
     // First segment capped at 300 rows (remaining daily budget); no further checksum requests today.
@@ -233,6 +238,30 @@ test('verifies at most checksumRowsPerDay rows per day: requested segment does n
     expect(device.private.pullRequest()).not.toHaveProperty('checksum');
     vi.setSystemTime(Date.now() + 24 * 3600_000);
     expect(device.private.pullRequest()).toMatchObject({ checksum: next, checksumRows: 300 });
+    // Restarted on a clock set back a year, before the recorded budget day started.
+    vi.setSystemTime(Date.now() - 366 * 24 * 3600_000);
+    const restarted = new Device(storage, [entry, tag], { checksumRowsPerDay: 300 });
+    expect(restarted.private.pullRequest()).toMatchObject({ checksum: next, checksumRows: 300 });
+  }, ['Date']));
+
+test('a device clock set back before the last completed round verifies again at once, in the same session and after a restart', () =>
+  withFakeTimers(async () => {
+    const { storage, device } = await verifiedTag();
+    expect(device.private.pullRequest()).not.toHaveProperty('checksum');
+    // A clock that ran ahead (set by hand, faulty) leaves timestamps in the future once it is set back.
+    vi.setSystemTime(Date.now() - 365 * 24 * 3600_000);
+    expect(device.private.pullRequest()).toMatchObject({ checksum: '', checksumRows: 20_000 });
+    expect(new Device(storage, [tag]).private.pullRequest()).toMatchObject({ checksum: '', checksumRows: 20_000 });
+  }, ['Date']));
+
+test('later chunks of a pull repeat its checksum request within a minute of asking, but not once the device clock is set back before the request', () =>
+  withFakeTimers(async () => {
+    const space = filled(500);
+    const device = new Device(deviceStorage(createEntry, createTag), [entry, tag]);
+    await device.private.receive(space.pull(device.private.pullRequest(), 1));
+    expect(device.private.pullRequest()).toMatchObject({ cursor: expect.anything(), checksum: '' });
+    vi.setSystemTime(Date.now() - 365 * 24 * 3600_000);
+    expect(device.private.pullRequest()).not.toHaveProperty('checksum');
   }, ['Date']));
 
 test('daily row limit is not a positive integer: throws on open to avoid cloud rejecting every pull', () => {
