@@ -214,6 +214,20 @@ test.for([
   },
 );
 
+test.for([
+  ['deleting', 'DELETE FROM score', 'real in table score is not finite: inf'],
+  ['updating', "UPDATE score SET body = 'b'", 'must be a finite number'],
+] as const)(
+  'a local write %s a row whose key, stored outside Syncline, is infinity fails, uploading nothing rather than a null key',
+  async ([, sql, message]) => {
+    const storage = deviceStorage('CREATE TABLE score (value REAL PRIMARY KEY, body TEXT)');
+    const device = new Device(storage, [sqliteTable('score', { value: real().primaryKey(), body: text() })]);
+    storage.sql.exec("INSERT INTO score (value, body) VALUES (9e999, 'a')");
+    await expect(device.write(async (execute) => execute(sql, []))).rejects.toThrow(message);
+    expect([storage.sql.exec('SELECT body FROM score').toArray(), device.private.pending()]).toEqual([[{ body: 'a' }], []]);
+  },
+);
+
 test('a Drizzle get in a local write returns the first matching row, or undefined when none match', async () => {
   const { device } = opened();
   const found = await device.write(async (execute) => {

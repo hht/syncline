@@ -74,12 +74,17 @@ impl Recorder {
                 orders.insert(table.clone(), column_names(db, &table)?);
             }
             let order = &orders[&table];
-            let named = |values: &[Option<Value>], only: Option<&[String]>| -> Result<Row, Error> {
+            // `validated`: validation reads the row the write stored, which a delete has not
+            let named = |values: &[Option<Value>], only: Option<&[String]>, validated: bool| -> Result<Row, Error> {
                 let mut row = Vec::new();
                 for (column, value) in order.iter().zip(values) {
                     let Some(value) = value else { continue };
                     if known.contains(column) && only.is_none_or(|only| only.contains(column)) {
-                        transferable(&table, declared.columns.iter().any(|declared| declared.name == *column), value)?;
+                        transferable(
+                            &table,
+                            validated && declared.columns.iter().any(|declared| declared.name == *column),
+                            value,
+                        )?;
                         row.push((column.clone(), value.clone()));
                     }
                 }
@@ -88,18 +93,18 @@ impl Recorder {
             let all = |values: Vec<Value>| values.into_iter().map(Some).collect::<Vec<_>>();
             match change {
                 RowChange::Insert { after, .. } => changes.push(Change::Put {
-                    row: named(&all(after), None)?,
+                    row: named(&all(after), None, true)?,
                     table,
                 }),
                 RowChange::Delete { before, .. } => changes.push(Change::Del {
-                    key: named(&all(before), Some(&declared.key))?,
+                    key: named(&all(before), Some(&declared.key), false)?,
                     table,
                 }),
                 RowChange::Update { before, after, .. } => {
                     // Kept even when it changes no uploaded column (only `_extra`): committing a write replays its changes over the
                     // rows it recorded, which restores `_extra`, and the cloud drops a patch giving only the key.
-                    let row = named(&after, None)?;
-                    let mut patched = named(&before, Some(&declared.key))?;
+                    let row = named(&after, None, true)?;
+                    let mut patched = named(&before, Some(&declared.key), true)?;
                     patched.0.extend(row.0);
                     changes.push(Change::Patch { row: patched, table });
                 }
@@ -127,13 +132,14 @@ impl Recorder {
 
 /// Uploaded values must be transferable to JS (values a write does not upload, such as the rest of a deleted row, need not be): integers within safe JS integer range, finite reals, not BLOB (rows are uploaded via JSON,
 /// which writes non-finite numbers as null; synced tables do not store BLOB).
-fn transferable(table: &str, declared: bool, value: &Value) -> Result<(), Error> {
+fn transferable(table: &str, validated: bool, value: &Value) -> Result<(), Error> {
     match value {
         Value::Integer(integer) if integer.unsigned_abs() > MAX_SAFE_INTEGER.unsigned_abs() => Err(Error::Failed(format!(
             "integer in table {table} exceeds safe JS integer range: {integer}"
         ))),
-        // Validation rejects them in declared columns, naming the column; a column a later release added stays after a rollback.
-        Value::Real(real) if !declared && !real.is_finite() => Err(Error::Failed(format!("real in table {table} is not finite: {real}"))),
+        // Validation rejects them in the declared columns of rows a write stores, naming the column; it never reads the key of a deleted
+        // row, nor a column a later release added (it stays after a rollback).
+        Value::Real(real) if !validated && !real.is_finite() => Err(Error::Failed(format!("real in table {table} is not finite: {real}"))),
         Value::Blob(_) => Err(Error::Failed(format!("changeset for {table} contains unsupported field type 4"))),
         _ => Ok(()),
     }
