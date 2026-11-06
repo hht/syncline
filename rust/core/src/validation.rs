@@ -12,12 +12,13 @@ use crate::tables::{Column, Storage, Table};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
-/// Validates a modified row (`key` contains at least primary key) after write, returning `Invalid` on mismatch; returns read declared columns (by SQL column name), or None if row is gone (deleted).
+/// Validates a modified row (`key` contains at least primary key) after write, returning `Invalid` on mismatch; returns read declared columns (by SQL column name).
+/// The row exists: callers pass only inserted or updated rows, which a changeset records by their net change.
 /// `synced`: whether this is a synced table (primary keys have an additional size limit).
 ///
 /// # Errors
 /// Returns `Error::Invalid` on declaration mismatch, or `Error::Sql` if reading the database fails.
-pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<Option<Row>, Error> {
+pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<Row, Error> {
     // JSON columns also read json_valid: per RFC 8259, matches what JS JSON.parse accepts, except that json_valid stops reading at a NUL
     // character (where JSON.parse rejects the text), so text containing one is invalid.
     let selected: Vec<String> = table
@@ -38,14 +39,10 @@ pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<
         quote(&table.name),
         where_key(&table.key)
     );
-    let mut statement = db.prepare_cached(&sql)?;
-    let mut rows = statement.query(rusqlite::params_from_iter(
-        table.key.iter().map(|column| key.get(column).cloned().unwrap_or(Value::Null)),
-    ))?;
-    let Some(found) = rows.next()? else {
-        return Ok(None);
-    };
-    let (stored, mut issues) = read_checked(table, found)?;
+    let (stored, mut issues) = db.prepare_cached(&sql)?.query_row(
+        rusqlite::params_from_iter(table.key.iter().map(|column| key.get(column).cloned().unwrap_or(Value::Null))),
+        |found| Ok(read_checked(table, found)),
+    )??;
     let keyed = if synced { key_bytes(&stored.pick(&table.key)) } else { 0 };
     if keyed > KEY_BYTES {
         issues.push(Issue {
@@ -56,7 +53,7 @@ pub fn check(db: &Connection, table: &Table, synced: bool, key: &Row) -> Result<
         });
     }
     if issues.is_empty() {
-        Ok(Some(stored))
+        Ok(stored)
     } else {
         Err(Error::Invalid {
             table: table.name.clone(),
@@ -181,12 +178,11 @@ mod tests {
     }
 
     #[test]
-    fn valid_row_returns_read_columns_and_none_when_missing() {
+    fn valid_row_returns_read_columns() {
         let db = opened("'w1', 5, 1, 2, 'strength', '😀', '{\"a\":[1]}'");
-        let stored = check(&db, &table(), true, &key("w1")).unwrap().unwrap();
+        let stored = check(&db, &table(), true, &key("w1")).unwrap();
         assert_eq!(stored.get("weight"), Some(&Value::Integer(2)));
         assert_eq!(stored.0.len(), 7);
-        assert_eq!(check(&db, &table(), true, &key("w9")).unwrap(), None);
     }
 
     #[test]

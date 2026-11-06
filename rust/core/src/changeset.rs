@@ -65,6 +65,7 @@ pub fn parse(changeset: &[u8]) -> Result<Vec<RowChange>, Error> {
                 before: partial(columns, item, ChangesetItem::old_value)?,
                 after: partial(columns, item, ChangesetItem::new_value)?,
             },
+            // Required by the non-exhaustive `Action`: SQLite reports any other operation as corrupt before `op` returns it
             _ => return Err(Error::Failed(format!("changeset for {table} contains unknown operation"))),
         });
     }
@@ -90,6 +91,7 @@ fn partial(
         .map(|index| match value(item, index) {
             Ok(value) => owned(value).map(Some),
             Err(rusqlite::Error::InvalidColumnIndex(_)) => Ok(None),
+            // Never taken: read only for UPDATE with an index below the column count, where SQLite returns no other error
             Err(error) => Err(error.into()),
         })
         .collect()

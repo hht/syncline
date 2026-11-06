@@ -41,7 +41,20 @@ impl Connection {
         // Parsing occurs upon arrival (in socket receipt order); intake is queued (waits for active local writes)
         match wire::message(data) {
             Ok(message) => {
-                self.advise(ctx, advice(&message));
+                // Cloud advice: spreads reconnects, and reconnects 1 to 4 minutes before the token expires
+                let advice = advice(&message);
+                if let Some(spread) = advice.spread {
+                    self.backoff.spread(spread);
+                }
+                if let Some(renewal) = advice.expires_in.and_then(|expires_in| Backoff::renewal(expires_in, ctx.random)) {
+                    ctx.out.cancel(link.renewal.take());
+                    link.renewal = Some(ctx.out.schedule(
+                        Timer::Renewal {
+                            channel: self.channel.clone(),
+                        },
+                        renewal,
+                    ));
+                }
                 ctx.jobs.push(Job::Heard {
                     channel: self.channel.clone(),
                     attempt,
@@ -232,25 +245,6 @@ impl Connection {
             Ok(_) => {}
             Err(error) => self.broken(ctx, attempt, error),
         }
-    }
-
-    /// Handles cloud advice: records reconnect spread; schedules reconnect 1 to 4 minutes before token expiry
-    fn advise(&mut self, ctx: &mut Context, advice: Advice) {
-        if let Some(spread) = advice.spread {
-            self.backoff.spread(spread);
-        }
-        let Some(renewal) = advice.expires_in.and_then(|expires_in| Backoff::renewal(expires_in, ctx.random)) else {
-            return;
-        };
-        // Advice arrives only on the link in place
-        let Some(link) = &mut self.link else { return };
-        ctx.out.cancel(link.renewal.take());
-        link.renewal = Some(ctx.out.schedule(
-            Timer::Renewal {
-                channel: self.channel.clone(),
-            },
-            renewal,
-        ));
     }
 }
 

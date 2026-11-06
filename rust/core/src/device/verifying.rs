@@ -22,7 +22,8 @@ impl Device {
         let (mark, keys, cookie) = self.moment(live)?;
         let db = self.db.connection();
         match &mut self.verifier {
-            Some(verifier) if !verifier.running() => verifier.begin(
+            // `Client::verify` joins a running round instead of beginning another
+            Some(verifier) => verifier.begin(
                 db,
                 &Moment {
                     live,
@@ -31,7 +32,7 @@ impl Device {
                     keys: &keys,
                 },
             ),
-            _ => Ok(false),
+            None => Ok(false),
         }
     }
 
@@ -43,6 +44,7 @@ impl Device {
     pub fn verify_step(&mut self, live: bool, now: f64) -> Result<Progress, Error> {
         let snapshot = self.moment(live);
         let db = self.db.connection();
+        // Never empty: a round exists only after `verify_begin` found the verifier, which is set only at opening
         let Some(verifier) = &mut self.verifier else {
             return Ok(Progress::Done(None));
         };

@@ -31,6 +31,7 @@ impl Client {
         let db = database.connection();
         let plan = values::run(db, database.prepare_guarded(&format!("EXPLAIN {sql}"))?, &[])?;
         let column = |name: &str| plan.columns.iter().position(|column| column == name);
+        // Never missing: the statement is a read (`refuse_unless_read`), so this is a plain EXPLAIN, whose columns SQLite fixes
         let (Some(opcode), Some(p2), Some(p3)) = (column("opcode"), column("p2"), column("p3")) else {
             return Err(Failure::new("EXPLAIN query plan missing opcode, p2, or p3 columns"));
         };

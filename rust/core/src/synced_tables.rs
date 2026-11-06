@@ -91,13 +91,10 @@ impl SyncedTables {
     /// # Errors
     /// Returns an error if writing to database fails (except values incompatible with local columns: retained in unknown rows and reported).
     pub fn write(&self, db: &Connection, op: &Op, effects: &mut Effects) -> Result<(), Error> {
-        match op {
+        let (table, key) = match op {
             Op::Clear => return self.clear(db, &HashSet::new(), effects),
             Op::Drop { table, columns, range } => return self.drop(db, table, columns.as_deref(), range.as_ref(), effects),
-            Op::Put { .. } | Op::Del { .. } => {}
-        }
-        let (Op::Put { table, key, .. } | Op::Del { table, key }) = op else {
-            unreachable!()
+            Op::Put { table, key, .. } | Op::Del { table, key } => (table, key),
         };
         let Some(synced) = self.tables.get(table) else {
             match op {
@@ -134,19 +131,21 @@ impl SyncedTables {
         } else {
             Value::Text(extra.json())
         });
-        if let Err(error) = db.prepare_cached(&synced.put)?.execute(params_from_iter(values)) {
-            let error = Error::from(error);
-            if !error.is_constraint() {
-                return Err(error);
+        match db.prepare_cached(&synced.put)?.execute(params_from_iter(values)) {
+            Ok(_) => Ok(()),
+            // Reported as JS reports SQLite errors: "Error code N: ..."
+            Err(rusqlite::Error::SqliteFailure(code, message)) if code.code == rusqlite::ErrorCode::ConstraintViolation => {
+                effects.report(format!(
+                    "syncline: a row in {table} does not fit the local column, retained in unknown rows: Error code {}: {}",
+                    code.extended_code,
+                    message.unwrap_or_else(|| code.to_string())
+                ));
+                delete_row(db, synced, table, key)?;
+                self.unknown.put(db, table, key, row)?;
+                Ok(())
             }
-            effects.report(format!(
-                "syncline: a row in {table} does not fit the local column, retained in unknown rows: {}",
-                js_message(&error)
-            ));
-            delete_row(db, synced, table, key)?;
-            self.unknown.put(db, table, key, row)?;
+            Err(error) => Err(error.into()),
         }
-        Ok(())
     }
 
     /// Clears synced tables (except those in `except`) and retained unknown rows for this space.
@@ -225,20 +224,6 @@ fn table_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<(String, 
             ))
         })?
         .collect()
-}
-
-/// Format of reported errors: SQLite errors include result code ("Error code N: ...").
-fn js_message(error: &Error) -> String {
-    match error {
-        Error::Sql(rusqlite::Error::SqliteFailure(code, message)) => {
-            format!(
-                "Error code {}: {}",
-                code.extended_code,
-                message.clone().unwrap_or_else(|| code.to_string())
-            )
-        }
-        other => other.to_string(),
-    }
 }
 
 /// Deletes a row from a synced table.

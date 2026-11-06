@@ -65,6 +65,7 @@ impl Mirror<'_> {
     }
 
     pub fn connecting(self, device: &mut Device) {
+        // A shared space is always found: connections exist only for declared shared spaces, which stay until closing
         if self.private() {
             device.connecting();
         } else if let Ok((space, _, _)) = device.shared(self.0) {

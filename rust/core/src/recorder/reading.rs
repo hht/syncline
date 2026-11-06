@@ -51,8 +51,8 @@ impl Recorder {
     }
 
     /// Keeps read rows for JS Standard Schema validation: only for tables with declared schemas
-    pub(super) fn keep(&self, table: &str, stored: Option<Row>, rows: &mut Vec<Stored>) {
-        if let Some(row) = stored.filter(|_| self.schemas.contains(table)) {
+    pub(super) fn keep(&self, table: &str, row: Row, rows: &mut Vec<Stored>) {
+        if self.schemas.contains(table) {
             rows.push(Stored {
                 table: table.to_owned(),
                 row,

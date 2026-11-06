@@ -231,7 +231,7 @@ pub fn declared(db: &rusqlite::Connection, space: &str) -> rusqlite::Result<Vec<
 /// Tables in `names` that `space` takes over now: it did not record them last time, or the app dropped them since (declaring recreated
 /// them without `_extra`); and that either were synced before (`_syncline_columns` keeps recording them after they leave sync), so their
 /// rows may have missed deletes, belong to a previous owner, or be gone; or hold rows anyway (written while local-only), which would never
-/// upload.
+/// upload. Every name is a table: opening a space defines the tables it declares first.
 ///
 /// # Errors
 /// Database read error.
@@ -249,7 +249,7 @@ pub fn returning(db: &rusqlite::Connection, space: &str, names: &[String]) -> ru
             })
         };
         let filled = || db.query_row(&format!("SELECT EXISTS (SELECT 1 FROM {})", quote(name)), [], |row| row.get(0));
-        if !columns.is_empty() && (synced()? || filled()?) {
+        if synced()? || filled()? {
             back.push(name.clone());
         }
     }

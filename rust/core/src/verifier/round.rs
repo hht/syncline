@@ -23,12 +23,6 @@ pub(super) struct Running {
 }
 
 impl Verifier {
-    /// Whether currently verifying a range.
-    #[must_use]
-    pub fn running(&self) -> bool {
-        self.running.is_some()
-    }
-
     /// Begins verifying a range: records initial state and returns true if verification can proceed (still active, data unchanged, expected checksum available for version); returns false otherwise (aborted).
     ///
     /// # Errors
@@ -60,6 +54,7 @@ impl Verifier {
     /// # Errors
     /// Returns an error if reading or writing database fails (caller reports and aborts).
     pub fn step(&mut self, db: &Connection, moment: &Moment, effects: &mut Effects, now: f64) -> Result<Progress, Error> {
+        // Never empty: `Client` steps only a round `begin` started, and stops stepping once `Device::verify_step` ends it
         let Some(mut running) = self.running.take() else {
             return Ok(Progress::Done(None));
         };
@@ -109,15 +104,13 @@ impl Verifier {
         self.running = None;
     }
 
-    /// Can continue verifying: database unchanged; if changed (connection, database still active), halves range.
+    /// Can continue verifying over a live connection: database unchanged; if changed, halves range.
     fn unchanged(db: &Connection, running: &Running, moment: &Moment) -> Result<bool, Error> {
         if moment.mark.as_deref() == Some(running.start.as_str()) {
             return Ok(true);
         }
-        if moment.live {
-            let rows = state(db)?.rows.min(running.expected.rows);
-            update(db, &[("rows", Value::Integer(BATCH.max(rows / 2)))])?;
-        }
+        let rows = state(db)?.rows.min(running.expected.rows);
+        update(db, &[("rows", Value::Integer(BATCH.max(rows / 2)))])?;
         Ok(false)
     }
 

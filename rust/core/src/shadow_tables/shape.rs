@@ -88,13 +88,9 @@ pub(super) fn open_shadow(db: &Connection, table: &str) -> rusqlite::Result<()> 
 /// Column definition in CREATE TABLE: name, type, not-null constraint, default value
 fn definition(column: &StoredColumn) -> String {
     format!(
-        "{}{}{}{}",
+        "{} {}{}{}",
         quote(&column.name),
-        if column.kind.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", column.kind)
-        },
+        column.kind,
         if column.not_null { " NOT NULL" } else { "" },
         column
             .default

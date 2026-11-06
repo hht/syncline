@@ -248,10 +248,7 @@ impl Connection {
                     pulled,
                     sent,
                 });
-                // Still in place: nothing on this path since the lookup above touches it
-                if let Some(pull) = &mut self.pull {
-                    pull.step = Step::Applying;
-                }
+                pull.step = Step::Applying;
             }
             Err(error) => self.thrown(ctx, Failure::new(error)),
         }
