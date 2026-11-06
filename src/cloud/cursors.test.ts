@@ -3,13 +3,13 @@ import { describe, expect, test } from 'vitest';
 import { keyBytes, subscriptionBytes } from '../common/limits.ts';
 import type { Chunk, Poke, Reset } from '../common/protocol.ts';
 import { pullURL } from '../common/pull-url.ts';
-import { subscribed } from '../test/test-catalog.ts';
+import { catalog, contents, landedRequest, pullAll, subscribed, viewer } from '../test/test-catalog.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 import { bucketBytes } from './buckets.ts';
 import { encodePosition } from './position.ts';
 import { Space } from './space.ts';
 
-// Pull cursors: scanning resumes smoothly across schema changes when tables are altered during active pulls; forged or corrupted cursors do not throw; private and shared spaces share identical cursor structure.
+// Pull cursors: scanning resumes smoothly across schema changes when tables are altered during active pulls; forged or corrupted cursors and landed subscriptions do not throw; private and shared spaces share identical cursor structure.
 
 const table = (name: string) => sqliteTable(name, { id: text().primaryKey(), n: text().notNull() });
 const a = table('a');
@@ -176,4 +176,16 @@ test('maximum shared space pull URL length (8 KB subscription, max bucket/key le
   });
   const url = pullURL('https://sync.example.com/catalog', { cookie, cursor, landed, atLeast: most, incarnation: most });
   expect(url.length).toBeLessThan(16 * 1024);
+});
+
+test('a landed subscription that is not base64url JSON of a bucket list (forged or corrupted) counts as absent: full pull with clear op', () => {
+  const { space, publish } = catalog();
+  publish('p1');
+  const { cookie } = landedRequest(pullAll(space, viewer, { cookie: null }));
+  const base64url = (json: string) => btoa(json).replaceAll('+', '-').replaceAll('/', '_');
+  for (const landed of [base64url('{"buckets":["public"]}'), base64url('[1]'), base64url('not json'), '%%%']) {
+    const after = pullAll(space, viewer, { cookie, landed });
+    expect((after[0] as Chunk).patch[0], landed).toEqual({ op: 'clear' });
+    expect(contents(after), landed).toEqual(['day/p1-d', 'program/p1']);
+  }
 });

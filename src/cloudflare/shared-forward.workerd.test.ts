@@ -1,6 +1,6 @@
 import { env, exports } from 'cloudflare:workers';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { afterAll, expect, test } from 'vitest';
+import { afterAll, expect, test, vi } from 'vitest';
 import { subscriptionHash } from '../cloud/buckets.ts';
 import { landedAt } from '../cloud/position.ts';
 import { bearer, subprotocol } from '../common/protocol.ts';
@@ -91,6 +91,33 @@ test('returns 400 without forwarding to broadcast shards on unrecognized WebSock
     expect(response.status, target).toBe(400);
   }
   expect(shards).toEqual([]);
+});
+
+test("routes each WebSocket to a random one of the definition's broadcast shards, 128 unless the definition sets shards", async () => {
+  const shards: string[] = [];
+  const route = (shardsSet?: number) => ({
+    entry: () => ({ fetch: async () => new Response('{}') }),
+    broadcast: { getByName: (name: string) => ({ fetch: async () => shards.push(name) && new Response(null) }) },
+    space: 'catalog',
+    definition: { schema: { program }, buckets: { public: { program: {} } }, ...(shardsSet && { shards: shardsSet }) },
+  });
+  const random = vi.spyOn(Math, 'random');
+  try {
+    for (const [shardsSet, drawn] of [
+      [undefined, 0],
+      [undefined, 0.9999],
+      [2, 0.9999],
+    ] as const) {
+      random.mockReturnValueOnce(drawn);
+      const request = new Request(pullURL(url, { cookie: null }), {
+        headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}t` },
+      });
+      await forwardShared(request, route(shardsSet) as never, async () => ({ buckets: [['public']], expiresAt: Number.MAX_SAFE_INTEGER }));
+    }
+  } finally {
+    random.mockRestore();
+  }
+  expect(shards).toEqual(['catalog#0', 'catalog#127', 'catalog#1']);
 });
 
 test('a cached entrypoint called without props fails instead of serving a pull to an unknown subscription', async () => {
