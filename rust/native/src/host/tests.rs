@@ -128,6 +128,16 @@ fn file_removable_only_after_close() {
 }
 
 #[test]
+fn opening_a_file_that_is_not_a_database_replies_why_and_releases_the_file_without_close() {
+    let library = Library::start("not-a-database");
+    let path = library.directory.join("test.db");
+    std::fs::write(&path, [b'x'; 4096]).unwrap();
+    library.send(&json!({ "type": "open", "id": 1, "options": opening() }));
+    assert_eq!(library.reply(1)["error"]["message"], "Error code 26: file is not a database");
+    crate::remove(&path).unwrap();
+}
+
+#[test]
 fn close_while_queued_to_open_fails_buffered_calls_as_closed_without_waiting() {
     let first = Library::start("cancel");
     first.open(1);
