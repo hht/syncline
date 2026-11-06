@@ -238,6 +238,8 @@ export class Shell {
   /** Sends data over a WebSocket connection, ignoring write errors on broken sockets since heartbeats detect disconnection. */
   #sendOn(id: number, data: string) {
     try {
+      // The core sends only on sockets it has neither disconnected nor heard closed. Unlike native hosts, which fail loudly, throwing
+      // here would drop the rest of the batch without breaking the worker, leaving callers waiting.
       this.#sockets.get(id)?.send(data);
     } catch {
       // Connection broken: heartbeat timeout will detect disconnection.
