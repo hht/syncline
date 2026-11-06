@@ -217,6 +217,21 @@ test('closing the database while a write is open reports a failure to read what 
   expect(read(storage).workouts).toEqual([]);
 });
 
+test('a local write the app carries on with after SQLite rolled it back fails as rolled back, and reports a failure to read what it recorded', async () => {
+  const storage = deviceStorage(...statements);
+  const device = new Device(storage, tables);
+  const reported = captureReported();
+  // The second insert fails, which rolls the whole transaction back; then reading the first one back from the recording fails
+  failOnce(storage, "INSERT INTO workout (id) VALUES ('w3')", 'SELECT "id"');
+  const writing = device.write(async (execute) => {
+    execute("INSERT INTO workout (id) VALUES ('w2')", []);
+    expect(() => execute("INSERT INTO workout (id) VALUES ('w3')", [])).toThrow(injectedError);
+  });
+  await expect(writing).rejects.toThrow('SQLite rolled back the transaction');
+  expect(reported).toEqual([expect.stringMatching(injectedError)]);
+  expect([storage.inTransaction(), read(storage).workouts, device.private.pending()]).toEqual([false, [], []]);
+});
+
 test('a statement run through a local write while it is validated is refused, so the write commits only the rows validated', async () => {
   const storage = deviceStorage(...statements);
   let execute: Execute | undefined;
