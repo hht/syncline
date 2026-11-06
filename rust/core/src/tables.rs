@@ -262,6 +262,19 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    #[test]
+    fn storage_follows_sqlite_affinity_examples_and_refuses_blob_and_numeric() {
+        // Example type names from SQLite's affinity table.
+        // @see <https://sqlite.org/datatype3.html#affinity_name_examples>
+        let of = |names: &[&str]| names.iter().map(|name| Storage::of(name)).collect::<Vec<_>>();
+        assert_eq!(of(&["INT", "UNSIGNED BIG INT", "INT8"]), [Some(Storage::Integer); 3]);
+        assert_eq!(of(&["CHARACTER(20)", "NATIVE CHARACTER(70)", "CLOB"]), [Some(Storage::Text); 3]);
+        // BLOB takes precedence over REAL, as in SQLite's rule order.
+        assert_eq!(of(&["BLOB", "", "DOUBLE BLOB"]), [None; 3]);
+        assert_eq!(of(&["REAL", "DOUBLE PRECISION", "FLOAT"]), [Some(Storage::Real); 3]);
+        assert_eq!(of(&["NUMERIC", "DECIMAL(10,5)", "BOOLEAN", "DATETIME"]), [None; 4]);
+    }
+
     fn text(name: &str) -> Value {
         column(name, "text", false, &Value::Null)
     }

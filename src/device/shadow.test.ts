@@ -271,3 +271,23 @@ test.for([
   new Device(storage, tables, { owner: 'bob', localOnly, discardPending: true }).close();
   expect(shadows(storage)).toEqual([]);
 });
+
+test('an index the app named with "#" keeps its name as the base of each generation across full syncs, while a unique index is omitted', async () => {
+  const storage = deviceStorage(
+    createWorkout,
+    'CREATE INDEX "by#note" ON workout (note)',
+    'CREATE INDEX "at#" ON workout (id, note)',
+    'CREATE UNIQUE INDEX one_note ON workout (note)',
+  );
+  const device = new Device(storage, tables);
+  let base: { version: number; nonce: number } | null = null;
+  for (const version of [1, 2]) {
+    await device.private.receive(chunk(base, undefined, `n${version}`, [{ op: 'clear' }, putWorkout(`w${version}`, 'one')]));
+    await device.private.receive(last(base, `n${version}`, version));
+    base = { version, nonce: version };
+  }
+  const names = storage.sql
+    .exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'workout' AND sql IS NOT NULL ORDER BY name")
+    .toArray();
+  expect(names).toEqual([{ name: 'at##2' }, { name: 'by#note#2' }]);
+});

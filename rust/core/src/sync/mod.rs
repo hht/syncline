@@ -103,3 +103,14 @@ pub enum Job {
     /// Open a shared space again after its opening failed (table creation or upgrade).
     Reopen { channel: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::bearer;
+
+    #[test]
+    fn bearer_keeps_unreserved_characters_and_percent_encodes_every_other_byte() {
+        // RFC 3986 unreserved: letters, digits, and "-._~"; space, "/", and the two UTF-8 bytes of "é" are encoded.
+        assert_eq!(bearer("Az09-._~ /é"), "bearer.Az09-._~%20%2F%C3%A9");
+    }
+}

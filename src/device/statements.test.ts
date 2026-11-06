@@ -178,6 +178,14 @@ test('local writes fail on the 64-bit minimum integer like any integer beyond th
   expect(device.private.pending()).toEqual([]);
 });
 
+test('a local write storing bytes in a synced table fails, uploading nothing, since rows upload as JSON', async () => {
+  const { device, notes } = opened();
+  const writing = device.write(async (execute) => execute('INSERT INTO note (id, body) VALUES (?, ?)', ['n1', Uint8Array.of(1)]));
+  await expect(writing).rejects.toThrow('changeset for note contains unsupported field type 4');
+  expect(notes()).toEqual([]);
+  expect(device.private.pending()).toEqual([]);
+});
+
 test.for([
   ['does not declare fails', [note], 'real in table note is not finite: inf'],
   [

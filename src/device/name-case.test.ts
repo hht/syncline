@@ -78,3 +78,8 @@ test('a shared space that stopped declaring a table dropped outside Syncline lea
   await device.shared('catalog', [program], 'admin').opened();
   expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
 });
+
+test('a shared space cannot be opened under an empty name', () => {
+  const device = new Device(deviceStorage(createWorkout), tables);
+  expect(() => device.shared('', [course])).toThrow('shared space name must not be empty');
+});

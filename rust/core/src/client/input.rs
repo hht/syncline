@@ -229,6 +229,11 @@ mod tests {
             Unreadable::Deliver(Instruction::Report { .. })
         ));
         assert!(matches!(reading("not json"), Unreadable::Deliver(Instruction::Report { .. })));
+        // Only a validation result names the write to roll back by its write ID.
+        assert!(matches!(
+            reading(r#"{"type":"execute","write":3}"#),
+            Unreadable::Deliver(Instruction::Report { .. })
+        ));
     }
 
     #[test]

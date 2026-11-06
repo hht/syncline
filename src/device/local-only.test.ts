@@ -1,5 +1,6 @@
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/durable-sqlite';
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../cloud/space.ts';
 import { Device } from '../test/test-device.ts';
@@ -66,6 +67,27 @@ test('writing only local-only tables: not uploaded, still reported to onChange',
   expect(changed).toEqual([['rest_timer']]);
 });
 
+test('a local write touching several local-only rows reports the table to onChange once, and deletes a row without validating it', async () => {
+  const strictTimer = sqliteTable('rest_timer', { id: text().primaryKey(), seconds: text().notNull() });
+  // A row an earlier release stored before seconds became required.
+  const storage = deviceStorage(createWorkout, createTimer, "INSERT INTO rest_timer VALUES ('old', NULL)");
+  const device = new Device(storage, tables, { localOnly: [strictTimer] });
+  const changed: string[][] = [];
+  device.onChange((names) => changed.push([...names]));
+  await write(device, async (tx) => {
+    await tx.insert(strictTimer).values([
+      { id: 'a', seconds: '60' },
+      { id: 'b', seconds: '90' },
+    ]);
+    await tx.delete(strictTimer).where(eq(strictTimer.id, 'old'));
+  });
+  expect(timers(storage)).toEqual([
+    { id: 'a', seconds: '60' },
+    { id: 'b', seconds: '90' },
+  ]);
+  expect(changed).toEqual([['rest_timer']]);
+});
+
 test('resync does not clear local-only tables: preserved when reopening with same owner, cleared when switching owners', async () => {
   const { storage, device } = await installed('alice');
   await write(device, (tx) => tx.insert(timer).values({ id: 'default', seconds: '90' }));
@@ -120,4 +142,13 @@ test('a local-only table with rows that a later release syncs: its rows, which w
   fresh.sql.exec('CREATE TABLE empty_note (id TEXT PRIMARY KEY)');
   before.close();
   expect(new Device(fresh, [...tables, empty], { localOnly: [timer] }).private.pullRequest()).not.toHaveProperty('refetch');
+});
+
+test('a local-only integer column refuses an integer past 2^53, which JS cannot read exactly', async () => {
+  const integerTimer = sqliteTable('rest_timer', { id: text().primaryKey(), seconds: integer() });
+  const storage = deviceStorage(createWorkout, 'CREATE TABLE rest_timer (id TEXT PRIMARY KEY, seconds INTEGER)');
+  const device = new Device(storage, tables, { localOnly: [integerTimer] });
+  const writing = device.write(async (execute) => execute("INSERT INTO rest_timer VALUES ('a', 9007199254740993)", []));
+  await expect(writing).rejects.toThrow('must be an integer');
+  expect(timers(storage)).toEqual([]);
 });
