@@ -6,9 +6,11 @@ import { expect } from 'vitest';
 import type { Transaction } from '../cloud/transaction.ts';
 import { type Change, type Cookie, formatCookie, type Mutation, type Value } from '../common/protocol.ts';
 import type { Storage } from '../common/storage.ts';
+import { Device as ChecksumDevice, Space as ChecksumSpace } from './test-checksum.ts';
 import { head, lmids } from './test-commits.ts';
 import type { Device } from './test-device.ts';
 import { write } from './test-schema.ts';
+import { cloudStorage, deviceStorage } from './test-storage.ts';
 
 // Deterministic simulation application domain: counter table referenced by tag table, writes on device and server, and reference replayer.
 
@@ -263,3 +265,17 @@ export const labelsOf = (pending: Mutation[]) =>
   pending.flatMap(({ changes }) =>
     changes.flatMap((change) => (change.op === 'put' && change.table === 'tag' ? [String(change.row.id)] : [])),
   );
+
+/** Cloud and a synchronized device verifying checksums that pushed counters a and b, tagged t1 and t2. */
+export async function synced() {
+  const cloud = cloudStorage(...schema);
+  const space = new ChecksumSpace(cloud, tables);
+  const storage = deviceStorage(...schema);
+  const device = new ChecksumDevice(storage, tables);
+  await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000));
+  await writes.inc(device, 'a', 't1');
+  await writes.inc(device, 'b', 't2');
+  const poke = space.push(device.private.pending());
+  if (poke) await device.private.receive(poke);
+  return { space, cloud, storage, device };
+}

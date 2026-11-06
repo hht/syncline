@@ -295,6 +295,6 @@ export class Network {
   }
 }
 
-/** Connection for device 0: reliable token, zero-jitter backoff (reconnects within 1s drain window). */
-export const connectWithoutJitter = (network: Network, device: Device) =>
-  new Connection(device.private, { url: 'https://sync.test/space', ...network.options(0), token: async () => 'valid', random: () => 0 });
+/** Connection for device 0: reliable token (unless given), zero-jitter backoff (reconnects within 1s drain window). */
+export const connectWithoutJitter = (network: Network, device: Device, token = async () => 'valid') =>
+  new Connection(device.private, { url: 'https://sync.test/space', ...network.options(0), token, random: () => 0 });

@@ -100,10 +100,14 @@ test('throws on sync URL containing query string or hash: rejected by cloud pull
     expect(() => new Connection(device.private, { url: address, token: async () => 't' })).toThrow('must not contain query string');
 });
 
-test('throws on a cleartext sync URL unless allowCleartext: the native network stack sits outside the platform cleartext policy', () => {
+test('throws on a cleartext sync URL unless allowCleartext, which admits http:// and no other scheme: the native network stack sits outside the platform cleartext policy', () => {
   const device = new Device(deviceStorage(createNote), tables);
   const cleartext = url.replace('https://', 'http://');
   expect(() => new Connection(device.private, { url: cleartext, token: async () => 't' })).toThrow('must start with https://');
+  const socket = url.replace('https://', 'ws://');
+  expect(() => new Connection(device.private, { url: socket, token: async () => 't', allowCleartext: true })).toThrow(
+    'must start with https://',
+  );
   expect(() => new Connection(device.private, { url: cleartext, token: async () => 't', allowCleartext: true })).not.toThrow();
 });
 

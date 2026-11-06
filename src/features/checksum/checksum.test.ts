@@ -1,13 +1,10 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { Device, Space } from '../../test/test-checksum.ts';
-import { schema, serverInc, snapshot, tables, writes } from '../../test/test-counter.ts';
-import { drain } from '../../test/test-drive.ts';
+import { schema, serverInc, snapshot, synced, tables, writes } from '../../test/test-counter.ts';
 import { captureReported } from '../../test/test-errors.ts';
-import { connectWithoutJitter } from '../../test/test-network.ts';
 import { filled, pullChunk, pullRest } from '../../test/test-pull.ts';
-import { serving } from '../../test/test-schema.ts';
-import { cloudStorage, deviceStorage, failOnce, injectedError } from '../../test/test-storage.ts';
+import { cloudStorage, deviceStorage } from '../../test/test-storage.ts';
 import { checksumOf, plus, rowHash } from './common/checksum.ts';
 
 // Checksum: A row hash only considers values visible to devices, independent of column order or null columns; the cloud computes on demand when requested, and the device requests once when idle or due, verifying against its local sum segment by segment.
@@ -64,20 +61,6 @@ test('cloud on-demand calculation: final chunk of pull with checksum includes th
   expect(space.pull({ cookie: null }, 1_000_000_000)).not.toHaveProperty('checksum');
   expect(recomputed(space)).toBe(0);
 });
-
-/** Cloud and a synchronized, pushed device. */
-async function synced() {
-  const cloud = cloudStorage(...schema);
-  const space = new Space(cloud, tables);
-  const storage = deviceStorage(...schema);
-  const device = new Device(storage, tables);
-  await device.private.receive(space.pull(device.private.pullRequest(), 1_000_000));
-  await writes.inc(device, 'a', 't1');
-  await writes.inc(device, 'b', 't2');
-  const poke = space.push(device.private.pending());
-  if (poke) await device.private.receive(poke);
-  return { space, cloud, storage, device };
-}
 
 test('device only verifies against current version checksum: skips requesting for a day once matched; out-of-sync local modifications (bugs, corruption) fail verification: reports normally, leaves cookie and pending intact, refetches range on next pull and reverifies; second failure only reports and skips segment', async () => {
   const { space, cloud, storage, device } = await synced();
@@ -190,62 +173,6 @@ test('checksum request with concurrent open local write (pulls not queued): dail
     await device.private.receive(space.pull(request, 1_000_000));
     expect(spent()).toEqual([{ spent: 40_000 }]);
   } finally {
-    vi.useRealTimers();
-  }
-});
-
-/** Synced device whose local store lost a row, connecting a minute after the initial pull requested a checksum (so it verifies once caught up). */
-async function corrupted() {
-  const { space, cloud, storage, device } = await synced();
-  storage.sql.exec("DELETE FROM tag WHERE id = 't2'");
-  const { network } = serving(space);
-  const connection = connectWithoutJitter(network, device);
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(Date.now() + 60_000);
-  /** Verification yields the JS thread between batches (real timer) and network activity may finish first: runs several rounds. */
-  const settle = async () => {
-    for (let round = 0; round < 5; round += 1) {
-      await drain(network);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  };
-  return { cloud, storage, connection, settle };
-}
-
-test('verifies once caught up after connecting: refetches segment by range if local store corrupted, restores cloud parity, and stays connected', async () => {
-  const { cloud, storage, connection, settle } = await corrupted();
-  const reported = captureReported();
-  try {
-    connection.start();
-    await settle();
-    expect(reported).toHaveLength(1);
-    expect(snapshot(storage)).toEqual(snapshot(cloud));
-    expect(connection.status()).toMatchObject({ connected: true, hasSynced: true });
-  } finally {
-    connection.stop();
-    vi.useRealTimers();
-  }
-});
-
-test('a read error checking whether a failed verification left the device behind breaks the link: the range is refetched after reconnecting', async () => {
-  const { cloud, storage, connection, settle } = await corrupted();
-  const reported = captureReported();
-  try {
-    // Arms the fault once caught up (the landed catch-up was checked) and before the verification finishes
-    const armed = { at: false, dropped: false };
-    connection.onStatus(({ connected }) => {
-      if (connected && !armed.at) failOnce(storage, 'SELECT refetch FROM _syncline_cookie');
-      armed.dropped ||= armed.at && !connected;
-      armed.at ||= connected;
-    });
-    connection.start();
-    await settle();
-    expect(reported).toEqual([expect.stringMatching(injectedError), expect.stringContaining('local data does not match cloud')]);
-    expect(armed.dropped).toBe(true);
-    expect(snapshot(storage)).toEqual(snapshot(cloud));
-    expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined });
-  } finally {
-    connection.stop();
     vi.useRealTimers();
   }
 });
