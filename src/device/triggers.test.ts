@@ -10,6 +10,7 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 // App triggers on synced tables that raise errors: RAISE(ROLLBACK) rolls back everything the device wrote so far, so the device fails what
 // it was doing as a whole instead of carrying on statement by statement, each then committing alone; RAISE(ABORT) sets an arriving row
 // aside, but fails a pull deleting the row. Either one raised while reverting pending writes makes the device refetch from scratch.
+// Triggers also fire as the device undoes and redoes rows, which it does on every local write, and on every landed pull and open while writes are pending.
 
 const blocking = (event: 'INSERT' | 'UPDATE') =>
   `CREATE TRIGGER blocking BEFORE ${event} ON workout BEGIN SELECT RAISE(ROLLBACK, 'blocked by the app'); END`;
@@ -167,3 +168,69 @@ test('an app trigger raising while the device reverts a pending update is report
     [{ id: 'w9', note: 'mine' }],
   ]);
 });
+
+test('app triggers on synced tables fire again as the device undoes and redoes writes: committing a local write, and landing a pull or opening while it is pending', async () => {
+  const { space, storage, device, pull } = await synced();
+  storage.sql.exec('CREATE TABLE log (event TEXT)');
+  storage.sql.exec("CREATE TRIGGER inserted AFTER INSERT ON workout BEGIN INSERT INTO log VALUES ('insert ' || NEW.id); END");
+  storage.sql.exec("CREATE TRIGGER deleted AFTER DELETE ON workout BEGIN INSERT INTO log VALUES ('delete ' || OLD.id); END");
+  const events = () =>
+    storage.sql
+      .exec('SELECT event FROM log')
+      .toArray()
+      .map(({ event }) => event);
+  await device.write(async (execute) => execute("INSERT INTO workout (id, note) VALUES ('w9', 'mine')", []));
+  expect(events()).toEqual(['insert w9', 'delete w9', 'insert w9']);
+  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
+  await pull();
+  expect(events().slice(3)).toEqual(['delete w9', 'insert w1', 'insert w9']);
+  device.close();
+  new Device(storage, tables);
+  expect(events().slice(6)).toEqual(['delete w9', 'insert w9']);
+});
+
+test.for([
+  {
+    undoing: 'deleting an inserted row (RAISE(ABORT))',
+    trigger: "CREATE TRIGGER kept BEFORE DELETE ON workout WHEN OLD.id = 'w9' BEGIN SELECT RAISE(ABORT, 'kept by the app'); END",
+    sql: "INSERT INTO workout (id, note) VALUES ('w9', 'mine'), ('w10', 'mine')",
+  },
+  {
+    undoing: 'deleting an inserted row (RAISE(ROLLBACK))',
+    trigger: "CREATE TRIGGER kept BEFORE DELETE ON workout WHEN OLD.id = 'w9' BEGIN SELECT RAISE(ROLLBACK, 'kept by the app'); END",
+    sql: "INSERT INTO workout (id, note) VALUES ('w9', 'mine'), ('w10', 'mine')",
+  },
+  {
+    undoing: 'restoring an updated row',
+    trigger: "CREATE TRIGGER kept BEFORE UPDATE ON workout WHEN OLD.note = 'done' BEGIN SELECT RAISE(ABORT, 'final'); END",
+    sql: "UPDATE workout SET note = 'done' WHERE id = 'w1'",
+  },
+])(
+  'an app trigger raising on $undoing fails the local write making that change, landing nothing, without its message',
+  async ({ trigger, sql }) => {
+    const { space, storage, device, pull, local } = await synced();
+    space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
+    await pull();
+    storage.sql.exec(trigger);
+    const before = local();
+    await expect(device.write(async (execute) => execute(sql, []))).rejects.toThrow(/^Error code 4: query aborted$/);
+    expect([local(), device.private.pending(), storage.inTransaction()]).toEqual([before, [], false]);
+  },
+);
+
+test.for(['ABORT', 'ROLLBACK'])(
+  'resync discarding a pending write an app trigger (RAISE(%s)) keeps from reverting reports the conflict and fails wiping synced tables, keeping everything, until the trigger is gone',
+  async (kind) => {
+    const reported = captureReported();
+    const { storage, device, local } = await synced();
+    await device.write(async (execute) => execute("INSERT INTO workout (id, note) VALUES ('w9', 'mine')", []));
+    storage.sql.exec(`CREATE TRIGGER kept BEFORE DELETE ON workout WHEN OLD.id = 'w9' BEGIN SELECT RAISE(${kind}, 'kept by the app'); END`);
+    const before = [local(), device.private.pending()];
+    await expect(device.private.resync(true)).rejects.toThrow('kept by the app');
+    expect(reported).toEqual([expect.stringContaining('revert failed); clearing synced tables to refetch')]);
+    expect([[local(), device.private.pending()], storage.inTransaction()]).toEqual([before, false]);
+    storage.sql.exec('DROP TRIGGER kept');
+    await device.private.resync(true);
+    expect([workouts(storage), device.private.pending(), device.private.pullRequest().refetch]).toEqual([[], [], true]);
+  },
+);
