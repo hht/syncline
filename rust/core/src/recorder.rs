@@ -110,6 +110,8 @@ impl Recorder {
     pub fn start(&self, database: &mut Database) -> Result<Recording, Error> {
         let names: Vec<String> = self.synced.iter().map(|table| table.name.clone()).collect();
         let synced = database.record(Some(&names))?;
+        // Creating and attaching a session fails only when SQLite runs out of memory, which tests do not simulate.
+        // @see <https://sqlite.org/session/sqlite3session_create.html>
         match database.record(None) {
             Ok(all) => Ok(Recording { synced, all }),
             Err(error) => {
@@ -161,6 +163,7 @@ impl Recorder {
             let (Change::Put { table, row } | Change::Patch { table, row }) = change else {
                 continue;
             };
+            // Never fails: `changes_of` found every changed table among synced tables.
             let declared = self
                 .synced
                 .iter()

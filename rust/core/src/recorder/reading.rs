@@ -15,7 +15,7 @@ use rusqlite::types::Value;
 use std::collections::HashMap;
 
 impl Recorder {
-    /// Touched tables can only be synced tables and local-only tables; touched rows from local-only tables are validated against declarations. Returns touched local-only tables.
+    /// Touched tables can only be synced tables and local-only tables; touched rows from local-only tables are validated against declarations. Returns touched local-only tables, which callers collect into a set.
     pub(super) fn check_local(&self, db: &Connection, all: &[u8], rows: &mut Vec<Stored>) -> Result<Vec<String>, Error> {
         let mut changed: Vec<String> = Vec::new();
         let mut columns: HashMap<String, Vec<String>> = HashMap::new();
@@ -30,9 +30,7 @@ impl Recorder {
                 }
                 continue;
             };
-            if !changed.iter().any(|name| name == table) {
-                changed.push(table.to_owned());
-            }
+            changed.push(table.to_owned());
             // Insert provides full row; update before values contain primary key: read stored full row by primary key
             let values: Vec<Option<Value>> = match change {
                 RowChange::Insert { after, .. } => after.into_iter().map(Some).collect(),
@@ -68,6 +66,7 @@ impl Recorder {
         let mut changes = Vec::new();
         for change in changeset::parse(recorded)? {
             let table = change.table().to_owned();
+            // Never fails: the synced session records only synced tables (`Recorder::start`).
             let (Some(declared), Some(known)) = (self.synced.iter().find(|declared| declared.name == table), self.known.get(&table)) else {
                 return Err(Error::Failed(format!("local write can only modify synced tables: {table}")));
             };
@@ -110,7 +109,8 @@ impl Recorder {
         Ok(changes)
     }
 
-    /// Total bytes of synced columns for a row in database (excluding _extra, which is local-only); returns 0 if row is missing
+    /// Total bytes of synced columns for a row in database (excluding _extra, which is local-only).
+    /// The row exists: a changeset records each row's net change, so a put or patch row is stored when the write finishes.
     pub(super) fn row_bytes(&self, db: &Connection, table: &Table, row: &Row) -> Result<usize, Error> {
         let sql = format!(
             "SELECT {} FROM {} WHERE {}",
@@ -118,21 +118,11 @@ impl Recorder {
             quote(&table.name),
             where_key(&table.key)
         );
-        let bytes: Option<i64> = db
-            .prepare_cached(&sql)?
-            .query_row(
-                rusqlite::params_from_iter(row.pick(&table.key).0.into_iter().map(|(_, value)| value)),
-                |found| found.get(0),
-            )
-            .map(Some)
-            .or_else(|error| {
-                if error == rusqlite::Error::QueryReturnedNoRows {
-                    Ok(None)
-                } else {
-                    Err(error)
-                }
-            })?;
-        Ok(usize::try_from(bytes.unwrap_or(0)).unwrap_or(0))
+        let bytes: i64 = db.prepare_cached(&sql)?.query_row(
+            rusqlite::params_from_iter(row.pick(&table.key).0.into_iter().map(|(_, value)| value)),
+            |found| found.get(0),
+        )?;
+        Ok(usize::try_from(bytes).unwrap_or(0))
     }
 }
 

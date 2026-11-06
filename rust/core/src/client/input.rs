@@ -142,8 +142,6 @@ pub fn call_id(input: &Input) -> Option<u64> {
         | Input::Sync { id, .. }
         | Input::Resync { id, .. }
         | Input::Reconnect { id, .. } => Some(*id),
-        #[cfg(feature = "testing")]
-        Input::Test { id, .. } => Some(*id),
         _ => None,
     }
 }

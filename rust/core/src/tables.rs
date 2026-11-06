@@ -122,7 +122,7 @@ impl Storage {
             Some(Storage::Integer)
         } else if has(&["CHAR", "CLOB", "TEXT"]) {
             Some(Storage::Text)
-        } else if upper.is_empty() || has(&["BLOB"]) {
+        } else if has(&["BLOB"]) {
             None
         } else if has(&["REAL", "FLOA", "DOUB"]) {
             Some(Storage::Real)

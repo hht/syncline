@@ -34,8 +34,8 @@ impl Verifier {
     /// # Errors
     /// Returns an error if reading the database fails.
     pub fn begin(&mut self, db: &Connection, moment: &Moment) -> Result<bool, Error> {
-        let mark = if moment.live { moment.mark.clone() } else { None };
-        let (Some(start), Some(expected)) = (mark, self.expected_at(moment.cookie.as_ref()).cloned()) else {
+        // A moment without a live connection carries no mark (`Device::moment`).
+        let (Some(start), Some(expected)) = (moment.mark.clone(), self.expected_at(moment.cookie.as_ref()).cloned()) else {
             return Ok(false);
         };
         // Final range: includes rows in local tables not synced to cloud (cloud counts 0 for them), detecting orphaned rows.

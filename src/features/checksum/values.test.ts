@@ -1,14 +1,12 @@
 import { integer, type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import fc from 'fast-check';
 import { expect, test, vi } from 'vitest';
-import type { PullRequest } from '../../common/pull-url.ts';
-import { defineTables } from '../../tables/table-definitions.ts';
-import { Device, Space } from '../../test/test-checksum.ts';
+import { checksumCloud, Device, download, round, type Space } from '../../test/test-checksum.ts';
 import { withFakeTimers } from '../../test/test-drive.ts';
 import { captureReported } from '../../test/test-errors.ts';
 import { closeInstalled, tracked, upload } from '../../test/test-roundtrip.ts';
-import { unchunked, write } from '../../test/test-schema.ts';
-import { cloudStorage, deviceStorage } from '../../test/test-storage.ts';
+import { write } from '../../test/test-schema.ts';
+import { deviceStorage } from '../../test/test-storage.ts';
 import { char, counter, item, itemRow, pair, problems, reading, valueTables } from '../../test/test-values.ts';
 
 // Online checksums over every column mode and key kind: a device holding exactly the cloud's rows matches every segment, and a
@@ -57,34 +55,6 @@ const tableRows: fc.Arbitrary<Rows> = fc
 
 /** Rows per segment the test requests: small enough that segments split tables and end on arbitrary keys. */
 const segmentRows = fc.integer({ min: 1, max: 4 });
-
-/** Cloud over the value tables (created as the Durable Object creates them) computing checksums on pulls. */
-function checksumCloud() {
-  const cloud = cloudStorage();
-  defineTables(cloud, valueTables);
-  return { cloud, space: new Space(cloud, valueTables) };
-}
-
-/** Pulls until caught up, asking the cloud for segments of `rows` rows whenever the device asks for a checksum. */
-async function download(space: Space, device: Device, rows: number) {
-  const sized = (request: PullRequest) => (request.checksum === undefined ? request : { ...request, checksumRows: rows });
-  for (let step = 0; step === 0 || device.private.behind(); step += 1) {
-    if (step > 20) throw new Error('Download exceeded 20 steps');
-    // Requests travel as a JSON body, as private space HTTP pulls do.
-    await device.private.receive(space.pull(JSON.parse(JSON.stringify(sized(device.private.pullRequest()))), unchunked));
-  }
-}
-
-/** Verifies segment after segment (refetching after a mismatch) until the round completes; returns each segment's outcome. */
-async function round(space: Space, device: Device, rows: number) {
-  const outcomes: (boolean | undefined)[] = [];
-  for (let segment = 0; segment < 100; segment += 1) {
-    outcomes.push(await device.private.verify());
-    if (!device.private.behind()) return outcomes;
-    await download(space, device, rows);
-  }
-  throw new Error('Verification round did not complete within 100 segments');
-}
 
 /** Puts every row in the cloud: device rows by a local write on `phone` pushed through the push parser, the rest by server writes poked to `phone`. */
 async function fill(space: Space, phone: Device, tables: Rows) {
