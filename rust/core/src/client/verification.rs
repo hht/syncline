@@ -23,9 +23,10 @@ pub(super) enum Waiter {
 }
 
 impl Client {
-    /// Returns whether the private space connection attempt remains active (direct test calls are always active) and the database is open.
+    /// Returns whether the private space connection attempt remains active (direct test calls are always active). Runs only while the
+    /// database is open: closing ends the queue.
     pub(super) fn live(&self, attempt: Option<u64>) -> bool {
-        !self.closed && attempt.is_none_or(|attempt| self.connections.get("").is_some_and(|connection| connection.live(attempt)))
+        attempt.is_none_or(|attempt| self.connections.get("").is_some_and(|connection| connection.live(attempt)))
     }
 
     /// Requests checksum verification: joins ongoing round if active, otherwise initiates one; no-op if disabled or cannot run.
@@ -55,6 +56,7 @@ impl Client {
 
     /// Executes one verification step, notifying waiters upon completion.
     pub(super) fn verify_step(&mut self, jobs: &mut Vec<Job>, now: f64) {
+        // A step is pending only while its round is: only closing takes a round from outside, and no input follows closing
         let Some(verification) = &self.verification else { return };
         let live = self.live(verification.live);
         let matched = match self.device.verify_step(live, now) {

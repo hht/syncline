@@ -35,6 +35,7 @@ impl Client {
 
     /// Ends an open local write: rolls back, or commits (sending modified rows to JS if validation is required).
     pub(super) fn end(&mut self, id: u64, write: u64, commit: bool) {
+        // The host ends each write once, after its body: a write ended (or closed) never hears its end again
         if !self
             .write
             .as_ref()
@@ -50,9 +51,10 @@ impl Client {
         match self.device.finish_write() {
             Ok(rows) if rows.is_empty() => self.commit(id),
             Ok(rows) => {
-                if let Some(open) = &mut self.write {
-                    open.validating = Some(id);
-                }
+                self.write = Some(Write {
+                    id: write,
+                    validating: Some(id),
+                });
                 self.out.push(Instruction::Validate { write, rows: json!(rows) });
             }
             Err(error) => self.abort(id, error.into()),
@@ -61,6 +63,7 @@ impl Client {
 
     /// Handles JS validation response: rolls back and returns validation or execution errors to app, or commits if valid.
     pub(super) fn validated(&mut self, write: u64, invalid: Option<Invalid>, error: Option<String>) {
+        // The host answers each validation once, and closing ends the input
         let Some(id) = self.write.as_ref().filter(|open| open.id == write).and_then(|open| open.validating) else {
             return;
         };

@@ -13,15 +13,12 @@ use crate::statements::refuse_unless_write;
 const WRITE: &str = "syncline_write";
 
 impl Device {
-    /// Begins a local write: opens a savepoint and starts session recording.
+    /// Begins a local write: opens a savepoint and starts session recording. No local write may be open (the client runs one at a time).
     ///
     /// # Errors
     ///
-    /// Returns an error if a local write is already open, or if SQLite fails to start the session.
+    /// Returns an error if SQLite fails to start the session.
     pub fn begin_write(&mut self) -> Result<(), Error> {
-        if self.writing {
-            return Err(Error::Failed("a local write is already open".to_owned()));
-        }
         self.db.connection().execute_batch(&format!("SAVEPOINT {WRITE}"))?;
         self.writing = true;
         self.finished = None;
@@ -37,15 +34,12 @@ impl Device {
         }
     }
 
-    /// Verifies whether a statement may execute within a local write: permits only reads and row modifications; rejects if the transaction was rolled back.
+    /// Verifies whether a statement may execute within the open local write: permits only reads and row modifications; rejects if the transaction was rolled back.
     ///
     /// # Errors
     ///
-    /// Returns an error if no local write is open, the statement is not permitted, or SQLite rolled back the transaction.
+    /// Returns an error if the statement is not permitted, or SQLite rolled back the transaction.
     pub fn check_write(&self, sql: &str) -> Result<(), Error> {
-        if !self.writing {
-            return Err(Error::Failed("this local write has already finished".to_owned()));
-        }
         refuse_unless_write(sql)?;
         if !self.db.in_transaction() {
             return Err(Error::Failed(crate::recorder::ROLLED_BACK.to_owned()));
@@ -53,17 +47,12 @@ impl Device {
         Ok(())
     }
 
-    /// Completes the write body: finishes recording and yields rows to validate against Standard Schema; caller invokes `commit_write` after validation or `abort_write` on error.
+    /// Completes the body of the open local write: finishes recording and yields rows to validate against Standard Schema; caller invokes `commit_write` after validation or `abort_write` on error.
     ///
     /// # Errors
     ///
-    /// Returns an error if no local write is open, or see [`Recorder::finish`].
+    /// See [`Recorder::finish`].
     pub fn finish_write(&mut self) -> Result<Vec<Stored>, Error> {
-        if !self.writing {
-            return Err(Error::Failed(
-                "local database is closed; this local write was rolled back".to_owned(),
-            ));
-        }
         let Finished {
             changes,
             recorded,
