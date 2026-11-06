@@ -49,3 +49,17 @@ test('a resubmitted patch giving only the primary key writes nothing and makes n
   expect(space.head()).toEqual(head);
   expect(storage.sql.exec('SELECT id, done FROM entry').toArray()).toEqual([{ id: 'e1', done: 1 }]);
 });
+
+test('resubmitting a held write that touches a retired column throws and keeps it held, while replacement changes without it run', () => {
+  const storage = cloudStorage('CREATE TABLE entry (id TEXT PRIMARY KEY, done INTEGER, settings TEXT)');
+  new Space(storage, [entry]).push([
+    { client: 'c1', id: 1, changes: [{ op: 'put', table: 'entry', row: { id: 'e1', done: 2, settings: '{}' } }] },
+  ]);
+  const slim = sqliteTable('entry', { id: text().primaryKey(), done: integer({ mode: 'boolean' }) });
+  const space = new Space(storage, [slim], { retired: ['entry.settings'] });
+  expect(() => space.resubmit('c1', 1)).toThrow('Modified column is not declared on table entry: settings');
+  expect(space.held()).toEqual([expect.objectContaining({ client: 'c1', id: 1 })]);
+  space.resubmit('c1', 1, [{ op: 'put', table: 'entry', row: { id: 'e1', done: 1 } }]);
+  expect(space.held()).toEqual([]);
+  expect(storage.sql.exec('SELECT id, done FROM entry').toArray()).toEqual([{ id: 'e1', done: 1 }]);
+});
