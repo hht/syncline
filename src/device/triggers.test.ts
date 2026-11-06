@@ -21,7 +21,7 @@ async function synced() {
   const device = new Device(storage, tables);
   const pull = () => device.private.receive(pulled(space, device));
   await pull();
-  return { space, storage, pull, local: () => [device.private.cookie(), workouts(storage)] };
+  return { space, storage, device, pull, local: () => [device.private.cookie(), workouts(storage)] };
 }
 
 test.for([
@@ -96,4 +96,25 @@ test('a pull row an app trigger aborts (RAISE(ABORT)) is kept aside with a warni
   expect(local()).toEqual([space.head(), [{ id: 'w2', note: 'bench' }]]);
   expect(storage.sql.exec('SELECT key FROM _syncline_unknown').toArray()).toEqual([{ key: '{"id":"w1"}' }]);
   expect(reported).toEqual([expect.stringContaining('aborted by the app')]);
+});
+
+test('an app trigger raising while the device reverts a pending update is reported as a conflict, like on native, whose SQLite the web build compiles', async () => {
+  const reported = captureReported();
+  const { space, storage, device, pull } = await synced();
+  space.mutate((tx) => tx.insert(workout, { id: 'w9', note: 'theirs' }));
+  await pull();
+  await device.write(async (execute) => execute("UPDATE workout SET note = 'mine' WHERE id = 'w9'", []));
+  // SQLite 3.53 retried the update as a delete and an insert, firing these instead of reporting
+  storage.sql.exec('CREATE TABLE log (event TEXT)');
+  storage.sql.exec("CREATE TRIGGER reverting BEFORE UPDATE ON workout BEGIN SELECT RAISE(ABORT, 'kept by the app'); END");
+  storage.sql.exec("CREATE TRIGGER deleting BEFORE DELETE ON workout BEGIN INSERT INTO log VALUES ('delete ' || OLD.note); END");
+  storage.sql.exec("CREATE TRIGGER inserting BEFORE INSERT ON workout BEGIN INSERT INTO log VALUES ('insert ' || NEW.note); END");
+  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
+  await pull();
+  expect(reported).toEqual([expect.stringContaining('local data conflicts with pending writes (revert failed); triggering refetch')]);
+  expect([storage.sql.exec('SELECT event FROM log').toArray(), device.private.pullRequest().refetch, workouts(storage)]).toEqual([
+    [],
+    true,
+    [{ id: 'w9', note: 'mine' }],
+  ]);
 });
