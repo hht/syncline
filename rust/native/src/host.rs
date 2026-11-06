@@ -187,10 +187,8 @@ impl Host {
             .collect();
         due.sort_unstable();
         for (_, timer) in due {
-            // Earlier timer callbacks may have cancelled this timer.
-            if self.timers.remove(&timer).is_none() {
-                continue;
-            }
+            // An earlier timer in this batch may have cancelled this one; the client ignores a cancelled timer firing.
+            self.timers.remove(&timer);
             let client = self
                 .client
                 .as_mut()

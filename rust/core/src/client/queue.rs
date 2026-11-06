@@ -48,7 +48,7 @@ pub(super) struct Queued {
 
 impl Client {
     pub(super) fn fired(&mut self, timer: u32, jobs: &mut Vec<Job>, now: f64) {
-        // Hosts drop a timer on its cancellation, so a fired timer is still scheduled
+        // A host firing a batch of due timers may still fire one an earlier timer in the batch cancelled
         let Some(timer) = self.out.fired(timer) else { return };
         match timer {
             Timer::Reconnect { ref channel }
