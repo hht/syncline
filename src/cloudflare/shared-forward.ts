@@ -67,13 +67,15 @@ function bucketsOf(definition: SharedDefinition) {
  * routes WebSockets to a random broadcast shard, and strips `Authorization` (which bypasses cache) on HTTP pulls before calling the cached entrypoint.
  * Pass `entry` as `ctx.exports.X` itself, which this calls with the subscription as `props`: `ctx.exports.X.fetch(request, { props })` does not forward `props`.
  */
-export async function forwardShared<Broadcast extends Rpc.DurableObjectBranded>(
+export function forwardShared<Broadcast extends Rpc.DurableObjectBranded>(
   request: Request,
   route: Route<Broadcast>,
   verify: (token: string) => Promise<SharedIdentity | undefined>,
 ) {
-  const identity = await admit(request, verify);
-  if (identity instanceof Response) return identity;
+  return admit(request, verify, (identity) => routed(request, route, identity));
+}
+
+async function routed<Broadcast extends Rpc.DurableObjectBranded>(request: Request, route: Route<Broadcast>, identity: SharedIdentity) {
   const subscription = bucketsOf(route.definition).subscribe(identity.buckets);
   const subscribed = { subscription, sub: await subscriptionHash(subscription) };
   if (request.headers.get('Upgrade') === 'websocket') {

@@ -112,7 +112,7 @@ Alarms are managed by Syncline (sharing a single alarm between exports and custo
 
 ### `forward(request, namespace, verify)`
 
-Entrypoint for sync requests in the entry Worker: extracts the token and passes it to `verify`, which returns `{ space, expiresAt }` (`expiresAt` in epoch milliseconds) or `undefined`. Forwards recognized tokens to the Durable Object named `space`; returns 401 if unrecognized. Throws if `expiresAt` is not a finite number (integrator error).
+Entrypoint for sync requests in the entry Worker: extracts the token and passes it to `verify`, which returns `{ space, expiresAt }` (`expiresAt` in epoch milliseconds) or `undefined`. Forwards recognized tokens to the Durable Object named `space`; returns 401 if unrecognized. Throws if `expiresAt` is not a finite number (integrator error). Web apps on any origin can sync through it: it answers the browser's CORS preflight and allows any origin to read its responses.
 
 ### `restoreSpace(namespace, name, at)`
 
@@ -126,7 +126,7 @@ Restores a private space to `at` (millisecond timestamp). Rejects when the objec
 | `class SynclineSharedSpace<Env>` | Durable Object for shared spaces: `super(ctx, env, { ...definition, broadcast, validation?, events?, retired? })` (`retired` matches `SynclineSpace`); `protected mutate(write): Promise<void>`. Reach it by name (`getByName` or `idFromName`): its broadcast shards are named after it, so an ID without a name (`idFromString`, `newUniqueId`) throws, as does a name too long for its shard names (see [Limits](limits.md)) |
 | `class SynclineBroadcast<Env>` | Durable Object for broadcast shards: `super(ctx, env, sharedNamespace, events?)`. Alarms are managed internally (closing expired connections via alarm); do not override `alarm()` or call `setAlarm` directly |
 | `abstract class SynclineSharedEntry<Env>` | Cached entrypoint: implement `protected shared()`, returning the shared space namespace |
-| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`, where `entry` is `ctx.exports.<YourEntry>` itself (called with the subscription as props; an entry reached without props throws). `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules, if a bucket exceeds 256 bytes, if the JSON-encoded subscription exceeds 8,192 bytes, or if `expiresAt` is not a finite number (integrator errors) |
+| `forwardShared(request, route, verify)` | Entrypoint in the entry Worker: `route` is `{ entry, broadcast, space, definition }`, where `entry` is `ctx.exports.<YourEntry>` itself (called with the subscription as props; an entry reached without props throws). `verify` returns `{ buckets, expiresAt }` (subscribed buckets: `[ruleName, ...params]`, passing string arguments for text columns and numbers for integer columns; bucket columns must be integer or text), or `undefined` if unrecognized (returning 401). Throws if buckets violate rules, if a bucket exceeds 256 bytes, if the JSON-encoded subscription exceeds 8,192 bytes, or if `expiresAt` is not a finite number (integrator errors); like `forward`, it lets web apps on any origin sync |
 
 
 ### Security

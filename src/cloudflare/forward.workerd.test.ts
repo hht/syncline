@@ -161,3 +161,28 @@ test('decodes a percent-encoded token from the WebSocket subprotocol and forward
   expect(verified).toEqual(['std/b64+x=, y']);
   expect(seen[0]?.headers.get('Sec-WebSocket-Protocol')).toBe(subprotocol);
 });
+
+test('lets pages on any origin pull: answers the preflight, and every pull response, rejections included, allows any origin', async () => {
+  const preflight = await exports.default.fetch(pullURL(url, { cookie: null }), {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://app.test',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'authorization, content-type, syncline-schema',
+    },
+  });
+  expect([preflight.status, ...['Origin', 'Headers'].map((name) => preflight.headers.get(`Access-Control-Allow-${name}`))]).toEqual([
+    204,
+    '*',
+    'Authorization, Content-Type, Syncline-Schema',
+  ]);
+  // A real pull: the space's response has immutable headers, so allowing the origin must copy it.
+  const pulled = await pullResponse(space(), null, undefined, { Origin: 'https://app.test' });
+  const unknown = await exports.default.fetch(pullURL(url, { cookie: null }), { headers: { Origin: 'https://app.test' } });
+  const outdated = await exports.default.fetch(url, { headers: { Origin: 'https://app.test' } });
+  expect([pulled, unknown, outdated].map((response) => [response.status, response.headers.get('Access-Control-Allow-Origin')])).toEqual([
+    [200, '*'],
+    [401, '*'],
+    [409, '*'],
+  ]);
+});

@@ -67,6 +67,25 @@ test('normalizes cache keys for cached entrypoint: canonicalizes query order and
   }
 });
 
+test('lets pages on any origin pull: answers the preflight, and pulls and their rejections allow any origin', async () => {
+  const preflight = await exports.default.fetch(url, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://app.test', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' },
+  });
+  expect([preflight.status, preflight.headers.get('Access-Control-Allow-Origin')]).toEqual([204, '*']);
+  const canonical = pullURL(url, { cookie: null });
+  const responses = [
+    (await forwarded(canonical)).response,
+    (await forwarded(canonical, {}, 'POST')).response,
+    (await forwarded(`${canonical}&x=1`)).response,
+  ];
+  expect(responses.map((response) => [response.status, response.headers.get('Access-Control-Allow-Origin')])).toEqual([
+    [200, '*'],
+    [405, '*'],
+    [400, '*'],
+  ]);
+});
+
 test('passes a cursor it does not recognize through unchanged, for the space to answer with a reset', async () => {
   const target = pullURL(url, { cookie: null, cursor: 'from-an-older-deploy' });
   const { response, seen } = await forwarded(target);

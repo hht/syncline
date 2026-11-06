@@ -1,6 +1,7 @@
 import { subprotocol } from '../common/protocol.ts';
 import { parsePullRequest } from '../common/pull-url.ts';
 import { protocolVersion, versionConflict, versionMismatch, versionParam } from '../common/version.ts';
+import { schemaHeader } from '../tables/declaration.ts';
 import { isSocket, tokenOf, withoutToken } from './requests.ts';
 
 /**
@@ -32,12 +33,48 @@ function versionRejected(request: Request) {
 }
 
 /**
- * Shared admission pipeline for sync entry points:
+ * Lets web pages on any origin pull: answers the browser's preflight (pulls carry the token in `Authorization`, and may carry a JSON body
+ * and the schema fingerprint), and allows any origin to read every HTTP response, rejections included, so devices see their status and
+ * body. Any origin is safe because the token travels in a header, never in cookies the browser would attach by itself. WebSocket
+ * upgrades pass unchanged: browsers apply no CORS to them. Pulls use only GET and POST, which need no `Access-Control-Allow-Methods`.
+ * @see https://fetch.spec.whatwg.org/#http-cors-protocol
+ */
+async function crossOrigin(request: Request, handle: () => Promise<Response>) {
+  if (request.method === 'OPTIONS')
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': `Authorization, Content-Type, ${schemaHeader}`,
+        'Access-Control-Max-Age': '7200',
+      },
+    });
+  const response = await handle();
+  if (response.webSocket) return response;
+  const allowed = new Response(response.body, response);
+  allowed.headers.set('Access-Control-Allow-Origin', '*');
+  return allowed;
+}
+
+/**
+ * Shared admission pipeline for sync entry points, open to pages on any origin ({@link crossOrigin}):
  * validates protocol version (rejecting mismatches), authenticates tokens via verify (returning 401 on failure; throwing if
  * `expiresAt` is not a finite number, an integrator error), and parses pull URL query parameters (returning 400 on malformed
- * queries without waking the Durable Object).
+ * queries without waking the Durable Object), then hands the request's identity to `admitted`.
  */
-export async function admit<T extends { expiresAt: number }>(
+export function admit<T extends { expiresAt: number }>(
+  request: Request,
+  verify: (token: string) => Promise<T | undefined>,
+  admitted: (identity: T) => Promise<Response>,
+) {
+  return crossOrigin(request, async () => {
+    const identity = await identify(request, verify);
+    return identity instanceof Response ? identity : admitted(identity);
+  });
+}
+
+/** The request's verified identity, or the response rejecting it. */
+async function identify<T extends { expiresAt: number }>(
   request: Request,
   verify: (token: string) => Promise<T | undefined>,
 ): Promise<T | Response> {
@@ -58,15 +95,15 @@ export async function admit<T extends { expiresAt: number }>(
 }
 
 /** Forwards authenticated sync requests from the entry Worker to the corresponding private space Durable Object. */
-export async function forward<Space extends Rpc.DurableObjectBranded>(
+export function forward<Space extends Rpc.DurableObjectBranded>(
   request: Request,
   namespace: DurableObjectNamespace<Space>,
   verify: (token: string) => Promise<Identity | undefined>,
 ) {
-  const identity = await admit(request, verify);
-  if (identity instanceof Response) return identity;
-  const forwarded = withoutToken(request);
-  forwarded.headers.set(expiresHeader, String(identity.expiresAt));
-  forwarded.headers.set(spaceHeader, identity.space);
-  return namespace.getByName(identity.space).fetch(forwarded);
+  return admit(request, verify, async (identity) => {
+    const forwarded = withoutToken(request);
+    forwarded.headers.set(expiresHeader, String(identity.expiresAt));
+    forwarded.headers.set(spaceHeader, identity.space);
+    return namespace.getByName(identity.space).fetch(forwarded);
+  });
 }
