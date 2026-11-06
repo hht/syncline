@@ -71,12 +71,9 @@ export class Upkeep {
     return {
       run: async () => this.#run(),
       retry,
+      // An Error: the steps run only SQL and this library's code
       failed: (error) =>
-        this.#events({
-          type: 'upkeep.failed',
-          step: this.#indexes.length > 0 ? 'index' : 'drop',
-          reason: error instanceof Error ? error.message : String(error),
-        }),
+        this.#events({ type: 'upkeep.failed', step: this.#indexes.length > 0 ? 'index' : 'drop', reason: (error as Error).message }),
     };
   }
 
@@ -85,7 +82,8 @@ export class Upkeep {
     return {
       run: async () => run(),
       retry,
-      failed: (error) => this.#events({ type: 'upkeep.failed', step, reason: error instanceof Error ? error.message : String(error) }),
+      // An Error: truncating and counting run only SQL and this library's code
+      failed: (error) => this.#events({ type: 'upkeep.failed', step, reason: (error as Error).message }),
     };
   }
 

@@ -42,7 +42,7 @@ type Range = {
   select: string;
   sized: string;
   where: string;
-  params?: readonly unknown[];
+  params: readonly unknown[];
   after?: Record<string, unknown> | undefined;
   until?: Record<string, unknown> | undefined;
 };
@@ -52,7 +52,7 @@ type Range = {
  * (measuring byte sizes before fetching full row bodies; see {@link within}), continuing after the last primary key
  * of the previous batch so only one batch remains in memory at a time. All pull scans go through this.
  */
-function* rowBatches(query: Query, { table, key, select, sized, where, params = [], after, until }: Range, size: number, bytes: number) {
+function* rowBatches(query: Query, { table, key, select, sized, where, params, after, until }: Range, size: number, bytes: number) {
   // Qualifies key columns with the table name; otherwise ORDER BY sorts by the alias when a key column shares the alias name `bytes`.
   // @see https://sqlite.org/lang_select.html#the_order_by_clause
   const ordered = key.map((column) => `${quote(table)}.${quote(column)}`).join(', ');

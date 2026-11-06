@@ -81,6 +81,7 @@ export class Commits {
   /** Returns the current incarnation nonce of version 0 (created on space initialization, distinct after rebuild for shared spaces). */
   incarnation() {
     const [row] = this.#query('SELECT nonce FROM _syncline_incarnation');
+    // Always found: preparing the internal tables inserts it with version 0, and nothing deletes it
     if (!row) throw new Error('Missing space incarnation record in _syncline_incarnation; initialize the space before querying.');
     return Number(row.nonce);
   }
@@ -319,6 +320,7 @@ export class Commits {
     const to = stop === undefined ? last : over ? Math.max(Number(stop.version) - 1, from + 1) : Number(stop.version);
     const cut =
       Number(stop?.version) === to ? stop : this.#query('SELECT version, nonce, bytes FROM _syncline_commit WHERE version = ?', to)[0];
+    // Always found: from < to <= last < head, and the versions between the floor and head are all in the log
     if (!cut) throw new Error(`Commit version ${to} not found in commit log; provide a version on current history.`);
     this.#query('DELETE FROM _syncline_commit WHERE version <= ?', cut.version);
     this.#query('DELETE FROM _syncline_boundary WHERE version <= ?', cut.version);

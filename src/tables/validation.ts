@@ -179,25 +179,26 @@ type Field = { field: string; column: SQLiteColumn; check: Check };
 
 /** Row validator enforcing column constraints, primary key sizes, and Standard Schema rules. */
 export class Validator {
-  readonly #tables: Map<string, { fields: Field[]; key: string[]; schema: StandardSchema | undefined; synced: boolean }>;
+  readonly #tables: Map<string, { fields: Field[]; key: string[]; schema: StandardSchema | undefined }>;
 
-  /** Tables are synced tables (with primary key size limits); localOnly are local-only tables. */
+  /** Tables are synced tables; localOnly are local-only tables, which only {@link Validator.checkSchema} checks. */
   constructor(tables: SQLiteTable[], validation?: Validation, localOnly: SQLiteTable[] = []) {
     this.#tables = new Map(
       [...tables, ...localOnly].map((table) => {
         const { name } = getTableConfig(table);
         const fields = Object.entries(getColumns(table)).map(([field, column]) => ({ field, column, check: checkOf(name, column) }));
         const key = keyColumns(table);
-        return [name, { fields, key, schema: validation?.get(table), synced: tables.includes(table) }];
+        return [name, { fields, key, schema: validation?.get(table) }];
       }),
     );
   }
 
-  /** Validates an updated row by primary key, throwing ValidationError on constraint violations. */
+  /** Validates an updated row of a synced table by primary key, throwing ValidationError on constraint violations. */
   check(query: Query, table: string, row: Record<string, unknown>): Record<string, unknown> | undefined {
     const known = this.#tables.get(table);
+    // Never thrown: commits record rows of synced tables only
     if (!known) throw new Error(`Modified table is not a synced table: ${table}`);
-    const { fields, key, synced } = known;
+    const { fields, key } = known;
     const [stored] = query(
       `SELECT ${fields.map(({ column }) => `${quote(column.name)}`).join(', ')} FROM ${quote(table)} WHERE ${whereKey(key)}`,
       ...key.map((column) => row[column]),
@@ -208,7 +209,7 @@ export class Validator {
       const message = value === null ? (column.notNull ? 'cannot be null' : undefined) : check(value);
       return message === undefined ? [] : [{ path: [field], message }];
     });
-    const keyed = synced ? keyBytesOf(keyOf(key, stored)) : 0;
+    const keyed = keyBytesOf(keyOf(key, stored));
     if (keyed > keyBytes)
       issues.push({ path: [], message: `primary key serialized to ${keyed} bytes, exceeding ${keyBytes}-byte limit for pull URLs` });
     if (issues.length > 0) throw new ValidationError(table, issues);

@@ -297,6 +297,7 @@ export class Space {
 
   /** Returns shared space bucket rules; throws if called on a private space. */
   #shared() {
+    // Never thrown: only the shared space Durable Object pulls shared or builds rounds, and it always opens with bucket rules
     if (!this.#buckets) throw new Error('Space is not configured as a shared space; configure shared options with bucket rules.');
     return this.#buckets;
   }

@@ -30,6 +30,7 @@ export function writeOnServer({ db, query, rows, bucketsBefore }: Context, write
     return first.get(id) as string[];
   };
   // Cascading deletes read pre-deletion buckets: rows modified earlier in this write use their state before the first modification.
+  // names is always set when bucketsBefore is: rows.delete gets bucketsBefore.readback below, and reports each row's readback names.
   const deleted: Changed = Object.assign(
     (table: string, key: Record<string, Value>, names?: string[]) => changed(table, key, bucketsBefore && firstOf(table, key, names ?? [])),
     { room: changed.room, maxRows: changed.maxRows },

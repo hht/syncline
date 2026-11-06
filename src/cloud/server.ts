@@ -199,7 +199,8 @@ export class Server<S extends Socket> {
       if (!fitsBytes(message, pushBytes)) throw new Error(`Push payload exceeds limit of ${pushBytes} bytes; reduce mutation batch size.`);
       return parseMutations(message);
     } catch (error) {
-      this.#events({ type: 'push.failed', reason: error instanceof Error ? error.message : String(error) });
+      // An Error: the size check, JSON.parse, and the parsers throw nothing else
+      this.#events({ type: 'push.failed', reason: (error as Error).message });
       closeSocket(this.#events, socket, invalidPush, 'invalid push');
       return undefined;
     }

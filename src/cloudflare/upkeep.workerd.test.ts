@@ -128,18 +128,25 @@ test('builds pending indexes one per step, and reports a failing step to events 
     expect(built()).toEqual(['first']);
     expect(await chore?.run()).toBe(false);
     expect(built()).toEqual(['first', 'second']);
-    const broken = make({ truncation: { commitsOverLimit: () => false, truncate: () => false } }, ['CREATE INDEX third ON missing (id)']);
+    const truncate = () => {
+      throw new Error('disk full');
+    };
+    const broken = make({ truncation: { commitsOverLimit: () => false, truncate } }, ['CREATE INDEX third ON missing (id)']);
     // The schedule hands a rejected run to failed.
-    const failing = broken.chore('syncline:upkeep');
-    failing?.failed(
-      await Promise.resolve()
-        .then(() => failing.run())
-        .catch((error: unknown) => error),
-    );
-    broken.chore('syncline:truncate')?.failed('disk full');
+    const fail = async (chore: ReturnType<Upkeep['chore']>) =>
+      chore?.failed(
+        await Promise.resolve()
+          .then(() => chore.run())
+          .catch((error: unknown) => error),
+      );
+    await fail(broken.chore('syncline:upkeep'));
+    await fail(broken.chore('syncline:truncate'));
+    // With no index left to build, the step is dropping retired tables.
+    make().chore('syncline:upkeep')?.failed(new Error('database locked'));
     expect(events).toEqual([
-      { type: 'upkeep.failed', step: 'index', reason: expect.stringContaining('no such table: main.missing') },
+      { type: 'upkeep.failed', step: 'index', reason: expect.stringMatching(/^no such table: main\.missing/) },
       { type: 'upkeep.failed', step: 'truncate', reason: 'disk full' },
+      { type: 'upkeep.failed', step: 'drop', reason: 'database locked' },
     ]);
   });
 });

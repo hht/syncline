@@ -96,7 +96,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
   readonly #events: Events;
   readonly #upkeep: Upkeep;
 
-  constructor(ctx: DurableObjectState, env: Env, schema: Schema, options: SpaceOptions = {}, { checksum, chores }: Features = {}) {
+  constructor(ctx: DurableObjectState, env: Env, schema: Schema, options: SpaceOptions, { checksum, chores }: Features) {
     super(ctx, env);
     const { cloud, retired, readOnly, validation, events, writeQuota, dailyWrites, connections } = options;
     this.#events = isolated(events ?? quiet);

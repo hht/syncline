@@ -47,7 +47,14 @@ function begin(commits: Commits, reader: Reader, { cookie, cursor, refetch, rang
 }
 
 /** Pulls one chunk; `catchUp` indicates initial connection handshake (omits explicit client list; see final chunk handling). */
-export function pull(commits: Commits, reader: Reader, request: PullRequest, limit: number, report: Report, catchUp = false): Poke | Chunk {
+export function pull(
+  commits: Commits,
+  reader: Reader,
+  request: PullRequest,
+  limit: number,
+  report: Report,
+  catchUp: boolean,
+): Poke | Chunk {
   const { cookie, cursor } = request;
   const basisOf = (full: boolean) => (full ? null : cookie);
   // Progress state carried via cursor: initialized on first chunk of multi-chunk pull, omitted on single-chunk pulls.

@@ -73,7 +73,8 @@ export function parseMutations(text: string): Pushed[] {
     try {
       return { ...identity, changes: parseChanges(mutation.changes) };
     } catch (error) {
-      return { ...identity, changes: mutation.changes ?? null, malformed: error instanceof Error ? error.message : String(error) };
+      // An Error: parseChanges throws nothing else
+      return { ...identity, changes: mutation.changes ?? null, malformed: (error as Error).message };
     }
   });
 }

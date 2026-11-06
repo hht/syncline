@@ -45,7 +45,7 @@ export function commitWrite(
   client: string | null,
   id: number | null,
   write: (changed: Changed) => void,
-  { parents = false, used, touched }: { parents?: boolean; used?: () => Used; touched?: Touched } = {},
+  { parents = false, used, touched }: { parents?: boolean; used?: () => Used; touched?: Touched },
 ): Cookie {
   const tally = bucketRows?.tally();
   return storage.transactionSync(() => {
