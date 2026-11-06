@@ -17,15 +17,15 @@ import { foreignKeysOf, tableName } from './table-definitions.ts';
  * @see https://sqlite.org/foreignkeys.html#fk_actions
  */
 
-// Remaining mutation budget for row count and primary key bytes.
-type Room = { rows: number; bytes: number };
+// Remaining mutation budget for row count and primary key bytes, and the first error thrown while reporting or cascading a row.
+type Room = { rows: number; bytes: number; failed?: { error: unknown } };
 
 /**
  * Row change notification callback receiving table, primary key, and optional bucket or metadata names.
- * Carries room budget tracking remaining rows and bytes.
+ * Carries room budget tracking remaining rows and bytes, and the first reporting or cascading failure (see {@link checkReported}).
  */
 export type Changed = ((table: string, key: Record<string, Value>, before?: string[]) => void) & {
-  readonly room: Readonly<Room>;
+  readonly room: Room;
   readonly maxRows: number;
 };
 
@@ -37,19 +37,33 @@ const tooMany = (rows: number) =>
 
 /**
  * Wraps a changed callback with budget enforcement, tracking remaining row and byte quotas.
- * Throws Reject when row counts exceed writeRows or primary keys exceed writeKeyBytes.
+ * Throws Reject when row counts exceed writeRows or primary keys exceed writeKeyBytes, and records the first error thrown.
  */
 export function limitRows(rows: number, changed: (table: string, key: Record<string, Value>, before?: string[]) => void): Changed {
   const room: Room = { rows, bytes: writeKeyBytes };
   return Object.assign(
     (table: string, key: Record<string, Value>, before?: string[]) => {
-      room.rows -= 1;
-      room.bytes -= keyBytesOf(key);
-      if (room.rows < 0 || room.bytes < 0) throw new Reject(tooMany(rows));
-      changed(table, key, before);
+      try {
+        room.rows -= 1;
+        room.bytes -= keyBytesOf(key);
+        if (room.rows < 0 || room.bytes < 0) throw new Reject(tooMany(rows));
+        changed(table, key, before);
+      } catch (error) {
+        room.failed ??= { error };
+        throw error;
+      }
     },
     { room, maxRows: rows },
   );
+}
+
+/**
+ * Throws the first error thrown while reporting or cascading a row, after the write: rows are stored before they are reported, and a
+ * cascading delete can fail after deleting its parent rows, so a write that caught that error and went on would commit rows missing
+ * from the commit log, or orphaned child rows.
+ */
+export function checkReported({ room }: Changed) {
+  if (room.failed) throw room.failed.error;
 }
 
 // Foreign key reference from child table columns to parent table columns.
@@ -177,20 +191,26 @@ export class Rows {
       return rows.map((row) => keyOf(key, row));
     };
     const { key } = this.#tables.get(table) as { key: string[] };
-    const deleted: [string, Record<string, Value>[]][] = [
-      [table, among(key, keys).flatMap(([condition, values]) => removed(table, condition, values))],
-    ];
-    for (let batch = deleted.pop(); batch; batch = deleted.pop()) {
-      const [name, rows] = batch;
-      for (const child of this.#children.get(name) ?? []) {
-        const parents = rows.map((row) =>
-          Object.fromEntries(child.columns.map((column, index) => [column, row[child.to[index] as string]])),
-        );
-        for (const [condition, values] of among(child.columns, parents)) {
-          const children = removed(child.table, condition, values);
-          if (children.length > 0) deleted.push([child.table, children]);
+    try {
+      const deleted: [string, Record<string, Value>[]][] = [
+        [table, among(key, keys).flatMap(([condition, values]) => removed(table, condition, values))],
+      ];
+      for (let batch = deleted.pop(); batch; batch = deleted.pop()) {
+        const [name, rows] = batch;
+        for (const child of this.#children.get(name) ?? []) {
+          const parents = rows.map((row) =>
+            Object.fromEntries(child.columns.map((column, index) => [column, row[child.to[index] as string]])),
+          );
+          for (const [condition, values] of among(child.columns, parents)) {
+            const children = removed(child.table, condition, values);
+            if (children.length > 0) deleted.push([child.table, children]);
+          }
         }
       }
+    } catch (error) {
+      // Levels above (the parent rows) may already be deleted: a write that caught this and went on must still fail.
+      changed.room.failed ??= { error };
+      throw error;
     }
   }
 

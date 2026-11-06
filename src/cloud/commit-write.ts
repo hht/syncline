@@ -2,7 +2,7 @@ import { sharedWriteRows, writeRows } from '../common/limits.ts';
 import type { Cookie } from '../common/protocol.ts';
 import type { CloudStorage, Query } from '../common/storage.ts';
 import { canonicalKey } from '../tables/keys.ts';
-import { type Changed, limitRows, type Rows } from '../tables/rows.ts';
+import { type Changed, checkReported, limitRows, type Rows } from '../tables/rows.ts';
 import type { Validator } from '../tables/validation.ts';
 import type { BucketRows } from './bucket-rows.ts';
 import type { Buckets } from './buckets.ts';
@@ -52,13 +52,13 @@ export function commitWrite(
     const recording = commits.begin(client, id, { used, reserve: buckets?.reserve ?? 0 });
     let count = 0;
     // Throws Reject if touched rows exceed the single-write limit (including cascade deletes; shared spaces have a separate limit due to bucket indexing): device writes are held, server writes throw to caller.
-    write(
-      limitRows(buckets ? sharedWriteRows : writeRows, (table, key, before) => {
-        count += 1;
-        const canonical = canonicalKey(key);
-        recording.add(before ? [table, canonical, before] : [table, canonical]);
-      }),
-    );
+    const changed = limitRows(buckets ? sharedWriteRows : writeRows, (table, key, before) => {
+      count += 1;
+      const canonical = canonicalKey(key);
+      recording.add(before ? [table, canonical, before] : [table, canonical]);
+    });
+    write(changed);
+    checkReported(changed);
     // Device writes always record (advancing lmid, even when held); server writes touching no synced rows record nothing, creating no new version and emitting no poke.
     if (client === null && count === 0) return commits.head();
     const head = recording.finish((keys) => {
