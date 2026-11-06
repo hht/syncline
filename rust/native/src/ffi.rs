@@ -87,3 +87,6 @@ fn owned(text: String) -> *mut c_char {
         .expect("JSON and error messages contain no null bytes")
         .into_raw()
 }
+
+#[cfg(test)]
+mod tests;

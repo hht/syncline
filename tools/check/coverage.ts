@@ -138,8 +138,8 @@ async function rustCoverage(root: string, wasmProfiles: string) {
     first,
     ...rest.flatMap((object) => ['-object', object]),
     `-instr-profile=${merged}`,
-    // Standard library and dependency sources, and test files declared as `mod tests;`.
-    '-ignore-filename-regex=/(\\.cargo|rustc)/|/tests\\.rs$',
+    // Standard library and dependency sources, and test files (`mod tests;`, or `mod <concern>_tests;` beside them).
+    '-ignore-filename-regex=/(\\.cargo|rustc)/|[/_]tests\\.rs$',
   ]);
   return stdout.replaceAll(/^SF:(.*)$/gm, (_, file: string) => `SF:${relative(root, file)}`);
 }

@@ -71,10 +71,53 @@ fn unreadable_call_with_id_replies_error_and_database_remains_usable() {
 }
 
 #[test]
-fn call_before_open_replies_closed() {
+fn call_before_open_replies_closed_and_one_without_a_reply_is_dropped() {
     let library = Library::start("closed");
+    library.send(&json!({ "type": "stop", "channel": "" }));
     library.send(&json!({ "type": "query", "id": 1, "sql": "SELECT 1", "params": [] }));
-    assert_eq!(library.reply(1)["error"]["message"], "local database is closed");
+    let batch: Json = serde_json::from_str(&library.handle.next().unwrap()).unwrap();
+    assert_eq!(
+        batch,
+        json!([{ "type": "reply", "id": 1, "error": { "message": "local database is closed" } }])
+    );
+}
+
+#[test]
+fn opening_again_replies_already_opened_and_the_database_stays_open() {
+    let library = Library::start("reopen");
+    library.open(1);
+    library.send(&json!({ "type": "open", "id": 2, "options": opening() }));
+    assert_eq!(library.reply(2)["error"]["message"], "local database has already been opened");
+    library.send(&json!({ "type": "query", "id": 3, "sql": "SELECT 3", "params": [] }));
+    assert_eq!(library.reply(3)["value"], json!([[3]]));
+}
+
+#[test]
+fn unreadable_validation_answer_fails_the_write_instead_of_leaving_it_open() {
+    let library = Library::start("unreadable-validation");
+    let id = json!({ "name": "id", "field": "id", "storage": "text", "notNull": true, "boolean": false, "json": false });
+    let note = json!({ "name": "note", "columns": [id], "key": ["id"], "indexes": [], "foreignKeys": [] });
+    let config = json!({ "synced": [note], "localOnly": [], "readOnly": [], "retired": [], "schemas": ["note"] });
+    library.send(&json!({ "type": "open", "id": 1, "options": { "config": config } }));
+    assert_eq!(library.reply(1).get("error"), None);
+    library.send(&json!({ "type": "begin", "id": 2 }));
+    library.reply(2);
+    let insert = "INSERT INTO note (id) VALUES ('n1')";
+    library.send(&json!({ "type": "execute", "id": 3, "write": 2, "sql": insert, "params": [] }));
+    library.reply(3);
+    library.send(&json!({ "type": "end", "id": 4, "write": 2, "commit": true }));
+    while !serde_json::from_str::<Vec<Json>>(&library.handle.next().unwrap())
+        .unwrap()
+        .iter()
+        .any(|it| it["type"] == "validate")
+    {}
+    // A lone surrogate in an issue message, which JSON.stringify emits but serde_json cannot read
+    library
+        .handle
+        .send(r#"{"type":"validated","write":2,"invalid":{"issues":[{"message":"\ud800"}]}}"#.to_owned());
+    assert!(library.reply(4)["error"]["message"].as_str().unwrap().contains("unrecognized call"));
+    library.send(&json!({ "type": "query", "id": 5, "sql": "SELECT count(*) FROM note", "params": [] }));
+    assert_eq!(library.reply(5)["value"], json!([[0]]));
 }
 
 fn opening() -> Json {
@@ -113,6 +156,17 @@ fn queued_handles_on_same_file_run_sequentially_after_preceding_closes() {
         handle.send(json!({ "type": "close", "id": 3 }).to_string());
         assert_eq!(replies(handle, 3)[0].get("error"), None);
     }
+}
+
+#[test]
+fn database_reaching_the_head_of_the_queue_before_asking_to_open_opens_once_it_asks() {
+    let first = Library::start("early-turn");
+    first.open(1);
+    let second = Handle::start(first.directory.join("test.db"));
+    first.send(&json!({ "type": "close", "id": 2 }));
+    first.reply(2);
+    second.send(json!({ "type": "open", "id": 1, "options": opening() }).to_string());
+    assert_eq!(replies(&second, 1)[0].get("error"), None);
 }
 
 #[test]

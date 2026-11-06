@@ -8,6 +8,8 @@
     "src/cloudflare/test-worker.ts",
     // Vitest setup file the full check enables through an environment variable.
     "src/test/rust-coverage.ts",
+    // Local cloud the native Rust tests start with node.
+    "tools/dev/local-cloud.ts",
     "src/**/*.test.ts",
     "probes/cloudflare/worker.ts",
     "probes/cloudflare/push-size.ts",

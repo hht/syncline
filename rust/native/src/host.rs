@@ -275,4 +275,8 @@ fn now() -> f64 {
 }
 
 #[cfg(test)]
+mod cloud_tests;
+#[cfg(test)]
+mod network_tests;
+#[cfg(test)]
 mod tests;
