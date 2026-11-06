@@ -98,6 +98,24 @@ test('aborts request on timeout if response headers stall or stream pauses mid-t
   expect(half.received).toEqual([{ type: 'failed', id: 1, error: expect.stringContaining('Pull timed out') }]);
 });
 
+test('a fetch ignoring the abort that answers after the timeout leaves no timer armed and reports nothing more', async () => {
+  const { armed, schedule, fire } = timers();
+  const late = Promise.withResolvers<Response>();
+  const { received } = shell(() => late.promise, schedule);
+  fire();
+  await flush();
+  late.resolve(new Response('{"patch":[]}'));
+  await flush();
+  expect([received, armed.size]).toEqual([[{ type: 'failed', id: 1, error: expect.stringContaining('Pull timed out') }], 0]);
+});
+
+test('a request rejected with a value that is not an Error reports that value as text', async () => {
+  const { schedule } = timers();
+  const { received } = shell(() => Promise.reject('offline'), schedule);
+  await flush();
+  expect(received).toEqual([{ type: 'failed', id: 1, error: 'offline' }]);
+});
+
 test('stream decoder decodes multibyte UTF-8 characters split across chunk boundaries', async () => {
   const { schedule } = timers();
   const { response, push, close } = streamed();

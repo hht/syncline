@@ -28,6 +28,16 @@ test('reports via reportError in browser and worker environments', () => {
   expect(reported).toEqual([new Error('UI error')]);
 });
 
+test('re-throws in a microtask when neither reportError nor ErrorUtils exists', () => {
+  const queued: (() => void)[] = [];
+  vi.stubGlobal('reportError', undefined);
+  vi.stubGlobal('ErrorUtils', undefined);
+  vi.stubGlobal('queueMicrotask', (task: () => void) => queued.push(task));
+  notifyAll([failing]);
+  expect(queued).toHaveLength(1);
+  expect(() => queued[0]?.()).toThrow(new Error('UI error'));
+});
+
 test('snapshots listeners to prevent re-invoking resubscribed or newly added listeners and skips removed ones', () => {
   const listeners = new Set<() => void>();
   const calls: string[] = [];

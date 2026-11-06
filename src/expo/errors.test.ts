@@ -14,3 +14,9 @@ test('other errors preserve Worker stack trace across boundary so caller can loc
   const original = new Error('Pull failed');
   expect(across(original).stack).toBe(original.stack);
 });
+
+test('an error without a stack trace (stack is non-standard) serializes its message alone', () => {
+  const bare = new Error('Pull failed');
+  delete bare.stack;
+  expect(serializeError(bare)).toStrictEqual({ message: 'Pull failed' });
+});
