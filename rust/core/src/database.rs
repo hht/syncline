@@ -12,11 +12,16 @@
 //! (lexical semicolon scanning also fails on constructs like `$name(...)` containing semicolons).
 //! PRAGMAs are rejected only during compile: SQLite compiles PRAGMAs internally at runtime (such as session extension inspecting table schemas).
 //! The authorizer remains registered and toggles via an atomic switch: re-registering an authorizer invalidates all compiled statements.
+//! The connection turns off SQLite's foreign key enforcement, which native builds enable by default (`libsqlite3-sys` compiles with
+//! `SQLITE_DEFAULT_FOREIGN_KEYS=1`) and the web does not: tables Syncline creates declare no `REFERENCES` (it enforces declared foreign keys
+//! itself), so enforcement reaches only the app's own tables, where a reference to a synced row would fail every download deleting that row.
 //! The connection enables defensive mode: integrator statements cannot directly modify raw database pages (`sqlite_dbpage`) or writable schema (`writable_schema`).
 //! What it should not know: what changesets are used for, table schemas, or which statements integrators may execute beyond the guards above.
 //! @see <https://sqlite.org/sessionintro.html>
 //! @see <https://sqlite.org/c3ref/set_authorizer.html>
 //! @see <https://sqlite.org/c3ref/commit_hook.html>
+//! @see <https://sqlite.org/foreignkeys.html#fk_enable>
+//! @see <https://docs.rs/crate/libsqlite3-sys/0.39.1/source/build.rs> (`SQLITE_DEFAULT_FOREIGN_KEYS=1`)
 //! @see <https://sqlite.org/c3ref/c_dbconfig_defensive.html> (`SQLITE_DBCONFIG_DEFENSIVE`)
 //! @see <https://sqlite.org/security.html> (defense-in-depth: enable defensive)
 //! @see <https://sqlite.org/pragma.html> (compile-time PRAGMA execution)
@@ -56,7 +61,7 @@ pub struct Database {
 impl Database {
     /// # Errors
     ///
-    /// Returns an error if SQLite fails to enable defensive mode or register the authorizer or commit hook.
+    /// Returns an error if SQLite fails to turn off foreign key enforcement, enable defensive mode, or register the authorizer or commit hook.
     ///
     /// # Panics
     ///
@@ -71,6 +76,7 @@ impl Database {
             !compiles_later,
             "SQLite compiled with bytecode virtual table: integrator statements can execute PRAGMAs at runtime via bytecode table"
         );
+        connection.pragma_update(None, "foreign_keys", false)?;
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         let guarding = Arc::new(AtomicBool::new(false));
         let refusing = guarding.clone();
@@ -277,6 +283,18 @@ mod tests {
                 ("w2".to_owned(), Some("bench".to_owned()))
             ]
         );
+    }
+
+    #[test]
+    fn app_foreign_keys_do_not_block_deleting_referenced_rows() {
+        let device = opened();
+        let connection = device.connection();
+        connection
+            .execute_batch("CREATE TABLE remark (id TEXT PRIMARY KEY, workout_id TEXT REFERENCES workout (id)); INSERT INTO remark VALUES ('r1', 'w1');")
+            .unwrap();
+        connection.execute("DELETE FROM workout", []).unwrap();
+        let remarks: i64 = connection.query_row("SELECT count(*) FROM remark", [], |row| row.get(0)).unwrap();
+        assert_eq!((notes(&device), remarks), (vec![], 1));
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { Space } from '../cloud/space.ts';
 import type { Poke } from '../common/protocol.ts';
 import type { remoteDatabase } from '../expo/remote-database.ts';
 import { Device } from '../test/test-device.ts';
-import { upload, write } from '../test/test-schema.ts';
+import { createWorkout, pulled, tables, upload, workout as workoutRow, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { exercise, read, set, withWorkout, workout } from './test-workout.ts';
 
@@ -179,4 +179,16 @@ test('deep chain of self-references (one row per level, 20,000 levels): deleting
   });
   await write(device, (tx) => tx.delete(node).where(eq(node.id, 'n0')));
   expect(storage.sql.exec('SELECT count(*) AS count FROM node').toArray()).toEqual([{ count: 0 }]);
+});
+
+test('an app table referencing a synced row (REFERENCES) does not stop a pull deleting that row, and keeps its reference', async () => {
+  const space = new Space(cloudStorage(createWorkout), tables);
+  space.mutate((tx) => tx.insert(workoutRow, { id: 'w1', note: 'squat' }));
+  const storage = deviceStorage(createWorkout, 'CREATE TABLE remark (id TEXT PRIMARY KEY, workout_id TEXT REFERENCES workout (id))');
+  const device = new Device(storage, tables);
+  await device.private.receive(pulled(space, device));
+  storage.sql.exec("INSERT INTO remark VALUES ('r1', 'w1')");
+  space.mutate((tx) => tx.delete(workoutRow, { id: 'w1' }));
+  await device.private.receive(pulled(space, device));
+  expect([workouts(storage), storage.sql.exec('SELECT * FROM remark').toArray()]).toEqual([[], [{ id: 'r1', workout_id: 'w1' }]]);
 });
