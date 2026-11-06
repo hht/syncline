@@ -1,5 +1,6 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import {
+  type Change,
   forward,
   forwardShared,
   type SharedDefinition,
@@ -131,9 +132,9 @@ export class TestSpace extends SynclineSpace<Env> {
     return this.held();
   }
 
-  /** Resubmits a held write with its original changes. */
-  retryHeld(client: string, id: number) {
-    this.resubmit(client, id);
+  /** Resubmits a held write with its original changes, or with `changes` in their place. */
+  retryHeld(client: string, id: number, changes?: Change[]) {
+    this.resubmit(client, id, changes);
   }
 
   /** Server write: inserts notes; rolls back and rethrows if fail is true. */

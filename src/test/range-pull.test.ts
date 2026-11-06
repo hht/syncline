@@ -131,7 +131,7 @@ test('missing primary-key columns in range falls back to full table rescan; un-s
   const [patch] = await refetch(space, device, [
     { table: 'set', after: { workoutId: 'w1' } },
     { table: 'workout', until: { note: 'w2' } },
-    { table: 'gone' },
+    { table: 'gone', after: { id: 'g1' } },
   ]);
   expect(patch?.filter((op) => op.op === 'drop')).toEqual([
     { op: 'drop', table: 'gone' },

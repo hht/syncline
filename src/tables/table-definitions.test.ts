@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   blob,
+  customType,
   foreignKey,
   index,
   integer,
@@ -76,6 +77,14 @@ test('device: initializes STRICT table with incremental auto_vacuum, omitting NO
   ]);
 });
 
+test('device: a custom column type whose driver value is a boolean stores its default as the integer SQLite reads it as', () => {
+  const flag = customType<{ data: boolean }>({ dataType: () => 'integer', toDriver: (value) => value });
+  const storage = open();
+  storage.define([sqliteTable('setting', { id: text().primaryKey(), on: flag().default(true), off: flag().default(false) })]);
+  storage.sql.exec("INSERT INTO setting (id) VALUES ('s')");
+  expect(storage.sql.exec('SELECT "on", "off" FROM setting').toArray()).toEqual([{ on: 1, off: 0 }]);
+});
+
 test('device: skips redundant index creation when the first foreign key column matches the first primary key column', () => {
   const storage = open();
   storage.define([workout, exercise, set]);
@@ -98,8 +107,12 @@ test('device: rejects unsupported index and default configurations at schema ini
   const unique = sqliteTable('a', { id: text().primaryKey(), code: text() }, (table) => [uniqueIndex('a.code').on(table.code)]);
   const partial = sqliteTable('c', { id: text().primaryKey(), code: text() }, (table) => [index('c.code').on(table.code).where(sql`1`)]);
   const expression = sqliteTable('b', { id: text().primaryKey(), at: integer().default(sql`(unixepoch())`) });
+  const computed = sqliteTable('d', { id: text().primaryKey(), code: text() }, (table) => [index('d.code').on(sql`lower(${table.code})`)]);
   expect(() => open().define([unique])).toThrow('UNIQUE');
   expect(() => open().define([partial])).toThrow('WHERE');
+  expect(() => open().define([computed])).toThrow(
+    'Table d index d.code uses an expression, which is not supported; index column names directly',
+  );
   expect(() => open().define([expression])).toThrow('SQL expression');
 });
 
@@ -200,6 +213,25 @@ test('cloud: returns deferred index statements for missing foreign key indexes o
   const fresh = cloud();
   expect(defineTables(fresh, [workout, exercise])).toEqual([]);
   expect(schemaOf(fresh).map(([name]) => name)).toContain('exercise.workout');
+});
+
+test('cloud: an existing table defers creating the bucket indexes its rules now want and dropping the ones they no longer do', () => {
+  const program = sqliteTable('program', { id: text().primaryKey(), status: text() });
+  const published = { name: '_syncline_bucket.program.public.1', columns: ['id'], where: "status = 'published'" };
+  const drafts = { name: '_syncline_bucket.program.drafts.2', columns: ['status', 'id'] };
+  const storage = cloud();
+  expect(defineTables(storage, [program], [program], () => [published])).toEqual([]);
+  storage.sql.exec('CREATE INDEX "program.status" ON "program" ("status")');
+  const indexes = () =>
+    storage.sql
+      .exec("SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name")
+      .toArray()
+      .map(({ name }) => name);
+  expect(indexes()).toEqual(['_syncline_bucket.program.public.1', 'program.status']);
+  expect(defineTables(storage, [program], [program], () => [drafts])).toEqual([
+    'CREATE INDEX IF NOT EXISTS "_syncline_bucket.program.drafts.2" ON "program" ("status", "id")',
+    'DROP INDEX IF EXISTS "_syncline_bucket.program.public.1"',
+  ]);
 });
 
 test('cloud: rejects adding non-null columns without static defaults to existing tables', () => {

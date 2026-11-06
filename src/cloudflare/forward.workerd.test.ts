@@ -10,10 +10,12 @@ import { pullResponse, recording, space, url } from './test-space.ts';
 
 // Entry Worker forward: verifies protocol version, validates token, and forwards authenticated requests stripped of tokens.
 
-test('returns 401 for missing or unrecognized tokens on WebSocket and HTTP pulls', async () => {
+test('returns 401 for missing, undecodable, or unrecognized tokens on WebSocket and HTTP pulls', async () => {
   const requests: RequestInit[] = [
     { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': subprotocol } },
     { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}nobody` } },
+    // Not valid percent-encoding: no token can be decoded from it.
+    { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}%E0%A4` } },
     {},
     { headers: { Authorization: 'Bearer nobody' } },
   ];
@@ -99,11 +101,12 @@ test('returns 401 without forwarding when verify callback resolves to null', asy
   expect(response.status).toBe(401);
 });
 
-test('handles POST HTTP pull requests: 400 on malformed bodies, 405 on GET, and supports 20000 clients in body', async () => {
+test('handles POST HTTP pull requests: 400 on malformed or missing bodies, 405 on GET, and supports 20000 clients in body', async () => {
   const name = space();
   const headers = { Authorization: `Bearer ${name}.${Number.MAX_SAFE_INTEGER}` };
   for (const body of ['not json', '{}', '{"cookie":null,"extra":1}'])
     expect((await exports.default.fetch(pullURL(url), { method: 'POST', body, headers })).status, body).toBe(400);
+  expect((await exports.default.fetch(pullURL(url), { method: 'POST', headers })).status, 'no body').toBe(400);
   expect((await exports.default.fetch(pullURL(url), { headers })).status).toBe(405);
   const clients = Array.from({ length: 20_000 }, () => crypto.randomUUID());
   const response = await pullResponse(

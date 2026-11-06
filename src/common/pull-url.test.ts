@@ -28,7 +28,7 @@ test('parses private space pull bodies and rejects duplicate tables, non-objects
     expect(() => parsePullBody(JSON.stringify({ cookie: null, ranges: bad })), JSON.stringify(bad)).toThrow('Malformed');
 });
 
-test('rejects unexpected properties or mismatched property types in private space pull bodies', () => {
+test('rejects unexpected properties, mismatched property types, or a body that is not an object in private space pull bodies', () => {
   for (const body of [
     {},
     { cookie: null, landed: 'x' },
@@ -42,6 +42,7 @@ test('rejects unexpected properties or mismatched property types in private spac
   ])
     expect(() => parsePullBody(JSON.stringify(body)), JSON.stringify(body)).toThrow('Malformed');
   expect(() => parsePullBody('not json')).toThrow();
+  for (const body of ['null', '[]', '"text"']) expect(() => parsePullBody(body), body).toThrow(`Malformed Pull body: ${body}`);
 });
 
 test('accepts only recognized shared space and connection query parameters, rejecting private space parameters in URLs', () => {

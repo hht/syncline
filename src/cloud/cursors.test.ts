@@ -110,48 +110,63 @@ function scanning(kind: (typeof kinds)[number]) {
   throw new Error('Did not reach mid-scan cursor');
 }
 
-/** Builds forged positions targeting individual fields. */
+/**
+ * Builds forged positions targeting individual fields: `unrecognized` ones fail parsing or history checks, while `resumable` ones are
+ * well-formed and on history, so the pull resumes from them (a device altering its own cursor changes only what it reads itself).
+ */
 function forgedFields(space: Space, real: Record<string, unknown> & { scan: Record<string, unknown> }) {
   type At = { version: number; nonce: number };
   const { round, tail } = real as unknown as { round: { from: unknown; to: At }; tail: { at: At } };
   const future = { version: 9999, nonce: 1 };
-  return {
+  const unrecognized = {
+    notJson: 'not json',
+    emptyObject: {},
+    array: [],
     fullNotBoolean: { ...real, full: 'yes' },
     watermarkInFuture: { ...real, round: { ...round, to: future } },
     watermarkNonceMismatch: { ...real, round: { ...round, to: { ...round.to, nonce: round.to.nonce + 1 } } },
     roundFromInFuture: { ...real, round: { ...round, from: future } },
     tailInFuture: { ...real, tail: { at: future } },
     tailNonceMismatch: { ...real, tail: { at: { ...tail.at, nonce: tail.at.nonce + 1 } } },
-    tailIndexOverflow: { ...real, tail: { ...tail, index: 1e9 } },
     tailIndexNegative: { ...real, tail: { ...tail, index: -1 } },
-    tailIndexAtHead: { ...real, tail: { at: space.head(), index: 3 } },
     seenInFuture: { ...real, seen: future },
-    tableNotFound: { ...real, scan: { ...real.scan, table: 'nope' } },
-    prototypeTableName: { ...real, scan: { ...real.scan, table: '__proto__' } },
     keyMissingColumns: { ...real, scan: { table: 'pair', after: { x: 'x1' } } },
-    keyExtraColumns: { ...real, scan: { ...real.scan, after: { id: 'a1', zzz: 1 } } },
-    keyValueNull: { ...real, scan: { ...real.scan, after: { id: null } } },
-    corruptedCarriedProgress: { ...real, carried: { downloaded: 'x', total: -1 } },
+    scanBucketNotString: { ...real, scan: { ...real.scan, bucket: 1 } },
     rangesNotArray: { ...real, ranges: { table: 'a' } },
     rangesMissingTableName: { ...real, ranges: [{ after: { id: 'a1' } }] },
     rangesMissingKeyColumns: { ...real, ranges: [{ table: 'pair', after: { x: 'x1' } }] },
     rangesInvalidValues: { ...real, ranges: [{ table: 'a', until: { id: [1] } }] },
+    subNotString: { ...real, sub: 1 },
+    addedNotTrue: { ...real, added: false },
+  };
+  const resumable = {
+    real,
+    tailIndexOverflow: { ...real, tail: { ...tail, index: 1e9 } },
+    tailIndexAtHead: { ...real, tail: { at: space.head(), index: 3 } },
+    // A table no longer synced (retired by a deployment) skips to the next table.
+    tableNotFound: { ...real, scan: { ...real.scan, table: 'nope' } },
+    prototypeTableName: { ...real, scan: { ...real.scan, table: '__proto__' } },
+    keyExtraColumns: { ...real, scan: { ...real.scan, after: { id: 'a1', zzz: 1 } } },
+    keyValueNull: { ...real, scan: { ...real.scan, after: { id: null } } },
+    corruptedCarriedProgress: { ...real, carried: { downloaded: 'x', total: -1 } },
     rangesUnsyncedTableWithBounds: { ...real, ranges: [{ table: 'nope', after: { id: 'a1' } }] },
   };
+  const encoded = (cursors: Record<string, unknown>) =>
+    Object.entries(cursors).map(([label, value]) => [label, typeof value === 'string' ? value : JSON.stringify(value)] as const);
+  return { unrecognized: encoded(unrecognized), resumable: encoded(resumable) };
 }
 
 describe('forged or corrupted cursors return gracefully without throwing (which would trigger 500 errors in Durable Objects)', () => {
   for (const kind of kinds) {
-    test(`${kind.name} space: rejects various forged cursors without throwing`, () => {
+    test(`${kind.name} space: an unrecognized cursor restarts the pull (a full pull with clear, or a reset in shared spaces), and a well-formed one resumes`, () => {
       const { space, real } = scanning(kind);
-      const fields = forgedFields(space, real);
-      const forged: Record<string, string> = {
-        notJson: 'not json',
-        emptyObject: '{}',
-        array: '[]',
-        ...Object.fromEntries(Object.entries(fields).map(([label, value]) => [label, JSON.stringify(value)])),
-      };
-      for (const [label, cursor] of Object.entries(forged)) expect(() => kind.pull(space, cursor), label).not.toThrow();
+      const { unrecognized, resumable } = forgedFields(space, real);
+      const restarted = kind.name === 'private' ? { patch: expect.arrayContaining([{ op: 'clear' }]) } : { reset: true };
+      for (const [label, cursor] of unrecognized) expect(kind.pull(space, cursor), label).toMatchObject(restarted);
+      for (const [label, cursor] of resumable) {
+        const pulled = kind.pull(space, cursor);
+        expect('patch' in pulled && !pulled.patch.some(({ op }) => op === 'clear'), label).toBe(true);
+      }
     });
   }
 });

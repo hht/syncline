@@ -129,3 +129,30 @@ test('an exporter name that is not well-formed text throws on construction: stor
   const exporter = { position: async () => undefined, write: async () => undefined };
   expect(() => new Exports({ reserved: 'syncline:' } as never, { exports: { 'cut\uD800': exporter } })).toThrow('well-formed');
 });
+
+test('a failing exporter is reported by name with the message it threw, or with the thrown value as text when that is not an Error', async () => {
+  const { space } = setup();
+  const events: Event[] = [];
+  const failing = (thrown: unknown) => ({
+    position: async () => {
+      throw thrown;
+    },
+    write: async () => undefined,
+  });
+  const context = {
+    poll: space.poll.bind(space),
+    by: () => undefined,
+    reserved: 'syncline:',
+    events: (event: Event) => events.push(event),
+  };
+  const exports = new Exports(context, { exports: { stats: failing(new Error('quota exceeded')), search: failing('timeout') } });
+  for (const name of ['stats', 'search']) {
+    // The schedule hands a rejected run to failed.
+    const chore = exports.chore(`syncline:export:${name}`, Date.now());
+    chore?.failed(await chore.run().catch((error: unknown) => error));
+  }
+  expect(events).toEqual([
+    { type: 'export.failed', name: 'stats', reason: 'quota exceeded' },
+    { type: 'export.failed', name: 'search', reason: 'timeout' },
+  ]);
+});

@@ -3,7 +3,7 @@ import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import type { Chunk } from '../common/protocol.ts';
 import { ValidationError } from '../tables/validation.ts';
-import { catalog, landedRequest, program, pullAll, viewer } from '../test/test-catalog.ts';
+import { catalog, contents, day, landedRequest, program, pullAll, rules, schema, viewer } from '../test/test-catalog.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
 
@@ -122,6 +122,27 @@ test('server writes store any text exactly, or throw ValidationError exactly whe
       expect(storage.sql.exec('SELECT id, body FROM note WHERE id = ?', row.id).toArray()).toEqual([row]);
     }),
   );
+});
+
+test('a shared space server write updates a cloud-only table row unrecorded, beside a synced row recorded in its bucket', () => {
+  const audit = sqliteTable('audit', { id: text().primaryKey(), note: text() });
+  const storage = cloudStorage(...schema, 'CREATE TABLE audit (id TEXT PRIMARY KEY, note TEXT)');
+  storage.sql.exec("INSERT INTO audit VALUES ('a1', 'old')");
+  const space = new Space(storage, [program, day], { shared: { buckets: rules } });
+  space.mutate((tx) => {
+    tx.update(audit, { id: 'a1', note: 'new' });
+    tx.insert(program, { id: 'p1', status: 'published' });
+  });
+  expect(storage.sql.exec('SELECT id, note FROM audit').toArray()).toEqual([{ id: 'a1', note: 'new' }]);
+  expect(contents(pullAll(space, viewer, { cookie: null }))).toEqual(['program/p1']);
+});
+
+test('a server write storing bytes in a text column of a table created without STRICT throws ValidationError and stores nothing', () => {
+  const storage = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)');
+  const space = new Space(storage, [note]);
+  const writing = () => space.mutate((tx) => tx.insert(note, { id: 'n1', body: new Uint8Array([1]) as never }));
+  expect(writing).toThrow(new ValidationError('note', [{ path: ['body'], message: 'must be a string' }]));
+  expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
 });
 
 test('a shared space server write that catches a failed statement and goes on writing commits the rest, each row reported from its bucket before the write', () => {

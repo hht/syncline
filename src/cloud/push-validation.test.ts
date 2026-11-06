@@ -21,3 +21,19 @@ test.for([
   expect(space.held()).toEqual([expect.objectContaining({ id: 1, reason: expect.stringContaining(reason) })]);
   expect(storage.sql.exec('SELECT id FROM entry').toArray()).toEqual([{ id: 'e2' }]);
 });
+
+test('a pushed row whose integrator validator throws something other than an Error is held, with that value as its reason', () => {
+  const storage = cloudStorage('CREATE TABLE entry (id TEXT PRIMARY KEY, done INTEGER, settings TEXT)');
+  const crashing = {
+    '~standard': {
+      version: 1 as const,
+      vendor: 'test',
+      validate: () => {
+        throw 'validator crashed';
+      },
+    },
+  };
+  const space = new Space(storage, [entry], { validation: new Map([[entry, crashing]]) });
+  space.push([{ client: 'c1', id: 1, changes: [{ op: 'put', table: 'entry', row: { id: 'e1' } }] }]);
+  expect(space.held()).toEqual([expect.objectContaining({ id: 1, reason: 'validator crashed' })]);
+});
