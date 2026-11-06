@@ -68,6 +68,7 @@ pub struct Connection {
     pub(super) started: bool,
     pub(super) attempt: Option<Attempt>,
     next_attempt: u64,
+    /// Exists only while its attempt is live: cancelling the attempt drops it
     pub(super) link: Option<Link>,
     /// Attempt ID of active resync
     clearing: Option<u64>,
@@ -246,9 +247,8 @@ impl Connection {
     /// Called when shared space table setup completes (or fails): resumes waiting attempt
     pub fn opened(&mut self, ctx: &mut Context, opened: Opened) {
         self.opened = opened;
-        if let Some((attempt, token)) = self.waiting_open.take()
-            && self.live(attempt)
-        {
+        // Cancelling the attempt drops its wait
+        if let Some((attempt, token)) = self.waiting_open.take() {
             self.ready(ctx, attempt, token);
         }
     }

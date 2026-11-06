@@ -80,6 +80,7 @@ impl Connection {
             }
             Ok(_) => false,
         };
+        // Status updates leave the pull in place
         let Some(pull) = &mut self.pull else { return };
         pull.first = false;
         if !stalled {
@@ -102,12 +103,14 @@ impl Connection {
             },
             delay,
         );
+        // Callers wait only with a pull in place
         if let Some(pull) = &mut self.pull {
             pull.step = Step::Waiting { timer };
         }
     }
 
     pub(in crate::sync) fn pull_waited(&mut self, ctx: &mut Context) {
+        // Only this timer moves a pull out of waiting, and cancelling the pull cancels it
         if matches!(
             self.pull,
             Some(Pull {
@@ -126,6 +129,7 @@ impl Connection {
             ctx.out.report(error.clone());
             return self.stepped(ctx, Err(error));
         }
+        // Gone only after two faults: confirming a landed chunk broke the link (dropping the pull), then a read failed
         let Some(pull) = self.pull.take() else { return };
         self.fail(ctx, pull.attempt, error.clone(), Kind::Download);
         ctx.out.report(error);
@@ -133,6 +137,7 @@ impl Connection {
 
     /// Pull finished (pull before connecting may carry an error): no longer downloading; proceeds with post-pull actions.
     pub(super) fn finish(&mut self, ctx: &mut Context, result: Result<(), Failure>) {
+        // Callers finish only the pull in place
         let Some(pull) = self.pull.take() else { return };
         let attempt = pull.attempt;
         if result.is_ok() {

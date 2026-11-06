@@ -135,7 +135,6 @@ impl Heartbeat {
         out.schedule(
             Timer::Beat {
                 channel: self.channel.clone(),
-                socket: self.socket,
                 beat,
             },
             delay,

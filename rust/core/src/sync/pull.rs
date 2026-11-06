@@ -11,7 +11,7 @@ use crate::sync::connection::Connection;
 use crate::sync::connection::attempt::request_token;
 use crate::sync::error::Failure;
 use crate::sync::instructions::Instruction;
-use crate::sync::mirror::Target;
+use crate::sync::mirror::{Mirror, Target};
 use crate::sync::{Context, Job, SCHEMA_CONFLICT, SCHEMA_HEADER, VERSION_CONFLICT, wire};
 use std::collections::HashMap;
 
@@ -107,10 +107,8 @@ impl Connection {
     }
 
     /// Current connection invalidated: cancels in-flight pull, timers, and requests, ignoring returning results.
-    pub(super) fn cancel_pull(&mut self, out: &mut crate::sync::instructions::Out, attempt: u64) {
-        let Some(pull) = self.pull.take_if(|pull| pull.attempt == attempt) else {
-            return;
-        };
+    pub(super) fn cancel_pull(&mut self, out: &mut crate::sync::instructions::Out) {
+        let Some(pull) = self.pull.take() else { return };
         match pull.step {
             Step::Waiting { timer } => out.cancel(Some(timer)),
             Step::Token { timeout, .. } => out.cancel(Some(timeout)),
@@ -119,24 +117,22 @@ impl Connection {
         }
     }
 
-    /// Pulls next chunk, or completes.
+    /// Pulls next chunk, or completes. A pull must be in place.
     fn iterate(&mut self, ctx: &mut Context) {
-        let Some(pull) = &self.pull else { return };
-        let first = pull.first;
-        let more = first
-            || match self.mirror().behind(ctx.device, ctx.now) {
+        let mirror = Mirror(&self.channel);
+        let Some(pull) = &mut self.pull else { return };
+        let more = pull.first
+            || match mirror.behind(ctx.device, ctx.now) {
                 Ok(behind) => behind,
                 Err(error) => return self.thrown(ctx, error),
             };
         if !more {
             return self.finish(ctx, Ok(()));
         }
-        let before = match self.mirror().cookie(ctx.device) {
+        pull.before = match mirror.cookie(ctx.device) {
             Ok(before) => before,
             Err(error) => return self.thrown(ctx, error),
         };
-        let Some(pull) = &mut self.pull else { return };
-        pull.before = before;
         if let Some(token) = pull.token.clone() {
             self.fetch(ctx, token, false);
         } else {
@@ -193,6 +189,7 @@ impl Connection {
             headers,
             body: target.body.clone(),
         });
+        // Sent only for the pull in place
         if let Some(pull) = &mut self.pull {
             pull.step = Step::Fetching {
                 request,
@@ -207,23 +204,24 @@ impl Connection {
     /// Response received (unrecognized requests ignored): unsuccessful status is an error (protocol version and schema conflicts have distinct errors); on success, parses and enqueues to receive.
     pub fn response(&mut self, ctx: &mut Context, request: u32, status: u16, body: &str) {
         let Some(pull) = &mut self.pull else { return };
-        if !matches!(pull.step, Step::Fetching { request: asked, .. } if asked == request) {
-            return;
-        }
-        let attempt = pull.attempt;
-        let Step::Fetching {
-            sent,
-            token,
-            target,
-            judged,
-            ..
-        } = std::mem::replace(&mut pull.step, Step::Idle)
-        else {
-            return;
+        let (sent, token, target, judged) = match std::mem::replace(&mut pull.step, Step::Idle) {
+            Step::Fetching {
+                request: asked,
+                sent,
+                token,
+                target,
+                judged,
+            } if asked == request => (sent, token, target, judged),
+            step => {
+                pull.step = step;
+                return;
+            }
         };
+        let attempt = pull.attempt;
         if status == VERSION_CONFLICT {
             return self.stepped(ctx, Err(Failure::version(body.trim().parse().unwrap_or(0))));
         }
+        // The cloud answers 412 only to a schema fingerprint, which only private spaces send; any other 412 is a failed status
         if status == SCHEMA_CONFLICT
             && let Some(handshake) = &mut self.handshake
         {
@@ -250,6 +248,7 @@ impl Connection {
                     pulled,
                     sent,
                 });
+                // Still in place: nothing on this path since the lookup above touches it
                 if let Some(pull) = &mut self.pull {
                     pull.step = Step::Applying;
                 }

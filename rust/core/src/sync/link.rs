@@ -30,19 +30,18 @@ impl Connection {
 
     /// Called when a message arrives on WebSocket
     pub fn socket_message(&mut self, ctx: &mut Context, socket: u32, data: &str) {
-        let Some(attempt) = self.linked(socket).filter(|attempt| self.live(*attempt)) else {
+        let Some(link) = self.link.as_mut().filter(|link| link.socket == socket) else {
             return;
         };
-        if let Some(link) = &mut self.link {
-            link.heartbeat.heard(ctx.out);
-        }
+        let attempt = link.attempt;
+        link.heartbeat.heard(ctx.out);
         if data == PONG {
             return;
         }
         // Parsing occurs upon arrival (in socket receipt order); intake is queued (waits for active local writes)
         match wire::message(data) {
             Ok(message) => {
-                self.advise(ctx, socket, advice(&message));
+                self.advise(ctx, advice(&message));
                 ctx.jobs.push(Job::Heard {
                     channel: self.channel.clone(),
                     attempt,
@@ -56,10 +55,8 @@ impl Connection {
 
     /// Called when cloud closes connection (or connection drops): categorizes error kind by close code
     pub fn socket_closed(&mut self, ctx: &mut Context, socket: u32, code: u16, reason: &str) {
-        let Some(attempt) = self.linked(socket).filter(|attempt| self.live(*attempt)) else {
-            return;
-        };
-        self.drop_link(ctx.out);
+        let Some(attempt) = self.linked(socket) else { return };
+        self.cancel(ctx.out);
         match code {
             VERSION_MISMATCH => self.fail(ctx, attempt, Failure::version(reason.trim().parse().unwrap_or(0)), Kind::Download),
             // Schema fingerprint mismatch: cloud returns its schema on HTTP pull, evaluated by client
@@ -96,10 +93,9 @@ impl Connection {
 
     /// Pushes first batch of pending writes; informs heartbeat once sent
     pub(super) fn push(&mut self, ctx: &mut Context) {
-        let Some(link) = &self.link else { return };
-        if !self.live(link.attempt) || !link.open {
+        let Some(link) = self.link.as_ref().filter(|link| link.open) else {
             return;
-        }
+        };
         let (attempt, socket) = (link.attempt, link.socket);
         let mut failed = None;
         let channel = self.channel.clone();
@@ -124,9 +120,6 @@ impl Connection {
     /// Resets backoff only on progress: pushes confirmed, or pending queue empty
     pub(super) fn confirm(&mut self, ctx: &mut Context, lmids: &Lmids) {
         let Some(link) = &mut self.link else { return };
-        if !self.attempt.is_some_and(|current| current.id == link.attempt && !current.aborted) {
-            return;
-        }
         let confirmed = self.pushes.confirm(link.socket, lmids);
         if confirmed == Some(Confirmed::Uploaded) {
             link.heartbeat.uploaded(ctx.out);
@@ -142,31 +135,25 @@ impl Connection {
         self.push(ctx);
     }
 
-    /// Closes and drops connection: cancels attempt, stops heartbeat and renewal timers
+    /// Closes and drops connection: stops heartbeat and renewal timers
     pub(super) fn drop_link(&mut self, out: &mut Out) {
-        let Some(link) = &mut self.link else { return };
-        let (attempt, socket) = (link.attempt, link.socket);
+        let Some(mut link) = self.link.take() else { return };
         link.heartbeat.stop(out);
-        out.cancel(link.renewal.take());
-        out.push(Instruction::Disconnect { socket });
-        self.cancel(out, attempt);
+        out.cancel(link.renewal);
+        out.push(Instruction::Disconnect { socket: link.socket });
     }
 
     /// Called when heartbeat timer fires
-    pub(super) fn beat(&mut self, ctx: &mut Context, socket: u32, beat: Beat) {
-        let Some(link) = self.link.as_mut().filter(|link| link.socket == socket) else {
-            return;
-        };
+    pub(super) fn beat(&mut self, ctx: &mut Context, beat: Beat) {
+        // Dropping the link cancels its heartbeat timers
+        let Some(link) = &mut self.link else { return };
         let Some(lost) = link.heartbeat.fired(ctx.out, beat) else { return };
         let (attempt, open) = (link.attempt, link.open);
-        if !self.live(attempt) {
-            return;
-        }
         // Connected but failed to receive catch-up (slow connection); pull over HTTP before next connect
         if !lost.got_catch_up && open {
             self.pull_needed = true;
         }
-        self.drop_link(ctx.out);
+        self.cancel(ctx.out);
         self.fail(ctx, attempt, Failure::new(lost.reason), Kind::Download);
     }
 
@@ -207,12 +194,9 @@ impl Connection {
         }
     }
 
-    /// Invariant violated (parse error, cookie mismatch, intake failure): disconnects, records failure, and reports
+    /// Invariant violated (parse error, cookie mismatch, intake failure): disconnects, records failure, and reports. Attempt must be live.
     fn broken(&mut self, ctx: &mut Context, attempt: u64, error: Failure) {
-        if !self.live(attempt) {
-            return;
-        }
-        self.drop_link(ctx.out);
+        self.cancel(ctx.out);
         self.fail(ctx, attempt, error.clone(), Kind::Download);
         ctx.out.report(error);
     }
@@ -238,6 +222,7 @@ impl Connection {
 
     /// Called when range checksum completes (matched indicates match; None if aborted): continues pulling if matched and next range remains, or if mismatched and range pull needed
     pub fn verified(&mut self, ctx: &mut Context, attempt: u64, matched: Option<bool>) {
+        // Waiters hear a finished round in turn, and an attempt may wait twice: an earlier answer may have broken the link
         if matched.is_none() || !self.live(attempt) {
             return;
         }
@@ -250,19 +235,19 @@ impl Connection {
     }
 
     /// Handles cloud advice: records reconnect spread; schedules reconnect 1 to 4 minutes before token expiry
-    fn advise(&mut self, ctx: &mut Context, socket: u32, advice: Advice) {
+    fn advise(&mut self, ctx: &mut Context, advice: Advice) {
         if let Some(spread) = advice.spread {
             self.backoff.spread(spread);
         }
         let Some(renewal) = advice.expires_in.and_then(|expires_in| Backoff::renewal(expires_in, ctx.random)) else {
             return;
         };
+        // Advice arrives only on the link in place
         let Some(link) = &mut self.link else { return };
         ctx.out.cancel(link.renewal.take());
         link.renewal = Some(ctx.out.schedule(
             Timer::Renewal {
                 channel: self.channel.clone(),
-                socket,
             },
             renewal,
         ));

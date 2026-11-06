@@ -48,12 +48,10 @@ impl Connection {
                 }
             }
             Timer::PullWait { .. } => self.pull_waited(ctx),
-            Timer::Beat { socket, beat, .. } => self.beat(ctx, socket, beat),
-            Timer::Renewal { socket, .. } => {
-                if self.link.as_ref().is_some_and(|link| link.socket == socket) {
-                    self.reconnect(ctx);
-                }
-            }
+            Timer::Beat { beat, .. } => self.beat(ctx, beat),
+            // Dropping the link cancels its renewal
+            Timer::Renewal { .. } => self.reconnect(ctx),
+            // The client handles these itself and routes only connection timers here
             Timer::Resume(_) | Timer::Stuck => {}
         }
     }
@@ -71,42 +69,34 @@ impl Connection {
 
     /// Invalidates all prior attempt state: token request, pull, scheduled reconnect, WebSocket
     pub(super) fn abort(&mut self, out: &mut Out) {
-        if let Some(attempt) = self.attempt {
-            self.cancel(out, attempt.id);
-        }
+        self.cancel(out);
         self.attempt = None;
         out.cancel(self.reconnecting.take());
-        self.drop_link(out);
     }
 
-    /// Cancels attempt: subsequent messages and late results are ignored
-    pub(in crate::sync) fn cancel(&mut self, out: &mut Out, attempt: u64) {
-        if let Some(current) = &mut self.attempt
-            && current.id == attempt
-        {
+    /// Cancels the current attempt, dropping its link, token request, opening wait, and pull: subsequent messages and late results are ignored
+    pub(in crate::sync) fn cancel(&mut self, out: &mut Out) {
+        if let Some(current) = &mut self.attempt {
             current.aborted = true;
         }
-        if let Some(wait) = self.token.take_if(|wait| wait.attempt == attempt) {
+        self.drop_link(out);
+        if let Some(wait) = self.token.take() {
             out.cancel(Some(wait.timeout));
         }
-        self.waiting_open.take_if(|(waiting, _)| *waiting == attempt);
-        self.cancel_pull(out, attempt);
+        self.waiting_open = None;
+        self.cancel_pull(out);
     }
 
-    /// Attempts connection: requests token, pulls until caught up, then connects WebSocket
+    /// Attempts connection: requests token, pulls until caught up, then connects WebSocket. Sync must have started: an attempt or a
+    /// scheduled reconnect exists only between start and stop.
     pub(super) fn connect(&mut self, ctx: &mut Context) {
-        if !self.started {
-            return;
-        }
         let attempt = self.begin(ctx.out);
         let (request, timeout) = request_token(ctx.out, &self.channel);
         self.token = Some(TokenWait { attempt, request, timeout });
     }
 
+    /// Token request of a live attempt answered (cancelling the attempt drops its request).
     fn tokened(&mut self, ctx: &mut Context, attempt: u64, token: Result<String, Failure>) {
-        if !self.live(attempt) {
-            return;
-        }
         match token {
             Err(error) => self.fail(ctx, attempt, error, Kind::Download),
             // Shared space table setup and upgrades queue in local task queue (after active local writes): wait before reading cookie

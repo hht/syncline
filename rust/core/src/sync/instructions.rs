@@ -100,9 +100,9 @@ pub enum Timer {
     /// Scheduled reconnect for a space
     Reconnect { channel: String },
     /// Heartbeat timer for a connection
-    Beat { channel: String, socket: u32, beat: Beat },
+    Beat { channel: String, beat: Beat },
     /// Proactive reconnect before token expiry
-    Renewal { channel: String, socket: u32 },
+    Renewal { channel: String },
     /// Pull waiting on backoff or initial random delay
     PullWait { channel: String },
     /// Token request timeout for a space
