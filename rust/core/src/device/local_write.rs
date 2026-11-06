@@ -27,6 +27,7 @@ impl Device {
                 self.recording = Some(recording);
                 Ok(())
             }
+            // Starting a recording fails only when SQLite runs out of memory (`Recorder::start`).
             Err(error) => {
                 self.abort_write()?;
                 Err(error)

@@ -78,6 +78,7 @@ fn write_shadow(db: &Connection, table: &SyncedTable, ops: Vec<Op>) -> Result<Ve
     let insert = insert_rows(table, &shadow, "value", "json_each(?) WHERE true");
     let rows: Vec<&Row> = puts
         .iter()
+        // Never `None`: `puts` holds only puts.
         .filter_map(|op| if let Op::Put { row, .. } = op { Some(row) } else { None })
         .collect();
     match db.execute(&insert, [rows_json(&rows)]) {
@@ -98,6 +99,7 @@ fn latest_per_row(ops: Vec<Op>) -> Vec<Op> {
     let mut latest: Vec<Op> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
     for op in ops {
+        // Never skips: `stash` writes only puts and deletes into a shadow table.
         let (Op::Put { key, .. } | Op::Del { key, .. }) = &op else {
             continue;
         };
@@ -116,6 +118,7 @@ fn latest_per_row(ops: Vec<Op>) -> Vec<Op> {
 fn insert_each(db: &Connection, table: &SyncedTable, shadow: &str, insert: &str, puts: Vec<Op>) -> Result<Vec<Op>, Error> {
     let mut kept = Vec::new();
     for op in puts {
+        // Never skips: `write_shadow` passes only puts.
         let Op::Put { key, row, .. } = &op else { continue };
         if let Err(error) = db.execute(insert, [rows_json(&[row])]) {
             let error = Error::from(error);
@@ -162,6 +165,7 @@ pub fn stash<S: std::hash::BuildHasher>(
                     .iter()
                     .filter_map(|op| match op {
                         Op::Put { key, .. } | Op::Del { key, .. } => Some(key.clone()),
+                        // Never taken: a run into a shadow table holds only puts and deletes.
                         _ => None,
                     })
                     .collect();
