@@ -51,12 +51,14 @@ impl Link {
         std::thread::spawn(move || {
             for device in listener.incoming() {
                 let device = device.unwrap();
+                // Read before locking: waiting for the request must not keep tests from switching modes or checking the wire.
+                let socket = upgrading(&device);
                 let mut wire = accepting.lock().unwrap();
                 match wire.mode {
                     Mode::Refuse => wire.refused += 1,
-                    Mode::RefuseSockets if upgrading(&device) => wire.refused += 1,
+                    Mode::RefuseSockets if socket => wire.refused += 1,
                     Mode::Hold => wire.held.push(device),
-                    Mode::RefuseSockets | Mode::Forward => forward(device, &mut wire),
+                    Mode::RefuseSockets | Mode::Forward => forward(device, socket, &mut wire),
                 }
             }
         });
@@ -92,9 +94,9 @@ fn upgrading(device: &TcpStream) -> bool {
     String::from_utf8_lossy(&head[..read]).to_lowercase().contains("upgrade: websocket")
 }
 
-/// Passes a device's connection on to the local cloud both ways.
-fn forward(device: TcpStream, wire: &mut Wire) {
-    wire.sockets += usize::from(upgrading(&device));
+/// Passes a device's connection on to the local cloud both ways; `socket` tells whether it opens a WebSocket.
+fn forward(device: TcpStream, socket: bool, wire: &mut Wire) {
+    wire.sockets += usize::from(socket);
     let upstream = TcpStream::connect(cloud().trim_start_matches("http://")).unwrap();
     wire.open.push(device.try_clone().unwrap());
     for (mut from, mut to) in [(device.try_clone().unwrap(), upstream.try_clone().unwrap()), (upstream, device)] {
