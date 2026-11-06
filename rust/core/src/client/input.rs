@@ -232,4 +232,25 @@ mod tests {
         ));
         assert!(matches!(reading("not json"), Unreadable::Deliver(Instruction::Report { .. })));
     }
+
+    #[test]
+    fn call_id_names_app_calls_and_not_events() {
+        let id = |input: &str| call_id(&serde_json::from_str::<Input>(input).expect("readable input"));
+        let calls = [
+            r#"{"type":"query","id":1,"sql":"SELECT 1","params":[]}"#,
+            r#"{"type":"tablesOf","id":1,"sql":"SELECT 1"}"#,
+            r#"{"type":"begin","id":1}"#,
+            r#"{"type":"execute","id":1,"write":2,"sql":"SELECT 1","params":[]}"#,
+            r#"{"type":"end","id":1,"write":2,"commit":true}"#,
+            r#"{"type":"shared","id":1,"name":"team","tables":[],"owner":null}"#,
+            r#"{"type":"connect","id":1,"channel":"","url":"https://sync.test"}"#,
+            r#"{"type":"sync","id":1,"channel":""}"#,
+            r#"{"type":"resync","id":1,"channel":"","discardPending":false}"#,
+            r#"{"type":"reconnect","id":1,"channel":""}"#,
+        ];
+        assert!(calls.iter().all(|call| id(call) == Some(1)));
+        // Events carry no call to answer
+        assert_eq!(id(r#"{"type":"start","channel":""}"#), None);
+        assert_eq!(id(r#"{"type":"fired","timer":3}"#), None);
+    }
 }

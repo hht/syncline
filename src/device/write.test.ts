@@ -167,6 +167,12 @@ test('a statement run through a local write after it finished fails, leaving the
   await expect(leaked?.insert(workout).values({ id: 'w2', note: 'bench' })).rejects.toMatchObject({
     cause: { message: 'this local write has already finished' },
   });
+  // Also while another write is open
+  await write(phone.device, async () => {
+    await expect(leaked?.insert(workout).values({ id: 'w2', note: 'bench' })).rejects.toMatchObject({
+      cause: { message: 'this local write has already finished' },
+    });
+  });
   expect(read(phone.storage).workouts).toMatchObject([{ id: 'w1' }]);
   expect(phone.device.private.pending()).toEqual([]);
 });

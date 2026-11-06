@@ -111,6 +111,13 @@ test('throws on a cleartext sync URL unless allowCleartext, which admits http://
   expect(() => new Connection(device.private, { url: cleartext, token: async () => 't', allowCleartext: true })).not.toThrow();
 });
 
+test('a space syncs at most once per device, and calls on a space not syncing are refused', async () => {
+  const device = new Device(deviceStorage(createNote), tables);
+  await expect(device.private.calls.call({ type: 'sync', channel: '' })).rejects.toThrow('sync not established for space: ');
+  new Connection(device.private, { url, token: async () => 't' });
+  expect(() => new Connection(device.private, { url, token: async () => 't' })).toThrow('space is already syncing: ');
+});
+
 test('defaults to global fetch without this binding: prevents Illegal invocation in browsers', async () => {
   const calls: unknown[] = [];
   vi.stubGlobal('fetch', function (this: unknown) {

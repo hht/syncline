@@ -26,7 +26,13 @@ async function corrupted({ limit, token }: { limit?: number; token?: () => Promi
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   };
-  return { cloud, storage, connection, settle, server };
+  /** The read error the test injected broke the link once; the device reconnected, refetched the corrupted range, and caught up. */
+  const recovered = (reported: string[]) => {
+    expect(reported).toEqual([expect.stringMatching(injectedError), expect.stringContaining('local data does not match cloud')]);
+    expect(snapshot(storage)).toEqual(snapshot(cloud));
+    expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined });
+  };
+  return { cloud, storage, device, connection, settle, server, network, recovered };
 }
 
 test('verifies once caught up after connecting: refetches segment by range if local store corrupted, restores cloud parity, and stays connected', async () => {
@@ -45,7 +51,7 @@ test('verifies once caught up after connecting: refetches segment by range if lo
 });
 
 test('a read error checking whether a failed verification left the device behind breaks the link: the range is refetched after reconnecting', async () => {
-  const { cloud, storage, connection, settle } = await corrupted();
+  const { storage, connection, settle, recovered } = await corrupted();
   const reported = captureReported();
   try {
     // Arms the fault once caught up (the landed catch-up was checked) and before the verification finishes
@@ -57,10 +63,8 @@ test('a read error checking whether a failed verification left the device behind
     });
     connection.start();
     await settle();
-    expect(reported).toEqual([expect.stringMatching(injectedError), expect.stringContaining('local data does not match cloud')]);
+    recovered(reported);
     expect(armed.dropped).toBe(true);
-    expect(snapshot(storage)).toEqual(snapshot(cloud));
-    expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined });
   } finally {
     connection.stop();
     vi.useRealTimers();
@@ -99,6 +103,37 @@ test('a verification finishing while a pull started by a hint is in flight leave
       true,
       undefined,
     ]);
+  } finally {
+    connection.stop();
+    vi.useRealTimers();
+  }
+});
+
+test('a hint for the version the device holds, arriving while a verification runs, has the attempt wait on it twice: a read error answering the first ends the attempt, and the second answer starts no pull for it', async () => {
+  const { storage, device, connection, settle, network, recovered } = await corrupted();
+  const reported = captureReported();
+  try {
+    const at = { hinted: false, downloading: false, armed: false, scheduled: [] as number[] };
+    connection.onStatus(({ connected, downloading }) => {
+      // Caught up with the verification just begun: the cloud repeats the version the device holds (a hint racing a pull)
+      if (connected && !at.hinted) {
+        at.hinted = true;
+        for (const socket of network.accepted) socket.send(JSON.stringify({ hint: device.private.cookie() }));
+      }
+      // The hint's pull landed nothing new and joined the verification again; the fault waits for the verification's answers
+      if (at.hinted && at.downloading && !downloading && !at.armed) {
+        at.armed = true;
+        failOnce(storage, 'SELECT refetch FROM _syncline_cookie');
+      }
+      at.downloading = downloading;
+      // Timers once both answers are handled (the instructions of one step are delivered together)
+      if (at.armed && !connected && at.scheduled.length === 0) queueMicrotask(() => at.scheduled.push(network.timers.size));
+    });
+    connection.start();
+    await settle();
+    recovered(reported);
+    // Only the reconnect: a pull waiting to start for the ended attempt would race it
+    expect(at.scheduled[0]).toBe(1);
   } finally {
     connection.stop();
     vi.useRealTimers();
