@@ -24,6 +24,9 @@ export const subHeader = 'Syncline-Sub';
 /** Returns the deterministic broadcast shard name: spaceName#shardIndex. */
 export const shardName = (space: string, index: number) => `${space}#${index}`;
 
+/** Returns a definition's broadcast shard count: the entry routes devices among these shards and the space fans out to all of them. */
+export const shardCount = ({ shards = defaultShards }: Pick<SharedDefinition, 'shards'>) => shards;
+
 /** Configuration for a shared space shared across entry Workers and {@link SynclineSharedSpace}. */
 export type SharedDefinition = {
   /** Synced tables (table name -> Drizzle table). */
@@ -78,7 +81,7 @@ export async function forwardShared<Broadcast extends Rpc.DurableObjectBranded>(
     forwarded.headers.set(expiresHeader, String(identity.expiresAt));
     forwarded.headers.set(subscriptionHeader, JSON.stringify(subscription));
     forwarded.headers.set(subHeader, subscribed.sub);
-    const shard = Math.floor(Math.random() * (route.definition.shards ?? defaultShards));
+    const shard = Math.floor(Math.random() * shardCount(route.definition));
     return route.broadcast.getByName(shardName(route.space, shard)).fetch(forwarded);
   }
   // HTTP pulls (GET only): rebuilds canonical URLs with sorted query parameters and canonical cursor to maximize cache hit rates.

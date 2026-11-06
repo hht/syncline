@@ -166,6 +166,7 @@ export class Buckets {
     const byTable = new Map<string, Record<string, unknown>[]>();
     for (const [table, key] of rows) byTable.set(table, [...(byTable.get(table) ?? []), key]);
     for (const [table, keys] of byTable) {
+      // Always found: rows come from a write to declared tables, or from a round, which stops at the commit recording a table's departure
       const columns = this.#keys.get(table) ?? [];
       for (const [condition, values] of among(columns, keys))
         for (const row of query(

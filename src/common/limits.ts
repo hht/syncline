@@ -122,3 +122,10 @@ export const readBytes = 1_000_000;
 
 /** Maximum number of rows or commits fetched from SQLite per query batch. */
 export const batchRows = 100;
+
+/**
+ * Maximum byte length of a Durable Object name that reaches the object: longer names leave ctx.id.name undefined, so a shared space's
+ * name with its longest shard suffix (#index) must fit.
+ * @see https://developers.cloudflare.com/durable-objects/api/id/#name
+ */
+export const nameBytes = 1024;

@@ -7,6 +7,7 @@ import { defaultRows } from '../cloud/shared.ts';
 import {
   commitFloor,
   keyBytes,
+  nameBytes,
   readRows,
   sharedWriteRows,
   subscriptionBytes,
@@ -50,6 +51,7 @@ test.each([
   `Synced columns total ${count(maxRowBytes)} bytes (DO rows cap at ${mb(valueBytes)}`,
   `greater of roughly ${mib(commitFloor)} and`,
   `default ${count(defaultShards)} shards`,
+  `(\`#${defaultShards - 1}\` with the default ${count(defaultShards)} shards) fits in ${count(nameBytes)} bytes (UTF-8)`,
   `${count(writeRows)} rows (shared spaces support only server writes, up to ${count(sharedWriteRows)} rows: each row must also maintain its buckets), and primary keys total ${mb(writeKeyBytes)}`,
   `requests at most ${count(rowsPerDay)} rows per day`,
   // Durations

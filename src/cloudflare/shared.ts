@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { Broadcast, defaultShards } from '../cloud/broadcast.ts';
+import { Broadcast } from '../cloud/broadcast.ts';
 import { Buckets } from '../cloud/buckets.ts';
 import { type Events, isolated, quiet } from '../cloud/events.ts';
 import { type Confirmed, Fanout } from '../cloud/fanout.ts';
@@ -7,15 +7,17 @@ import type { Round } from '../cloud/shared.ts';
 import { Space } from '../cloud/space.ts';
 import { withTimeout } from '../cloud/timeout.ts';
 import type { Transaction } from '../cloud/transaction.ts';
+import { nameBytes } from '../common/limits.ts';
 import { type Chunk, type Poke, ping, pong, type Reset, socketLimit, subprotocol } from '../common/protocol.ts';
 import { type PullRequest, parsePullRequest } from '../common/pull-url.ts';
+import { utf8Bytes } from '../common/size.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader } from './forward.ts';
 import { reserved } from './schedule.ts';
 import { ScheduledObject } from './scheduled-object.ts';
-import { type SharedDefinition, shardName, subscribedOf } from './shared-forward.ts';
+import { type SharedDefinition, shardCount, shardName, subscribedOf } from './shared-forward.ts';
 import { Upkeep } from './upkeep.ts';
 
 export { forwardShared, type SharedDefinition, type SharedIdentity, SynclineSharedEntry } from './shared-forward.ts';
@@ -50,6 +52,21 @@ const notifyTimeout = 10_000;
 
 /** Maximum character count of changed rows in a fanout round to keep individual shard notices within socketLimit. */
 const roundLimit = 10 * socketLimit;
+
+/**
+ * Returns the Durable Object's name, from which broadcast shard names derive; throws when it was reached without one.
+ * Reached through an ID from idFromString or newUniqueId, or by a name over nameBytes, an object has no name, so a space would fan out
+ * to shards no device connects to.
+ * @see https://developers.cloudflare.com/durable-objects/api/id/#name
+ */
+function nameOf(ctx: DurableObjectState) {
+  const { name } = ctx.id;
+  if (name === undefined)
+    throw new Error(
+      `A shared space Durable Object reached by an ID without a name (idFromString, newUniqueId) or by a name over ${nameBytes} bytes cannot route its shards: reach it by name (getByName, idFromName)`,
+    );
+  return name;
+}
 
 /** Computes Cache-Control header based on pull request and chunk properties. */
 function cacheControl(request: PullRequest, chunk: Poke | Chunk | Reset) {
@@ -88,6 +105,11 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
   /** Initializes tables, bucket rules, indexes, upkeep chores, and fanout delivery from `options` (see {@link SharedOptions}). */
   constructor(ctx: DurableObjectState, env: Env, options: SharedOptions<Env>) {
     super(ctx, env);
+    // Checked before touching storage
+    const name = nameOf(ctx);
+    const shards = Array.from({ length: shardCount(options) }, (_, index) => shardName(name, index));
+    if (utf8Bytes(shardName(name, shards.length - 1)) > nameBytes)
+      throw new Error(`Shared space name is too long: with its shard suffix (#${shards.length - 1}) it must fit in ${nameBytes} bytes`);
     const { schema, buckets, chunkRows, validation, events = quiet, retired } = options;
     const tables = Object.values(schema);
     const shared = { buckets, ...(chunkRows && { chunkRows }) };
@@ -102,11 +124,10 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
       truncation: this.#space,
     });
     const broadcast = options.broadcast(env);
-    const name = ctx.id.name ?? '';
     // Dispatches fanout rounds with notifyTimeout per shard; updates KV and arms periodic wakeup when all shards acknowledge.
     this.#fanout = new Fanout(
       {
-        shards: Array.from({ length: options.shards ?? defaultShards }, (_, index) => shardName(name, index)),
+        shards,
         head: () => this.#space.head(),
         round: (from, head) => this.#space.round(roundLimit, from ?? head),
         send: (shard, round) =>
@@ -194,9 +215,13 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env, shared: DurableObjectNamespace<SynclineSharedSpace>, events?: Events) {
     super(ctx, env);
-    const name = ctx.id.name ?? '';
-    const space = shared.getByName(name.slice(0, name.lastIndexOf('#')));
-    this.#broadcast = new Broadcast(ctx, async () => (await space.latest()) as Round, events);
+    // Resolved per query rather than at construction: Cloudflare documents the name for requests by name and for alarms, not for hibernated
+    // WebSocket wakeups, so a wakeup without it must not fail construction
+    const space = () => {
+      const name = nameOf(ctx);
+      return shared.getByName(name.slice(0, name.lastIndexOf('#')));
+    };
+    this.#broadcast = new Broadcast(ctx, async () => (await space().latest()) as Round, events);
     // Configures automatic WebSocket ping-pong handling at the runtime layer without waking the actor.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(ping, pong));
   }
