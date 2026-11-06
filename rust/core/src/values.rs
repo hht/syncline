@@ -80,8 +80,10 @@ pub fn value_of(json: &Json) -> Result<Value, Error> {
                 .collect::<Option<_>>()
                 .ok_or_else(|| Error::Failed(format!("BLOB parameter must be an array of bytes: {json}")))?,
         ),
-        Json::Object(object) => match object.get("real").and_then(Json::as_str).map(str::parse::<f64>) {
-            Some(Ok(real)) if object.len() == 1 => Value::Real(real),
+        // Only infinities: finite reals are JSON numbers, and Rust would parse "NaN", which SQLite binds as NULL
+        Json::Object(object) => match (object.len(), object.get("real").and_then(Json::as_str)) {
+            (1, Some("Infinity")) => Value::Real(f64::INFINITY),
+            (1, Some("-Infinity")) => Value::Real(f64::NEG_INFINITY),
             _ => {
                 return Err(Error::Failed(format!(
                     "parameters must be number, text, boolean, null, byte array, or infinity: {json}"
