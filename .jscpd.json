@@ -1,5 +1,6 @@
 {
   "minTokens": 50,
   "format": ["typescript", "tsx", "javascript", "jsx", "markdown", "rust"],
-  "gitignore": true
+  "gitignore": true,
+  "ignore": ["**/README.zh-CN.md", "**/docs/reference/zh-CN/**"]
 }

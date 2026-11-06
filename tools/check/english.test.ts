@@ -25,3 +25,15 @@ test('skips binary content containing null bytes', () => {
   const binaryText = 'PNG\r\n\0\u4e2d\u6587';
   expect(checkEnglish([{ path: 'assets/image.png', text: binaryText }])).toEqual([]);
 });
+
+test('skips Chinese translations and the switcher linking to them, but not other Han text beside it', () => {
+  const zh = '\u7b80\u4f53\u4e2d\u6587';
+  const files = [
+    { path: 'README.zh-CN.md', text: `# Syncline\n${zh}` },
+    { path: 'docs/reference/zh-CN/limits.md', text: zh },
+    { path: 'README.md', text: `English | [${zh}](README.zh-CN.md)` },
+    { path: 'docs/reference/limits.md', text: `[${zh}](zh-CN/limits.md) ${zh}` },
+    { path: 'docs/zh-CN/notes.md', text: zh },
+  ];
+  expect(checkEnglish(files).map(({ file, line }) => `${file}:${line}`)).toEqual(['docs/reference/limits.md:1', 'docs/zh-CN/notes.md:1']);
+});

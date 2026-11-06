@@ -80,7 +80,7 @@ const gates: Gate[] = [
       root,
       ['src', 'probes', 'tools', 'docs', 'rust', 'README.md', 'AGENTS.md'],
       [
-        { path: '.', minTokens: 30, ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md' },
+        { path: '.', minTokens: 30, ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md,README.zh-CN.md,docs/reference/zh-CN/**' },
         { path: 'rust', minTokens: 40 },
       ],
     ),
