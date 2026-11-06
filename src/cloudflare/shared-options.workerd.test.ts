@@ -1,8 +1,15 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import { expect, test } from 'vitest';
+import { afterAll, expect, test } from 'vitest';
+import { fannedOut } from './test-shared.ts';
 
 // Shared space Durable Objects: options wired through (validation of server writes, retired names), and addressing by name only.
+
+afterAll(async () => {
+  await fannedOut('validated');
+  await fannedOut('y'.repeat(1022));
+  await fannedOut('catalog');
+});
 
 test('server writes failing validation throw without committing, and retired names are recorded on startup to stay retired', async () => {
   const space = env.CATALOG.getByName('validated');
