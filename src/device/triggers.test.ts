@@ -9,7 +9,7 @@ import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
 // App triggers on synced tables that raise errors: RAISE(ROLLBACK) rolls back everything the device wrote so far, so the device fails what
 // it was doing as a whole instead of carrying on statement by statement, each then committing alone; RAISE(ABORT) sets an arriving row
-// aside, but fails a pull deleting the row.
+// aside, but fails a pull deleting the row. Either one raised while reverting pending writes makes the device refetch from scratch.
 
 const blocking = (event: 'INSERT' | 'UPDATE') =>
   `CREATE TRIGGER blocking BEFORE ${event} ON workout BEGIN SELECT RAISE(ROLLBACK, 'blocked by the app'); END`;
@@ -96,6 +96,55 @@ test('a pull row an app trigger aborts (RAISE(ABORT)) is kept aside with a warni
   expect(local()).toEqual([space.head(), [{ id: 'w2', note: 'bench' }]]);
   expect(storage.sql.exec('SELECT key FROM _syncline_unknown').toArray()).toEqual([{ key: '{"id":"w1"}' }]);
   expect(reported).toEqual([expect.stringContaining('aborted by the app')]);
+});
+
+test.for(['ABORT', 'ROLLBACK'])(
+  'an app trigger raising (RAISE(%s)) while the device reverts its pending writes before landing a pull is reported as a conflict, and the device refetches from scratch, keeping them, once the trigger is gone',
+  async (kind) => {
+    const reported = captureReported();
+    const { space, storage, device, pull, local } = await synced();
+    // Several rows in one write: reverting it must not leave the rows after the raising one deleted
+    await device.write(async (execute) =>
+      execute("INSERT INTO workout (id, note) VALUES ('w9', 'mine'), ('w10', 'mine'), ('w11', 'mine')", []),
+    );
+    storage.sql.exec(
+      `CREATE TRIGGER reverting BEFORE DELETE ON workout WHEN OLD.id = 'w9' BEGIN SELECT RAISE(${kind}, 'kept by the app'); END`,
+    );
+    space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'squat' }));
+    const before = local();
+    await pull();
+    expect([local(), storage.inTransaction(), device.private.pullRequest().refetch]).toEqual([before, false, true]);
+    expect(reported).toEqual([expect.stringContaining('local data conflicts with pending writes (revert failed); triggering refetch')]);
+    // Landing from scratch deletes the row too, failing like any pull whose delete a trigger fails
+    await expect(pull()).rejects.toThrow('kept by the app');
+    storage.sql.exec('DROP TRIGGER reverting');
+    await pull();
+    const landed = [
+      { id: 'w1', note: 'squat' },
+      { id: 'w10', note: 'mine' },
+      { id: 'w11', note: 'mine' },
+      { id: 'w9', note: 'mine' },
+    ];
+    const rows = workouts(storage).toSorted((a, b) => a.id.localeCompare(b.id));
+    expect([device.private.cookie(), rows, device.private.pending().length]).toEqual([space.head(), landed, 1]);
+  },
+);
+
+test('an app trigger raising while the device reverts its pending writes on open is reported as a conflict, and the device opens and refetches from scratch, keeping them', async () => {
+  const reported = captureReported();
+  const { storage, device } = await synced();
+  await device.write(async (execute) => execute("INSERT INTO workout (id, note) VALUES ('w9', 'mine')", []));
+  device.close();
+  storage.sql.exec(
+    "CREATE TRIGGER reverting BEFORE DELETE ON workout WHEN OLD.id = 'w9' BEGIN SELECT RAISE(ABORT, 'kept by the app'); END",
+  );
+  const reopened = new Device(storage, tables);
+  expect(reported).toEqual([expect.stringContaining('local data conflicts with pending writes (revert failed); triggering refetch')]);
+  expect([reopened.private.pullRequest().refetch, reopened.private.pending().length, workouts(storage)]).toEqual([
+    true,
+    1,
+    [{ id: 'w9', note: 'mine' }],
+  ]);
 });
 
 test('an app trigger raising while the device reverts a pending update is reported as a conflict, like on native, whose SQLite the web build compiles', async () => {

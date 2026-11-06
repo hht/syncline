@@ -2,6 +2,9 @@
 //! Local writes span multiple calls (begin, execute statements, end), requiring continuous recording;
 //! rusqlite [`Session`] borrows the connection, and both are co-located in one struct via `self_cell`.
 //! Reverting a changeset errors if local rows differ (e.g. out-of-band writes to synced tables) rather than silently overwriting.
+//! Reverting runs inside the caller's transaction and refuses every commit meanwhile: an app trigger calling `RAISE(ROLLBACK)` ends that
+//! transaction, after which applying would commit each remaining change alone. The commit hook stays registered and toggles via an atomic
+//! switch, since registering it needs exclusive access to the connection, which the recordings borrow.
 //! When compiling integrator statements (`prepare_guarded`), an authorizer rejects PRAGMAs and row mutations on internal tables (`_syncline_` prefix):
 //! sessions do not record rows with NULL primary keys, so changeset checks cannot see every write to non-STRICT internal tables.
 //! Some PRAGMAs take effect at compile time,
@@ -13,6 +16,7 @@
 //! What it should not know: what changesets are used for, table schemas, or which statements integrators may execute beyond the guards above.
 //! @see <https://sqlite.org/sessionintro.html>
 //! @see <https://sqlite.org/c3ref/set_authorizer.html>
+//! @see <https://sqlite.org/c3ref/commit_hook.html>
 //! @see <https://sqlite.org/c3ref/c_dbconfig_defensive.html> (`SQLITE_DBCONFIG_DEFENSIVE`)
 //! @see <https://sqlite.org/security.html> (defense-in-depth: enable defensive)
 //! @see <https://sqlite.org/pragma.html> (compile-time PRAGMA execution)
@@ -45,12 +49,14 @@ pub struct Database {
     next: u32,
     /// Indicates compilation of integrator statements: authorizer rejects PRAGMAs and internal table writes (atomic flag enables cross-thread access).
     guarding: Arc<AtomicBool>,
+    /// Indicates a revert is applying: the commit hook turns every commit into a rollback.
+    reverting: Arc<AtomicBool>,
 }
 
 impl Database {
     /// # Errors
     ///
-    /// Returns an error if SQLite fails to enable defensive mode or register the authorizer.
+    /// Returns an error if SQLite fails to enable defensive mode or register the authorizer or commit hook.
     ///
     /// # Panics
     ///
@@ -82,10 +88,14 @@ impl Database {
                 Authorization::Allow
             }
         }))?;
+        let reverting = Arc::new(AtomicBool::new(false));
+        let refusing = reverting.clone();
+        connection.commit_hook(Some(move || refusing.load(Ordering::Relaxed)))?;
         Ok(Database {
             cell: Cell::new(connection, |_| HashMap::new()),
             next: 0,
             guarding,
+            reverting,
         })
     }
 
@@ -152,22 +162,28 @@ impl Database {
         })
     }
 
-    /// Reverts a changeset: inverts and applies changes, aborting and returning an error if local rows conflict (missing rows, differing values, or occupied primary keys).
+    /// Reverts a changeset inside the caller's transaction: inverts and applies changes, aborting and returning an error if local rows
+    /// conflict (missing rows, differing values, or occupied primary keys) or the transaction ends meanwhile; the caller then rolls back.
     /// @see <https://sqlite.org/session/sqlite3changeset_apply.html>
     ///
     /// # Errors
     ///
-    /// Returns an error if the changeset cannot be parsed or conflicts with local rows (`SQLITE_ABORT`).
+    /// Returns an error if the changeset cannot be parsed, conflicts with local rows (`SQLITE_ABORT`), or would commit (a non-empty
+    /// changeset with no transaction open, or an app trigger ended it).
     pub fn revert(&self, changeset: &[u8]) -> rusqlite::Result<()> {
         if changeset.is_empty() {
             return Ok(());
         }
         let mut inverted = Vec::new();
         invert_strm(&mut &changeset[..], &mut inverted)?;
-        self.connection()
+        self.reverting.store(true, Ordering::Relaxed);
+        let reverted = self
+            .connection()
             .apply_strm(&mut &inverted[..], None::<fn(&str) -> bool>, |_: ConflictType, _: ChangesetItem| {
                 ConflictAction::SQLITE_CHANGESET_ABORT
-            })
+            });
+        self.reverting.store(false, Ordering::Relaxed);
+        reverted
     }
 }
 
@@ -227,6 +243,7 @@ mod tests {
         assert!(everything.len() > only.len());
         assert_eq!(device.stop(workouts).unwrap(), None);
 
+        device.connection().execute_batch("SAVEPOINT reverting").unwrap();
         device.revert(&only).unwrap();
         assert_eq!(notes(&device), [("w1".to_owned(), Some("squat".to_owned()))]);
         let scratch: i64 = device
@@ -250,12 +267,35 @@ mod tests {
             .execute("UPDATE workout SET note = 'deadlift' WHERE id = 'w1'", [])
             .unwrap();
 
+        device.connection().execute_batch("SAVEPOINT reverting").unwrap();
         let error = device.revert(&changeset).unwrap_err();
         assert_eq!(error.sqlite_error_code(), Some(rusqlite::ErrorCode::OperationAborted), "{error}");
         assert_eq!(
             notes(&device),
             [
                 ("w1".to_owned(), Some("deadlift".to_owned())),
+                ("w2".to_owned(), Some("bench".to_owned()))
+            ]
+        );
+    }
+
+    #[test]
+    fn revert_outside_a_transaction_fails_without_committing() {
+        let mut device = opened();
+        let id = device.record(None).unwrap();
+        device
+            .connection()
+            .execute("INSERT INTO workout VALUES ('w2', 'bench')", [])
+            .unwrap();
+        let changeset = device.stop(id).unwrap().unwrap();
+
+        let error = device.revert(&changeset).unwrap_err();
+        assert_eq!(error.sqlite_error_code(), Some(rusqlite::ErrorCode::ConstraintViolation), "{error}");
+        assert!(!device.in_transaction());
+        assert_eq!(
+            notes(&device),
+            [
+                ("w1".to_owned(), Some("squat".to_owned())),
                 ("w2".to_owned(), Some("bench".to_owned()))
             ]
         );
