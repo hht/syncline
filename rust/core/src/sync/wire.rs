@@ -154,6 +154,59 @@ mod tests {
         }
     }
 
+    /// Each case changes one value of a message that is otherwise accepted to one the cloud never sends.
+    #[test]
+    fn refuses_values_outside_the_protocol() {
+        type Parse = fn(&str) -> Result<(), String>;
+        const POKE: &str = r#"{"base":{"version":1,"nonce":1},"cookie":{"version":2,"nonce":1},"lmids":{"c":1},"patch":[],"held":[{"client":"c","id":1,"reason":"r"}],"checksum":{"parts":[{"table":"t","key":["id"]}],"sum":5,"rows":1},"seen":2,"incarnation":1,"spread":5000,"expiresIn":60000}"#;
+        const CHUNK: &str =
+            r#"{"base":{"version":1,"nonce":1},"next":"n","progress":{"downloaded":1,"total":2},"patch":[],"seen":2,"incarnation":1}"#;
+        const RESET: &str = r#"{"reset":true,"incarnation":1}"#;
+        const HINT: &str = r#"{"hint":{"version":3,"nonce":1},"incarnation":1,"spread":5000}"#;
+        // 2^53: the first integer JS cannot tell from its neighbour
+        const UNSAFE: &str = "9007199254740992";
+        let heard = |text: &str| message(text).map(|_| ());
+        let landed = |text: &str| pulled(text).map(|_| ());
+        let cases: [(&str, Parse, &str, String); 23] = [
+            (POKE, heard, r#""base":{"version":1"#, r#""base":{"version":-1"#.into()),
+            (POKE, heard, r#""nonce":1},"cookie""#, format!(r#""nonce":{UNSAFE}}},"cookie""#)),
+            (POKE, heard, r#""cookie":{"version":2"#, r#""cookie":{"version":-2"#.into()),
+            (POKE, heard, r#"{"c":1}"#, r#"{"c":-1}"#.into()),
+            (POKE, heard, r#""id":1"#, r#""id":-1"#.into()),
+            (POKE, heard, r#""rows":1"#, format!(r#""rows":{UNSAFE}"#)),
+            (POKE, heard, r#""key":["id"]"#, r#""key":[]"#.into()),
+            (POKE, heard, r#""seen":2"#, r#""seen":-1"#.into()),
+            (POKE, heard, r#""incarnation":1"#, r#""incarnation":-1"#.into()),
+            (POKE, heard, r#""spread":5000"#, r#""spread":-1"#.into()),
+            (POKE, heard, r#""spread":5000"#, r#""spread":1.5"#.into()),
+            (POKE, heard, r#""spread":5000"#, r#""spread":1e300"#.into()),
+            (CHUNK, landed, r#""version":1"#, r#""version":-1"#.into()),
+            (
+                CHUNK,
+                landed,
+                r#""patch":[]"#,
+                r#""patch":[{"op":"drop","table":"t","range":{"key":[]}}]"#.into(),
+            ),
+            (CHUNK, landed, r#""seen":2"#, r#""seen":-1"#.into()),
+            (CHUNK, landed, r#""incarnation":1"#, r#""incarnation":-1"#.into()),
+            (CHUNK, landed, r#""downloaded":1"#, r#""downloaded":-1"#.into()),
+            (CHUNK, landed, r#""total":2"#, format!(r#""total":{UNSAFE}"#)),
+            (RESET, landed, "true", "false".into()),
+            (RESET, landed, r#""incarnation":1"#, r#""incarnation":-1"#.into()),
+            (HINT, heard, r#""nonce":1"#, r#""nonce":-1"#.into()),
+            (HINT, heard, r#""incarnation":1"#, r#""incarnation":-1"#.into()),
+            (HINT, heard, r#""spread":5000"#, r#""spread":1.5"#.into()),
+        ];
+        for (valid, parse, from, to) in cases {
+            assert_eq!(parse(valid), Ok(()), "{valid}");
+            let text = valid.replacen(from, &to, 1);
+            assert_ne!(text, valid);
+            let error = parse(&text).err().unwrap_or_default();
+            // Refused by the checks here rather than by serde, which names what it could not parse
+            assert!(error.ends_with("(invalid value)"), "{text}: {error}");
+        }
+    }
+
     fn last(patch: &str) -> String {
         format!(r#"{{"base":null,"cookie":{{"version":1,"nonce":1}},"lmids":{{}},"patch":[{patch}]}}"#)
     }

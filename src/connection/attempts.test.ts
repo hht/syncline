@@ -1,8 +1,9 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
+import { pullNeeded } from '../common/protocol.ts';
 import { flush, withFakeTimers } from '../test/test-drive.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { workout, write } from '../test/test-schema.ts';
-import { failOnce, injectedError } from '../test/test-storage.ts';
+import { failOnce, faultable, injectedError, isInjected } from '../test/test-storage.ts';
 import { heartbeat, linked, reconnect } from './test-connection.ts';
 
 // Connection attempts while connected: a broken invariant on the link reconnects; calls that cannot help start no attempt.
@@ -72,6 +73,63 @@ test('a read error pushing the next batch upon a confirmation breaks the link: t
     expect(reported).toEqual([expect.stringMatching(injectedError)]);
     expect(connection.status()).toMatchObject({ connected: false, downloadError: expect.objectContaining({ message: reported[0] }) });
     connection.stop();
+  }));
+
+/** Whether a read on the device hits a fault still armed. */
+function armed(read: () => unknown) {
+  try {
+    read();
+    return false;
+  } catch (error) {
+    if (!isInjected(error)) throw error;
+    return true;
+  }
+}
+
+test('a storage fault on any statement while reconnecting through a pull is reported; one that stops the attempt fails it, and the next attempt connects', () =>
+  withFakeTimers(async () => {
+    const reported = captureReported();
+    let [statements, failed] = [0, 0];
+    // Fails the after-th statement once the link closes, for each statement reconnecting runs: the first fault outlasting it ends the sweep
+    for (let after = 1; statements === 0; after += 1) {
+      let answered = 0;
+      const respond = (response: object) => {
+        answered += 1;
+        return response;
+      };
+      const { space, storage, device, connection, sockets, fetched, open, catchUp } = await linked({ respond });
+      const before = reported.length;
+      space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
+      faultable(storage).arm(after);
+      // The cloud closes the link asking for an HTTP pull before reconnecting
+      sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: pullNeeded }));
+      vi.advanceTimersByTime(1000);
+      await flush();
+      const stopped = sockets.length === 1;
+      if (armed(() => device.private.cookie())) {
+        statements = after - 1;
+        expect([stopped, reported.length, fetched.length]).toEqual([false, before, 1]);
+      } else {
+        // The test cloud reads device storage to answer: a fault there fails the pull request, which stops the attempt unreported
+        const unanswered = fetched.length > answered;
+        expect([reported.length, unanswered && !stopped]).toEqual([before + (unanswered ? 0 : 1), false]);
+        if (stopped) {
+          failed += 1;
+          expect(connection.status().downloadError?.message).toMatch(injectedError);
+          vi.advanceTimersByTime(60_000);
+          await vi.waitFor(() => expect(sockets).toHaveLength(2));
+        }
+        open();
+        catchUp();
+        await flush();
+        expect([device.private.cookie(), connection.status().connected]).toEqual([space.head(), true]);
+      }
+      connection.stop();
+    }
+    expect(reported.every((message) => injectedError.test(message))).toBe(true);
+    // Reads for the status alone are reported without stopping the attempt
+    expect(failed).toBeGreaterThan(0);
+    expect(failed).toBeLessThan(statements);
   }));
 
 test('start() while started, reconnect() while stopped or resyncing, and a resync superseded by restarting request no token', async () => {

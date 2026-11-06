@@ -157,6 +157,14 @@ test('skips verification with pending mutations; aborts and defers to next cycle
   expect(await device.private.verify()).toBeUndefined();
 });
 
+test('closing the database during a verification ends it without a result', async () => {
+  const { space, device } = await synced();
+  await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000));
+  const verifying = device.private.verify();
+  device.close();
+  expect(await verifying).toBeUndefined();
+});
+
 test('checksum request with concurrent open local write (pulls not queued): daily scanned rows recorded in pull transaction, unmixed with local write; write commits normally, pending mutations contain only its changes', async () => {
   const { space, device, storage } = await synced();
   vi.useFakeTimers({ toFake: ['Date'] });

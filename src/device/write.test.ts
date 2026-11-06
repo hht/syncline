@@ -158,6 +158,38 @@ test('a local write whose rollback fails rolls back the whole transaction, so la
   expect(phone.device.private.pending()).toHaveLength(1);
 });
 
+test('a statement run through a local write after it finished fails, leaving the database untouched', async () => {
+  const { phone } = await withWorkout();
+  let leaked: Parameters<Parameters<typeof write>[1]>[0] | undefined;
+  await write(phone.device, async (tx) => {
+    leaked = tx;
+  });
+  await expect(leaked?.insert(workout).values({ id: 'w2', note: 'bench' })).rejects.toMatchObject({
+    cause: { message: 'this local write has already finished' },
+  });
+  expect(read(phone.storage).workouts).toMatchObject([{ id: 'w1' }]);
+  expect(phone.device.private.pending()).toEqual([]);
+});
+
+test('closing the database while a write is validated fails that write as closed and leaves no row behind', async () => {
+  const storage = deviceStorage(...statements);
+  let device: Device | undefined;
+  const closing = {
+    '~standard': {
+      version: 1 as const,
+      vendor: 'test',
+      // The close reaches the database before the validation result does
+      validate: (value: unknown) => {
+        device?.close();
+        return { value };
+      },
+    },
+  };
+  device = new Device(storage, tables, { validation: new Map([[workout, closing]]) });
+  await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }))).rejects.toThrow('local database is closed');
+  expect(read(storage).workouts).toEqual([]);
+});
+
 test('client ID retrieved via provided randomUUID (Hermes lacks Web Crypto, avoids mutating global crypto): generated on startup and resync', async () => {
   const ids = ['c-1', 'c-2'];
   const device = new Device(deviceStorage(...statements), tables, { randomUUID: () => ids.shift() ?? 'exhausted' });
