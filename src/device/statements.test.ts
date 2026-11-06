@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { remoteDatabase } from '../expo/remote-database.ts';
 import { Device } from '../test/test-device.ts';
@@ -177,6 +177,34 @@ test('local writes fail on the 64-bit minimum integer like any integer beyond th
     await expect(device.write(async (execute) => execute(sql, []))).rejects.toThrow('exceeds safe JS');
   expect(device.private.pending()).toEqual([]);
 });
+
+test.for([
+  ['does not declare fails', [note], 'real in table note is not finite: inf'],
+  [
+    'declares fails validation naming it',
+    [sqliteTable('note', { id: text().primaryKey(), body: text(), ratio: real() })],
+    'must be a finite number',
+  ],
+] as const)(
+  'a local write storing infinity in a column the app %s, uploading nothing rather than null, while a finite real uploads and a row holding infinity can be deleted',
+  async ([, tables, message]) => {
+    // A column a later release added stays in the table after the app rolls back.
+    const storage = deviceStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT, ratio REAL)');
+    const device = new Device(storage, [...tables]);
+    const writing = device.write(async (execute) => execute("INSERT INTO note (id, ratio) VALUES ('n1', 9e999)", []));
+    await expect(writing).rejects.toThrow(message);
+    expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
+    expect(device.private.pending()).toEqual([]);
+    await device.write(async (execute) => execute("INSERT INTO note (id, ratio) VALUES ('n2', 1.5)", []));
+    // Infinity stored outside Syncline does not block deleting its row: a delete uploads only the key.
+    storage.sql.exec("UPDATE note SET ratio = 9e999 WHERE id = 'n2'");
+    await device.write(async (execute) => execute("DELETE FROM note WHERE id = 'n2'", []));
+    expect(device.private.pending().flatMap(({ changes }) => changes)).toEqual([
+      { op: 'put', table: 'note', row: { id: 'n2', body: null, ratio: 1.5 } },
+      { op: 'del', table: 'note', key: { id: 'n2' } },
+    ]);
+  },
+);
 
 test('a Drizzle get in a local write returns the first matching row, or undefined when none match', async () => {
   const { device } = opened();

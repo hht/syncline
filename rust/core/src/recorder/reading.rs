@@ -78,8 +78,8 @@ impl Recorder {
                 let mut row = Vec::new();
                 for (column, value) in order.iter().zip(values) {
                     let Some(value) = value else { continue };
-                    transferable(&table, value)?;
                     if known.contains(column) && only.is_none_or(|only| only.contains(column)) {
+                        transferable(&table, declared.columns.iter().any(|declared| declared.name == *column), value)?;
                         row.push((column.clone(), value.clone()));
                     }
                 }
@@ -126,12 +126,15 @@ impl Recorder {
     }
 }
 
-/// Changed values must be transferable to JS: integers within safe JS integer range, not BLOB (rows are uploaded via JSON; synced tables do not store BLOB)
-fn transferable(table: &str, value: &Value) -> Result<(), Error> {
+/// Uploaded values must be transferable to JS (values a write does not upload, such as the rest of a deleted row, need not be): integers within safe JS integer range, finite reals, not BLOB (rows are uploaded via JSON,
+/// which writes non-finite numbers as null; synced tables do not store BLOB).
+fn transferable(table: &str, declared: bool, value: &Value) -> Result<(), Error> {
     match value {
         Value::Integer(integer) if integer.unsigned_abs() > MAX_SAFE_INTEGER.unsigned_abs() => Err(Error::Failed(format!(
             "integer in table {table} exceeds safe JS integer range: {integer}"
         ))),
+        // Validation rejects them in declared columns, naming the column; a column a later release added stays after a rollback.
+        Value::Real(real) if !declared && !real.is_finite() => Err(Error::Failed(format!("real in table {table} is not finite: {real}"))),
         Value::Blob(_) => Err(Error::Failed(format!("changeset for {table} contains unsupported field type 4"))),
         _ => Ok(()),
     }

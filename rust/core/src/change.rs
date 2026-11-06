@@ -193,6 +193,8 @@ impl Serialize for ToJs<'_> {
             Value::Integer(integer) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => serializer.serialize_i64(*integer),
             Value::Integer(integer) => Err(serde::ser::Error::custom(format!("integer exceeds safe integer range: {integer}"))),
             Value::Real(real) if real.is_finite() => serializer.serialize_f64(*real),
+            // Local writes upload neither non-finite reals nor BLOB (`recorder::reading::transferable`, validation); only values written outside
+            // Syncline reach these arms, such as an infinite key of a deleted row, which serializes to null as in `JSON.stringify`.
             Value::Null | Value::Real(_) => serializer.serialize_unit(),
             Value::Text(text) => serializer.serialize_str(text),
             Value::Blob(bytes) => serializer.collect_seq(bytes),
