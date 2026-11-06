@@ -217,21 +217,18 @@ const afterBigWrite = <T>(limit: number, body: (space: Space, cookie: ReturnType
     return body(space, cookie, reads);
   });
 
-// Writing K rows takes ~2 s when idle and several times longer under parallel test load.
 for (const [label, limit] of [
   ['catch-up on connect (single WebSocket message)', socketLimit],
   ['HTTP pull chunk', 50_000],
 ] as const)
-  test(`after single write modifying K rows, lagging device ${label}: rowsRead has upper bound`, { timeout: 30_000 }, () =>
+  test(`after single write modifying K rows, lagging device ${label}: rowsRead has upper bound`, () =>
     afterBigWrite(0, (space, cookie, reads) => {
       reads.reset();
       expect(space.pull({ cookie }, limit)).toHaveProperty('next');
       expectBounded(reads.total, `single write modified ${bigWrite} rows`);
-    }),
-  );
+    }));
 
-// Two runs writing K rows each (with and without poke), ~5s when idle; needs 30s timeout.
-test('single write modifying K rows: additional rowsRead to assemble poke has upper bound', { timeout: 30_000 }, async () => {
+test('single write modifying K rows: additional rowsRead to assemble poke has upper bound', async () => {
   const written = (limit: number) => afterBigWrite(limit, (_space, _cookie, reads) => reads.total);
   const extra = (await written(socketLimit)) - (await written(0));
   expectBounded(extra, `single write modified ${bigWrite} rows assembling poke`);

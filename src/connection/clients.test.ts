@@ -25,10 +25,7 @@ function connected(device: Device, limit?: number) {
   return { cloud, space, network, connection, addresses };
 }
 
-// 200 opens and writes take ~5 s under high concurrency; the extended timeout leaves room for heavier load.
-test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', {
-  timeout: 30_000,
-}, async () => {
+test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', async () => {
   const storage = deviceStorage(createWorkout);
   let device = new Device(storage, tables);
   for (let launch = 0; launch < 200; launch += 1) {

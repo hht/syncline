@@ -171,10 +171,7 @@ const rangeOf = (next: () => number) => {
   return { key: ['id'], ...(after && { after: { id: after } }), ...(until && { until: { id: until } }) };
 };
 
-// Runs ~2 s standalone and several times longer in pnpm check with parallel gates at full CPU load.
-test('both apply paths produce identical results: random changes applied staged in SQLite vs written one by one match exactly', {
-  timeout: 30_000,
-}, async () => {
+test('both apply paths produce identical results: random changes applied staged in SQLite vs written one by one match exactly', async () => {
   // Local workout is STRICT and has reps: 'bad' cannot be stored, goes into _syncline_unknown
   const strict = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
   const create = 'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT';

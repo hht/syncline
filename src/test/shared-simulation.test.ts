@@ -25,11 +25,10 @@ test.for(Array.from({ length: 100 }, (_, index) => Number(process.env.SIMULATION
   },
 );
 
-test('shared space long run: internal tables, network state, and messages stay bounded however long it runs', { timeout: 60_000 }, () =>
+test('shared space long run: internal tables, network state, and messages stay bounded however long it runs', () =>
   simulated(
     () => new SharedSimulation(Number(process.env.SIMULATION_SEED ?? 0)),
     (simulation) => simulation.close(),
     (message) => message.includes(garbled),
     { epochs: 25, steps: 100, settled: (simulation) => checkSettled({ ...simulation.upkeep(), commitFloor }) },
-  ),
-);
+  ));

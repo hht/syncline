@@ -97,12 +97,14 @@ function setup() {
 
 type Side = ReturnType<typeof setup>['phone'];
 
-/** Phone connects, all queued offline writes are pushed and confirmed, and the cloud has count exercises. */
-async function pushOffline(phone: Side, run: () => Promise<void>, count: number) {
+/** Phone connects, all queued offline writes are pushed and confirmed without the connection closing, and the cloud has count exercises. */
+async function pushOffline({ phone, run, events }: ReturnType<typeof setup>, count: number) {
   phone.connection.start();
   await run();
   expect(phone.device.private.pending()).toEqual([]);
   expect(phone.counts()).toEqual([0, count, 0]);
+  expect(events.filter(({ type }) => type === 'connection.closed')).toEqual([]);
+  phone.connection.stop();
 }
 
 /** Device has count exercises and database free pages shrink shortly after (shrink steps run in batches after commit). */
@@ -147,10 +149,11 @@ test('single write creates full workout plan (~5k rows): pushes once, online dev
   expect(tablet.connection.status()).toMatchObject({ connected: true });
   await deleteAll();
   for (const { connection } of devices) connection.stop();
-}, 60_000);
+});
 
 test('offline writes (~3 MB total, ~100 KB each) push in batches; large poke notification sends hint, device pulls over HTTP without disconnect', async () => {
-  const { phone, run, server, events } = setup();
+  const sides = setup();
+  const { phone, server } = sides;
   const sizes: number[] = [];
   const receive = server.receive.bind(server);
   server.receive = (socket, message) => {
@@ -166,21 +169,17 @@ test('offline writes (~3 MB total, ~100 KB each) push in batches; large poke not
     );
   expect(JSON.stringify(phone.device.private.pending()).length).toBeGreaterThan(3_000_000);
 
-  await pushOffline(phone, run, 3000);
+  await pushOffline(sides, 3000);
   expect(sizes.length).toBeGreaterThan(2);
-  expect(events.filter(({ type }) => type === 'connection.closed')).toEqual([]);
-  phone.connection.stop();
-}, 60_000);
+});
 
 test('small offline writes (~1 KB each, ~300 KB total) push in batches and confirm inline via poke without falling back to HTTP', async () => {
-  const { phone, run, events } = setup();
+  const sides = setup();
   const note = 'x'.repeat(1000);
   for (let e = 0; e < 300; e += 1)
-    await write(phone.device, (tx) => tx.insert(exercise).values({ id: `e${e}`, sort: e, name: 'exercise', extra: { note } }));
+    await write(sides.phone.device, (tx) => tx.insert(exercise).values({ id: `e${e}`, sort: e, name: 'exercise', extra: { note } }));
 
-  await pushOffline(phone, run, 300);
-  expect(events.filter(({ type }) => type === 'connection.closed')).toEqual([]);
-  phone.connection.stop();
+  await pushOffline(sides, 300);
 });
 
 test('single local write exceeding 8 MiB throws and rolls back completely without queueing in pending writes', async () => {
@@ -210,7 +209,7 @@ test('single write with primary keys exceeding 2 MB limit (40k rows): commit log
   // Recording lmid still tracks that the client write was processed even when split into versions.
   expect(cloud.sql.exec('SELECT lmid FROM _syncline_client').toArray()).toEqual([{ lmid: 1 }]);
   for (const { connection } of devices) connection.stop();
-}, 60_000);
+});
 
 test('deleting a row cascades to 60k child rows exceeding 2 MB key limit: cloud deletes in batches and both devices converge', async () => {
   const { phone, tablet, run, online, deleteAll } = setup();
@@ -237,7 +236,7 @@ test('full pull split across many chunks: staged chunks take effect and delete, 
   await Promise.all([tablet.connection.resync(), run()]);
   await expectCompacted(tablet, 20_000);
   for (const { connection } of [phone, tablet]) connection.stop();
-}, 60_000);
+});
 
 test('server write deleting 500 parents: batches cascading deletes with two scans per child table, constant queries, no orphans', () => {
   const cloud = cloudStorage(...schema);

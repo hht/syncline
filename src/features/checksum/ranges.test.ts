@@ -61,10 +61,7 @@ async function cycle(space: Space, device: Device) {
 
 const verified = (storage: Storage) => storage.sql.exec("SELECT at, next FROM _syncline_verified WHERE space = ''").toArray()[0];
 
-// Two devices each download 25,000 rows and verify two segments: 2 s alone, several times longer under parallel check load.
-test('large spaces complete verification across two segments: declared tables read matching local segments by primary key, undeclared table rows (stored separately) filter by stored primary keys and match; records timestamp when complete and stops requesting', {
-  timeout: 30_000,
-}, async () => {
+test('large spaces complete verification across two segments: declared tables read matching local segments by primary key, undeclared table rows (stored separately) filter by stored primary keys and match; records timestamp when complete and stops requesting', async () => {
   const space = filled();
   for (const [tables, statements] of [
     [

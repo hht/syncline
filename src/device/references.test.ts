@@ -179,4 +179,4 @@ test('deep chain of self-references (one row per level, 20,000 levels): deleting
   });
   await write(device, (tx) => tx.delete(node).where(eq(node.id, 'n0')));
   expect(storage.sql.exec('SELECT count(*) AS count FROM node').toArray()).toEqual([{ count: 0 }]);
-}, 60_000);
+});

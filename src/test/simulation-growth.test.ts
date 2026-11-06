@@ -12,7 +12,6 @@ import { injectedPrefix } from './test-storage.ts';
 
 test.for([Number(process.env.SIMULATION_SEED ?? 0)])(
   'seed %i long run: internal tables, network state, and messages stay bounded however long it runs',
-  { timeout: 60_000 },
   async (seed) => {
     await simulated(
       () => new Simulation(seed, { devices: 3, backups: true, restores: true }),
