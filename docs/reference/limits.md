@@ -107,5 +107,5 @@ WebSocket close codes sent by the cloud, handled automatically by devices; a con
 ## Platform requirements
 
 - Cloudflare: Durable Objects backed by SQLite storage; compatibility date no earlier than 2026-04-07 (runtime automatically replies to client Close frames).
-- Devices: iOS and Android require Syncline's native module (requires development build, not available in Expo Go); web local database runs in OPFS, requiring browser dedicated Web Workers to support `createSyncAccessHandle`; only one browser tab per site can keep the database open at any given moment; in another tab, opening fails with the error recorded as the private space's `downloadError`.
+- Devices: iOS and Android require Syncline's native module (requires development build, not available in Expo Go); web local database runs in OPFS, requiring browser dedicated Web Workers to support `createSyncAccessHandle`; only one browser tab per site can use the database: once a tab opens it, the tab holds its files until it closes or reloads (even after `close()`); in another tab, opening fails with the error recorded as the private space's `downloadError`.
 - `drizzle-orm` 1.0.0-rc.4.

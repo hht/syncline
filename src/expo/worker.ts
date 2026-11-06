@@ -76,7 +76,7 @@ forwardErrors();
 const files = load();
 let open: Opened | undefined;
 
-/** Closes the active database: stops sync, closes sockets and timers, and releases database files. */
+/** Closes the active database: stops sync and closes sockets, timers, and the database; the tab keeps holding the database files. */
 function closeOpen() {
   if (!open) return;
   open.shell.send({ type: 'close' });
