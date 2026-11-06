@@ -151,6 +151,27 @@ test('using query inside local write body queues behind active write, warning af
   }
 });
 
+test('a stall warning timer cancelled when the write ends does nothing if the host still fires it, as a host firing a batch of due timers may', async () => {
+  const storage = deviceStorage(createWorkout);
+  const rust = storage.database;
+  const control = rust.control.bind(rust);
+  const cancelled: number[] = [];
+  rust.control = (input, now) => {
+    const output = control(input, now);
+    for (const instruction of JSON.parse(output) as { type: string; timer: number }[])
+      if (instruction.type === 'cancel') cancelled.push(instruction.timer);
+    return output;
+  };
+  const device = new Device(storage, [workout]);
+  const ending = Promise.withResolvers<void>();
+  const writing = write(device, () => ending.promise);
+  const reading = device.query('SELECT id FROM workout', []);
+  ending.resolve();
+  await Promise.all([writing, reading]);
+  expect(cancelled).toHaveLength(1);
+  expect(JSON.parse(control(JSON.stringify({ type: 'fired', timer: cancelled[0] }), Date.now()))).toEqual([]);
+});
+
 test('queries are read-only: mutating synced tables throws without modifying database; reads/writes proceed normally', async () => {
   const { phone } = await withDevices();
   await expect(phone.device.query("INSERT INTO workout (id) VALUES ('w1')", [])).rejects.toThrow();
