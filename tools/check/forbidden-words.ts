@@ -19,7 +19,10 @@ const suffixes = new Set(['Data', 'Info']);
 // Verbs that do not state a specific action: only check the first word of lowercase-starting names; PascalCase first words are nouns.
 const verbs = new Set(['handle', 'process', 'do']);
 // Externally mandated names not invented in this repo, skipped like imports: object keys must match third-party parameters and fields.
-const exceptions = new Map([['ErrorUtils', 'React Native global object: reportError forwards errors to App global error handler']]);
+const exceptions = new Map([
+  ['ErrorUtils', 'React Native global object: reportError forwards errors to App global error handler'],
+  ['AppData', 'associated type the rsqlite-vfs VfsStore trait names, which a VFS for tests implements'],
+]);
 /** Splits words by camelCase and capitalizes first letters: userDTOList -> User DTO List. */
 const words = (name: string) =>
   (name.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+/g) ?? []).map((word) => word.charAt(0).toUpperCase() + word.slice(1));

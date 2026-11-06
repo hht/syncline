@@ -3,6 +3,9 @@
 //! together fire in turn, each applying once the one before it fired.
 //! Write statements failing this way cause SQLite to roll back the entire transaction; read statements fail individually;
 //! releasing the outermost savepoint (commit) fails without committing while leaving the transaction open.
+//! An I/O rule instead fails the file I/O of the statement it matches on the faulty VFS (`faulty`) with `SQLITE_IOERR`, reaching
+//! statements that never check for interrupts, such as rolling back to a savepoint; like any I/O error, it makes SQLite roll back the
+//! entire transaction, even for a read. It lasts until the next statement on the thread starts, a trigger subprogram included.
 //! Statement execution begins by firing trace with unexpanded SQL parameters, while a progress handler configured on every step
 //! is invoked before rows are modified. Statements that never invoke the progress handler (such as releasing inner savepoints)
 //! succeed normally; the fault does not carry over to subsequent statements.
@@ -16,6 +19,7 @@
 use rusqlite::Connection;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use serde::Deserialize;
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -27,6 +31,21 @@ pub enum Rule {
     Prefix { prefix: String },
     /// Fails the after-th read/write statement once (excluding SAVEPOINT, RELEASE, ROLLBACK).
     After { after: u32 },
+    /// Fails the file I/O of the next statement matching prefix.
+    Io { io: String },
+}
+
+thread_local! {
+    static IO_FAILING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the statement running fails its file I/O.
+#[cfg_attr(
+    not(target_family = "wasm"),
+    expect(dead_code, reason = "only the faulty VFS on WebAssembly does file I/O")
+)]
+pub fn io_failing() -> bool {
+    IO_FAILING.get()
 }
 
 #[derive(Default)]
@@ -40,8 +59,9 @@ impl State {
     /// Records a statement starting execution (trigger subprograms starting with "-- TRIGGER" are excluded).
     fn started(&mut self, sql: &str) {
         self.failing = false;
+        IO_FAILING.set(false);
         let hit = match self.rules.front_mut() {
-            Some(Rule::Prefix { prefix }) => sql.starts_with(prefix.as_str()),
+            Some(Rule::Prefix { prefix } | Rule::Io { io: prefix }) => sql.starts_with(prefix.as_str()),
             Some(Rule::After { after })
                 if !sql.starts_with("--") && !["SAVEPOINT", "RELEASE", "ROLLBACK"].iter().any(|word| sql.starts_with(word)) =>
             {
@@ -50,9 +70,10 @@ impl State {
             }
             _ => false,
         };
-        if hit {
-            self.rules.pop_front();
-            self.failing = true;
+        match self.rules.pop_front_if(|_| hit) {
+            Some(Rule::Io { .. }) => IO_FAILING.set(true),
+            Some(_) => self.failing = true,
+            None => {}
         }
     }
 }
@@ -86,6 +107,7 @@ impl Faults {
     pub fn arm(&self, rules: Vec<Rule>) -> bool {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.failing = false;
+        IO_FAILING.set(false);
         !std::mem::replace(&mut state.rules, rules.into()).is_empty()
     }
 }

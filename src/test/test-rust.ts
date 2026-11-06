@@ -34,7 +34,10 @@ export function call<T>(body: () => T): T {
 }
 
 /** WASM module exports: Database constructor, restoration method, and documented limits. */
-type Exports = { Database: { new (): Database; restored(image: Uint8Array): Database }; limits(): string };
+type Exports = {
+  Database: { new (): Database; restored(image: Uint8Array): Database; faulty(name: string): Database };
+  limits(): string;
+};
 
 /** Lazy-loaded WASM module: compiled prior to running test suite; the full check, which sets SYNCLINE_COVERAGE, runs the tests on the coverage build. */
 let loaded: Exports | undefined;
@@ -74,6 +77,13 @@ export const rustLimits = () => JSON.parse(load().limits()) as Limits;
  */
 export function rustStorage(...schema: string[]) {
   const storage = asStorage(new (load().Database)());
+  for (const statement of schema) storage.sql.exec(statement);
+  return storage;
+}
+
+/** Rust device database in a file on a VFS whose file I/O fails while injected: unlike in memory, its journals are files too. */
+export function faultyRustStorage(...schema: string[]) {
+  const storage = asStorage(load().Database.faulty(crypto.randomUUID()));
   for (const statement of schema) storage.sql.exec(statement);
   return storage;
 }

@@ -22,6 +22,8 @@ use wasm_bindgen::prelude::*;
 mod coverage;
 #[cfg(feature = "testing")]
 mod faults;
+#[cfg(all(feature = "testing", target_family = "wasm"))]
+mod faulty;
 #[cfg(target_family = "wasm")]
 mod opfs;
 
@@ -55,6 +57,17 @@ impl Database {
         Database::of(Connection::open_in_memory().map_err(sql)?)
     }
 
+    /// Opens a database file on a VFS whose file I/O fails while injected (`{"io"}` rules), for tests; `name` names it among the files
+    /// of this module instance.
+    ///
+    /// # Errors
+    /// Returns an error if SQLite cannot open the database.
+    #[cfg(all(feature = "testing", target_family = "wasm"))]
+    pub fn faulty(name: &str) -> Result<Database, JsError> {
+        faulty::install();
+        Database::of(Connection::open_with_flags_and_vfs(name, rusqlite::OpenFlags::default(), faulty::VFS).map_err(sql)?)
+    }
+
     /// Restores a database from a serialized image: writable and growable via official WebAssembly `sqlite3_deserialize`.
     ///
     /// # Errors
@@ -68,9 +81,9 @@ impl Database {
         Database::of(connection)
     }
 
-    /// Injects storage faults for tests: rules is a JSON array of `{"prefix"}` (next matching statement fails once) or
-    /// `{"after"}` (after-th read/write statement fails once), firing in turn; an empty array disarms injection. Returns whether a rule it
-    /// replaces never fired.
+    /// Injects storage faults for tests: rules is a JSON array of `{"prefix"}` (next matching statement fails once),
+    /// `{"after"}` (after-th read/write statement fails once), or `{"io"}` (file I/O of the next matching statement fails, on a database
+    /// opened by `faulty`), firing in turn; an empty array disarms injection. Returns whether a rule it replaces never fired.
     ///
     /// # Errors
     /// Returns an error if the rule JSON cannot be parsed.
