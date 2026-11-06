@@ -96,10 +96,9 @@ impl Recorder {
                     table,
                 }),
                 RowChange::Update { before, after, .. } => {
+                    // Kept even when it changes no uploaded column (only `_extra`): committing a write replays its changes over the
+                    // rows it recorded, which restores `_extra`, and the cloud drops a patch giving only the key.
                     let row = named(&after, None)?;
-                    if row.0.is_empty() {
-                        continue;
-                    }
                     let mut patched = named(&before, Some(&declared.key))?;
                     patched.0.extend(row.0);
                     changes.push(Change::Patch { row: patched, table });
