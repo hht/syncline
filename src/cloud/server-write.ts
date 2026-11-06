@@ -20,9 +20,8 @@ type BucketsBefore = { before: (table: string, key: Record<string, Value>) => st
 type Context = { db: Database; query: Query; rows: Rows; bucketsBefore: BucketsBefore | undefined };
 
 export function writeOnServer({ db, query, rows, bucketsBefore }: Context, write: (tx: Transaction) => void, changed: Changed) {
-  // Row ID and prior buckets read before write: the immediately following changed report must match this row ID, or transaction contract invariant is broken.
-  let prior: { id: string; names: string[] } | undefined;
-  // Bucket membership before the row was first touched in this write (empty for inserted rows): bounded by changed.maxRows.
+  // Bucket membership before the row was first touched in this write (empty for inserted rows), recorded when the transaction reads
+  // an existing row ahead of writing it: a statement that then fails (and that the write recovers from) left the row unchanged.
   const first = new Map<string, string[]>();
   const firstOf = (table: string, key: Record<string, Value>, names: string[]) => {
     const id = rowId(table, key);
@@ -39,15 +38,12 @@ export function writeOnServer({ db, query, rows, bucketsBefore }: Context, write
     before:
       bucketsBefore &&
       ((table, key) => {
-        const id = rowId(table, key);
-        if (rows.has(table)) prior = { id, names: first.get(id) ?? bucketsBefore.before(table, key as Record<string, Value>) };
+        const row = key as Record<string, Value>;
+        if (rows.has(table) && !first.has(rowId(table, row))) firstOf(table, row, bucketsBefore.before(table, row));
       }),
     changed: (table, key) => {
       if (!rows.has(table)) return;
-      if (prior && prior.id !== rowId(table, key))
-        throw new Error(`Row ID mismatch: read ${prior.id} before write, but reported ${rowId(table, key)}`);
-      changed(table, key as Record<string, Value>, bucketsBefore && firstOf(table, key as Record<string, Value>, prior?.names ?? []));
-      prior = undefined;
+      changed(table, key as Record<string, Value>, bucketsBefore && firstOf(table, key as Record<string, Value>, []));
     },
     // Cascades deletes on synced tables and records deletions; unsynced tables fall back to per-row deletion in transaction.
     deleting: (table, keys) => {

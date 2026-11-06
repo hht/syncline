@@ -1,7 +1,9 @@
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
+import type { Chunk } from '../common/protocol.ts';
 import { ValidationError } from '../tables/validation.ts';
+import { catalog, landedRequest, program, pullAll, viewer } from '../test/test-catalog.ts';
 import { cloudStorage } from '../test/test-storage.ts';
 import { Space } from './space.ts';
 
@@ -120,4 +122,24 @@ test('server writes store any text exactly, or throw ValidationError exactly whe
       expect(storage.sql.exec('SELECT id, body FROM note WHERE id = ?', row.id).toArray()).toEqual([row]);
     }),
   );
+});
+
+test('a shared space server write that catches a failed statement and goes on writing commits the rest, each row reported from its bucket before the write', () => {
+  const { space, publish } = catalog();
+  publish('p1');
+  const landed = landedRequest(pullAll(space, viewer, { cookie: null }));
+  space.mutate((tx) => {
+    try {
+      tx.update(program, { id: 'p1', status: null as never });
+    } catch {
+      // The integrator recovers from the failed statement: the transaction is still open.
+    }
+    tx.insert(program, { id: 'p2', status: 'published' });
+    tx.update(program, { id: 'p1', status: 'draft' });
+  });
+  const patch = pullAll(space, viewer, landed).flatMap((chunk) => (chunk as Chunk).patch);
+  expect(patch).toEqual([
+    { op: 'put', table: 'program', key: { id: 'p2' }, row: { id: 'p2', status: 'published' } },
+    { op: 'del', table: 'program', key: { id: 'p1' } },
+  ]);
 });
