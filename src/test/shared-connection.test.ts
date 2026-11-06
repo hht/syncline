@@ -3,7 +3,8 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Broadcast } from '../cloud/broadcast.ts';
 import { Space } from '../cloud/space.ts';
-import { parsePullRequest } from '../common/pull-url.ts';
+import type { Chunk, Poke } from '../common/protocol.ts';
+import { type PullRequest, parsePullRequest } from '../common/pull-url.ts';
 import { Device } from '../test/test-device.ts';
 import { subscribed } from './test-catalog.ts';
 import { drain } from './test-drive.ts';
@@ -31,12 +32,13 @@ function setup(prepare: (storage: ReturnType<typeof deviceStorage>, device: Devi
   const buckets = { all: { program: {} }, public: { program: { where: "title != 'secret'" } } };
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 4 } });
   const token = { subscribed: everything };
+  const cache = { pull: (request: PullRequest) => space.pullShared(request, token.subscribed) };
   const network: Network = new Network(
     (items) => items[0],
     () => ({
       accept: (socket, url, expiresAt) => broadcast.accept(socket, parsePullRequest(url).cookie, expiresAt, token.subscribed),
       receive: (socket) => broadcast.receive(socket),
-      pull: (url) => JSON.stringify(space.pullShared(parsePullRequest(url), token.subscribed)),
+      pull: (url) => JSON.stringify(cache.pull(parsePullRequest(url))),
     }),
   );
   const broadcast: Broadcast<CloudEnd> = new Broadcast(network.sockets(), async () => space.round(inlineLimit));
@@ -56,7 +58,7 @@ function setup(prepare: (storage: ReturnType<typeof deviceStorage>, device: Devi
     return { storage, device, catalog, connection, titles };
   });
   const run = () => drain(network);
-  return { space, devices, commit, run, network, broadcast, token };
+  return { space, devices, commit, run, network, broadcast, token, cache };
 }
 
 test('two devices pull full mirror then connect to broadcast; catch up after backend write and report connected and synced', async () => {
@@ -272,4 +274,30 @@ test('a hint heard while a pull continues past a landed subscription change reco
   expect(first.titles().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3', 'p4']);
   expect(first.connection.status()).toMatchObject({ connected: true, downloading: false });
   first.connection.stop();
+});
+
+test('a device downloading before it connects, answered from cache with a final chunk older than its staged chunks, stages it and pulls on with a floor instead of finishing without a cookie', async () => {
+  const reported = captureReported();
+  const { space, devices, commit, run, cache, token } = setup();
+  const [, fresh] = devices;
+  if (!fresh) throw new Error('two devices');
+  commit(['p1', 'p2'].map((id) => ({ id, title: id })));
+  // Another device downloaded at version 1, and the cache kept the final chunk that answered its second request; this device's first
+  // request misses the cache (evicted, or another location).
+  const rowByRow = (request: PullRequest) => space.pullShared(request, token.subscribed, 1);
+  const full = fresh.catalog.pullRequest();
+  const { next } = rowByRow(full) as Chunk;
+  const stale = space.pullShared({ ...full, cursor: next }, token.subscribed) as Poke;
+  const requests: PullRequest[] = [];
+  cache.pull = (request) => {
+    requests.push(request);
+    return request.cursor === next ? stale : rowByRow(request);
+  };
+  commit([{ id: 'p3', title: 'p3' }]);
+  fresh.connection.start();
+  await run();
+  // The download goes on from where that chunk ends, at least to the version of the chunks staged before it.
+  expect(requests).toContainEqual(expect.objectContaining({ cursor: stale.next, atLeast: 2 }));
+  expect(fresh.titles().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3']);
+  expect(reported).toEqual([]);
 });
