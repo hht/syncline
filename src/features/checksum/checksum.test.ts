@@ -4,7 +4,7 @@ import { Device, Space } from '../../test/test-checksum.ts';
 import { schema, serverInc, snapshot, synced, tables, writes } from '../../test/test-counter.ts';
 import { captureReported } from '../../test/test-errors.ts';
 import { filled, pullChunk, pullRest } from '../../test/test-pull.ts';
-import { cloudStorage, deviceStorage } from '../../test/test-storage.ts';
+import { cloudStorage, deviceStorage, failOnce, injectedError } from '../../test/test-storage.ts';
 import { checksumOf, plus, rowHash } from './common/checksum.ts';
 
 // Checksum: A row hash only considers values visible to devices, independent of column order or null columns; the cloud computes on demand when requested, and the device requests once when idle or due, verifying against its local sum segment by segment.
@@ -146,6 +146,20 @@ test('closing the database during a verification ends it without a result', asyn
   const verifying = device.private.verify();
   device.close();
   expect(await verifying).toBeUndefined();
+});
+
+test('a read error starting a verification or between its steps is reported and ends it without a result; the next verification runs', async () => {
+  const { space, device, storage } = await synced();
+  const reported = captureReported();
+  await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000));
+  failOnce(storage, 'SELECT version, nonce FROM _syncline_cookie');
+  expect(await device.private.verify()).toBeUndefined();
+  // Begun: the fault waits for the step
+  const verifying = device.private.verify();
+  failOnce(storage, 'SELECT version, nonce FROM _syncline_cookie');
+  expect(await verifying).toBeUndefined();
+  expect(await device.private.verify()).toBe(true);
+  expect(reported).toEqual([expect.stringMatching(injectedError), expect.stringMatching(injectedError)]);
 });
 
 test('checksum request with concurrent open local write (pulls not queued): daily scanned rows recorded in pull transaction, unmixed with local write; write commits normally, pending mutations contain only its changes', async () => {

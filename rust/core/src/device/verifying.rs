@@ -35,24 +35,26 @@ impl Device {
         }
     }
 
-    /// Steps through verification; returns [`Progress::Done(None)`] if verification is not active.
+    /// Steps through verification; returns [`Progress::Done(None)`] if verification is not active. Anything but more steps ends it.
     ///
     /// # Errors
     ///
     /// Returns an error if database operations fail.
     pub fn verify_step(&mut self, live: bool, now: f64) -> Result<Progress, Error> {
-        let (mark, keys, cookie) = self.moment(live)?;
+        let snapshot = self.moment(live);
         let db = self.db.connection();
         let Some(verifier) = &mut self.verifier else {
             return Ok(Progress::Done(None));
         };
-        let moment = Moment {
-            live,
-            mark,
-            cookie,
-            keys: &keys,
-        };
-        let progress = verifier.step(db, &moment, &mut self.effects, now);
+        let progress = snapshot.and_then(|(mark, keys, cookie)| {
+            let moment = Moment {
+                live,
+                mark,
+                cookie,
+                keys: &keys,
+            };
+            verifier.step(db, &moment, &mut self.effects, now)
+        });
         if !matches!(progress, Ok(Progress::More)) {
             verifier.stop();
         }
