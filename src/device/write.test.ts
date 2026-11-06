@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { expect, test } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { upload, write } from '../test/test-schema.ts';
-import { deviceStorage, restoredDeviceStorage } from '../test/test-storage.ts';
+import { deviceStorage, failOnce, restoredDeviceStorage } from '../test/test-storage.ts';
 import { exercise, read, statements, tables, w1, withWorkout, workout } from './test-workout.ts';
 
 // Local writes: standard Drizzle reads and writes, uploads modified rows; cloud and replay overwrite by column.
@@ -142,6 +142,20 @@ test('after close: open local writes roll back, queued writes and receives abort
   await expect(write(phone.device, async () => undefined)).rejects.toThrow('local database is closed');
   expect(read(phone.storage).workouts).toMatchObject([{ note: 'squat', weight: 102.5 }]);
   expect(phone.device.private.pending()).toEqual([]);
+});
+
+test('a local write whose rollback fails rolls back the whole transaction, so later writes still commit', async () => {
+  const { phone } = await withWorkout();
+  failOnce(phone.storage, 'ROLLBACK TO syncline_write');
+  const abandoned = write(phone.device, async (tx) => {
+    await tx.update(workout).set({ note: 'front squat' }).where(eq(workout.id, 'w1'));
+    throw new Error('abandoned');
+  });
+  await expect(abandoned).rejects.toThrow('abandoned');
+  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+  expect(phone.storage.inTransaction()).toBe(false);
+  expect(read(phone.storage).workouts).toMatchObject([{ id: 'w1', note: 'squat' }, { id: 'w2' }]);
+  expect(phone.device.private.pending()).toHaveLength(1);
 });
 
 test('client ID retrieved via provided randomUUID (Hermes lacks Web Crypto, avoids mutating global crypto): generated on startup and resync', async () => {

@@ -5,7 +5,7 @@ import { Space } from '../cloud/space.ts';
 import { Device } from '../test/test-device.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { createWorkout, unchunked, workout, write } from '../test/test-schema.ts';
-import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+import { cloudStorage, deviceStorage, failOnce } from '../test/test-storage.ts';
 
 // UI query change tracking: reads queue behind active local writes, seeing committed rows only;
 // commits notify modified tables, re-running queries only when read tables change.
@@ -101,6 +101,15 @@ test('resync discarding a pending write that no longer reverts reports why befor
   await device.private.resync(true);
   expect(reported).toEqual([expect.stringContaining('revert failed')]);
   expect(device.private.pending()).toEqual([]);
+});
+
+test('a sync transaction whose rollback fails rolls back the whole transaction, so the fallback that follows commits', async () => {
+  const { storage, device } = await conflictingPending();
+  const reported = captureReported();
+  failOnce(storage, 'ROLLBACK TO syncline');
+  await device.private.resync(true);
+  expect(reported).toEqual([expect.stringContaining('revert failed')]);
+  expect([storage.inTransaction(), device.private.pending()]).toEqual([false, []]);
 });
 
 test('reads queue behind active local writes: sees committed changes only, rolled-back writes invisible', async () => {

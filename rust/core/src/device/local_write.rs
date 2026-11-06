@@ -113,9 +113,7 @@ impl Device {
         self.effects.wrote = false;
         let stopped = Recorder::stop(&mut self.db, &mut self.recording);
         if self.db.in_transaction() {
-            self.db
-                .connection()
-                .execute_batch(&format!("ROLLBACK TO {WRITE}; RELEASE {WRITE}"))?;
+            crate::savepoint::rollback(self.db.connection(), WRITE)?;
         }
         stopped.map(|_| ())
     }
