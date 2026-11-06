@@ -7,19 +7,14 @@ import { openSyncline, syncOnce } from './native.ts';
 const started: string[] = [];
 const removed: string[] = [];
 const sent: Record<string, unknown>[] = [];
-/** Dispatches messages from the mock native module to a specific handle on behalf of the core thread. */
-let deliver: (event: { handle: number; data: string }) => void = () => undefined;
-vi.mock('expo', () => ({
-  requireNativeModule: () => ({
+const native = await vi.hoisted(async () =>
+  (await import('../test/test-native.ts')).fakeNative({
     start: (name: string) => started.push(name),
     send: (_: number, call: string) => sent.push(JSON.parse(call)),
     remove: async (name: string) => void removed.push(name),
-    addListener: (_: string, listener: typeof deliver) => {
-      deliver = listener;
-      return { remove: () => undefined };
-    },
   }),
-}));
+);
+vi.mock('expo', () => ({ requireNativeModule: () => native.module }));
 
 const open = (name = 'native-test') => openSyncline({ name, schema: {}, url: 'https://sync.test/space', token: async () => 'valid' });
 
@@ -32,7 +27,7 @@ test('reopening database under same name before close finishes does not throw "a
 
 test('deleting database after core thread panic succeeds without failing on panic error and removes file', async () => {
   const space = open('native-broken');
-  deliver({ handle: started.length, data: JSON.stringify([{ type: 'broken', message: 'Syncline core thread crashed: ' }]) });
+  native.deliver({ handle: started.length, data: JSON.stringify([{ type: 'broken', message: 'Syncline core thread crashed: ' }]) });
   await space.delete();
   expect(removed).toEqual(['native-broken']);
 });
@@ -41,7 +36,7 @@ test('opening blocked by PendingWrites: sync() rejects with PendingWrites and th
   const blocked = open('native-pending');
   const syncing = blocked.sync().catch((error: unknown) => error);
   const pending = { message: 'pending writes', pending: { owner: 'u0', count: 2 } };
-  deliver({ handle: started.length, data: JSON.stringify([{ type: 'reply', id: 1, error: pending }]) });
+  native.deliver({ handle: started.length, data: JSON.stringify([{ type: 'reply', id: 1, error: pending }]) });
   expect(await syncing).toBeInstanceOf(PendingWrites);
   expect(blocked.status().downloadError).toBeInstanceOf(PendingWrites);
   expect(() =>

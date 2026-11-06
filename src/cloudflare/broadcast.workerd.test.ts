@@ -34,7 +34,7 @@ async function connect(shard: DurableObjectStub, expiresAt: number) {
     headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': subprotocol, [expiresHeader]: String(expiresAt), ...subscription, ...sub },
   });
   if (!response.webSocket) throw new Error('Expected WebSocket upgrade response');
-  return inbox(response.webSocket);
+  return response.webSocket;
 }
 
 const expires = { [expiresHeader]: String(Date.now() + 60_000) };
@@ -57,11 +57,37 @@ test('rejects when expiry header is missing or empty, or when subscription hash 
   expect(outcomes).toEqual({ missingExpiry: false, missingHash: false, emptyExpiry: false });
 });
 
+test('a request that is not a WebSocket upgrade is refused with 405', async () => {
+  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const response = await shard.fetch(pullURL('https://sync.test/catalog', { cookie: { version: 0, nonce: 0 } }), {
+    headers: { ...expires, ...subscription, ...sub },
+  });
+  expect(response.status).toBe(405);
+});
+
+test('a device writing to its shard socket is closed with 1003: devices only listen to shards', async () => {
+  const socket = await connect(env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`), Date.now() + 60_000);
+  const next = inbox(socket);
+  expect(await next()).toHaveProperty('message');
+  socket.send('{}');
+  expect(await next()).toEqual({ close: 1003 });
+});
+
+test('an alarm closing the last connection leaves no alarm scheduled', async () => {
+  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const soon = inbox(await connect(shard, Date.now() + 50));
+  expect(await soon()).toHaveProperty('message');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(await runDurableObjectAlarm(shard)).toBe(true);
+  expect(await soon()).toEqual({ close: 4001 });
+  expect(await runInDurableObject(shard, (_, state) => state.storage.getAlarm())).toBe(null);
+});
+
 test('closes expired connections via alarm with 4001 without active writes and reschedules alarm to next expiry minute', async () => {
   const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
   const later = Date.now() + 3_600_000;
-  const soon = await connect(shard, Date.now() + 50);
-  const kept = await connect(shard, later);
+  const soon = inbox(await connect(shard, Date.now() + 50));
+  const kept = inbox(await connect(shard, later));
   expect(await soon()).toHaveProperty('message');
   expect(await kept()).toHaveProperty('message');
   await new Promise((resolve) => setTimeout(resolve, 100));

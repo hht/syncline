@@ -120,12 +120,13 @@ test('NaN and invalid dates are refused: a device write throws and stores nothin
 
 // SQLite has no boolean type, storing true and false as the integers 1 and 0
 // @see <https://sqlite.org/datatype3.html#boolean_datatype>
-test('query parameters bind booleans as 1 and 0 and infinities as reals; an array that is not bytes, or an object that is not an infinity (NaN would bind as NULL), is refused', async () => {
+test('query parameters bind booleans as 1 and 0, byte arrays as blobs, and infinities as reals; an array that is not bytes, or an object that is not an infinity (NaN would bind as NULL), is refused', async () => {
   const { devices } = await synced(1);
   const [phone] = devices;
   if (!phone) throw new Error('one device');
   expect(await phone.device.query('SELECT ?, ?', [true, false])).toEqual([[1, 0]]);
   expect(await phone.device.query('SELECT ? > 1e308, ? < -1e308', [Infinity, -Infinity])).toEqual([[1, 1]]);
+  expect(await phone.device.query("SELECT typeof(?1), hex(?1), ?1 = x'00ff'", [Uint8Array.of(0, 255)])).toEqual([['blob', '00FF', 1]]);
   expect(await failure(() => phone.device.query('SELECT ?', [[1, 256]]))).toMatch('BLOB parameter must be an array of bytes');
   for (const value of [{ day: 1 }, { real: 'soon' }, { real: 'NaN' }, { real: '1.5' }, { real: 'Infinity', day: 1 }])
     expect(await failure(() => phone.device.query('SELECT ?', [value]))).toMatch(

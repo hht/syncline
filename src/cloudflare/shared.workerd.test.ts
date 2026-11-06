@@ -203,6 +203,12 @@ test('bypasses cache with no-store when pull request specifies floor version not
   expect(response.headers.get('Cache-Control')).toBe('no-store');
 });
 
+test('the space serves only GET pulls forwarded by the entry Worker: other methods get 405, and a pull without subscription throws', async () => {
+  const target = pullURL(url, { cookie: null });
+  expect((await catalog().fetch(new Request(target, { method: 'POST', headers: await entryHeaders('public') }))).status).toBe(405);
+  await expect(catalog().fetch(new Request(target))).rejects.toThrow('Pull request was not forwarded through the entry Worker');
+});
+
 test('bypasses cache when incarnation does not match space incarnation and caches responses matching current incarnation', async () => {
   await catalog().publish('a2');
   const headers = await entryHeaders('public');

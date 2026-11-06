@@ -6,29 +6,34 @@ import type { HostMessage } from './worker.ts';
 
 const removed = vi.hoisted((): string[] => []);
 const freed = vi.hoisted(() => ({ count: 0 }));
+/** What mounting OPFS throws when the Worker loads, if anything (another tab's Worker holding the files). */
+const mounting = vi.hoisted(() => ({ error: undefined as unknown }));
 vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
   default: async () => undefined,
   Files: {
-    install: async () => ({
-      open: () => {
-        // A call of type panic traps like a Rust panic does in WebAssembly; a trap leaves the Rust value borrowed,
-        // so freeing it afterwards throws as wasm-bindgen does.
-        let trapped = false;
-        const traps = (text: string) => {
-          trapped ||= text.includes('panic');
-          return trapOn(text);
-        };
-        return {
-          open: traps,
-          control: traps,
-          free: () => {
-            freed.count += 1;
-            if (trapped) throw new Error('attempted to take ownership of Rust value while it was borrowed');
-          },
-        };
-      },
-      remove: (name: string) => removed.push(name),
-    }),
+    install: async () => {
+      if (mounting.error !== undefined) throw mounting.error;
+      return {
+        open: () => {
+          // A call of type panic traps like a Rust panic does in WebAssembly; a trap leaves the Rust value borrowed,
+          // so freeing it afterwards throws as wasm-bindgen does.
+          let trapped = false;
+          const traps = (text: string) => {
+            trapped ||= text.includes('panic');
+            return trapOn(text);
+          };
+          return {
+            open: traps,
+            control: traps,
+            free: () => {
+              freed.count += 1;
+              if (trapped) throw new Error('attempted to take ownership of Rust value while it was borrowed');
+            },
+          };
+        },
+        remove: (name: string) => removed.push(name),
+      };
+    },
   },
 }));
 vi.mock('../../rust/target/web/syncline_wasm_bg.wasm', () => ({ default: '' }));
@@ -69,6 +74,11 @@ test('cancels unhandled Worker errors and rejections and forwards them as messag
   scope.dispatchEvent(rejection);
   expect(rejection.defaultPrevented).toBe(true);
   expect(posted.at(-1)).toEqual({ type: 'error', error: expect.objectContaining({ message: 'Unhandled rejection' }) });
+});
+
+test('an unhandled error event without an error object (a script error) is forwarded by its message', () => {
+  scope.dispatchEvent(Object.assign(new Event('error', { cancelable: true }), { error: null, message: 'Script error.' }));
+  expect(posted.at(-1)).toEqual({ type: 'error', error: { message: 'Script error.' } });
 });
 
 test('rejects deleting database while open in another instance; deletes file after closing', async () => {
@@ -118,4 +128,28 @@ test('a core panic (WebAssembly trap) marks the Worker broken, whether opening o
   });
   await call(5, { type: 'open', id: 1, name: 'worker-panic', options: {} });
   expect(await call(5, { type: 'panic', id: 2 })).toEqual({ type: 'broken', error: expect.objectContaining({ message: 'unreachable' }) });
+});
+
+// Each case loads a fresh Worker, whose OPFS mount fails: every open replies with the reason. Runs last: the failing mount stays armed
+// and every load adds its error listeners to the scope.
+test.each([
+  {
+    failure: 'another tab holds the database files',
+    error: new Error('NoModificationAllowedError: Access Handles cannot be created'),
+    message: 'Local database is open in another tab: web supports only one tab at a time; close other tabs and reload',
+  },
+  {
+    failure: 'OPFS is unavailable',
+    error: new Error('SecurityError: The operation is insecure'),
+    message: 'SecurityError: The operation is insecure',
+  },
+  { failure: 'mounting throws a non-Error value', error: 'storage refused', message: 'storage refused' },
+])('a Worker whose OPFS mount fails because $failure replies to open with the reason', async ({ error, message }) => {
+  mounting.error = error;
+  vi.resetModules();
+  await import('./worker.ts');
+  expect(await call(9, { type: 'open', id: 1, name: 'worker-locked', options: {} })).toEqual({
+    instance: 9,
+    received: [{ type: 'reply', id: 1, error: expect.objectContaining({ message }) }],
+  });
 });

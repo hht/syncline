@@ -12,9 +12,28 @@ test('rejects real/float bucket columns when constructing rules (real string rep
   expect(() => new Buckets([scored], { r: { scored: { by: ['score'] } } })).toThrow('bucket columns must be integer or text');
 });
 
-test('rejects subscriptions violating rules (unknown rule, mismatched parameter count/type, a bucket or the JSON exceeding its size limit); sorts and deduplicates valid buckets', () => {
+test('rejects rules without a name or tables, with bucket columns differing across tables, or exceeding 4,064 rules on one table', () => {
+  expect(() => new Buckets([program], { '': { program: {} } })).toThrow('Bucket rule name must not be empty');
+  expect(() => new Buckets([program], { empty: {} })).toThrow('Bucket rule "empty" contains no tables');
+  expect(() => new Buckets([program, day], { org: { program: {}, day: { by: ['program_id'] } } })).toThrow(
+    'table "day" has (text) while other tables have (none)',
+  );
+  expect(() => new Buckets([program, day], { org: { day: { by: ['program_id'] }, program: {} } })).toThrow(
+    'table "program" has (none) while other tables have (text)',
+  );
+  const rules = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, n) => [`r${n}`, { program: {} }]));
+  expect(() => new Buckets([program], rules(4064))).not.toThrow();
+  expect(() => new Buckets([program], rules(4065))).toThrow('Table program belongs to 4065 bucket rules, exceeding the limit of 4064.');
+});
+
+test('rejects subscriptions violating rules (a bucket that is not [rule, ...params], unknown rule, mismatched parameter count/type, a bucket or the JSON exceeding its size limit); sorts and deduplicates valid buckets', () => {
   const buckets = new Buckets([program, day], { org: { day: { by: ['program_id'] } } });
+  for (const bucket of ['org', [], [7, 'a']])
+    expect(() => buckets.subscribe([bucket])).toThrow('Subscription bucket must be [ruleName, ...params]');
   expect(() => buckets.subscribe([['nobody']])).toThrow('Unknown bucket rule');
+  expect(() => new Buckets([program], { everyone: { program: {} } }).subscribe([['everyone', 1]])).toThrow(
+    'Invalid parameters in subscription bucket ["everyone",1]: none',
+  );
   expect(() => buckets.subscribe([['org', 7]])).toThrow('Invalid parameters in subscription bucket');
   expect(() => buckets.subscribe([['org']])).toThrow('Invalid parameters in subscription bucket');
   expect(() => buckets.subscribe([['org', 'x'.repeat(300)]])).toThrow('exceeds 256 bytes');

@@ -67,6 +67,13 @@ test('normalizes cache keys for cached entrypoint: canonicalizes query order and
   }
 });
 
+test('passes a cursor it does not recognize through unchanged, for the space to answer with a reset', async () => {
+  const target = pullURL(url, { cookie: null, cursor: 'from-an-older-deploy' });
+  const { response, seen } = await forwarded(target);
+  expect(response.status).toBe(200);
+  expect(seen.map((request) => request.url)).toEqual([target]);
+});
+
 test('returns 400 without forwarding to broadcast shards on unrecognized WebSocket query parameters', async () => {
   const shards: Request[] = [];
   const route = {

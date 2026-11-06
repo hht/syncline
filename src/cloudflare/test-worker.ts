@@ -170,6 +170,11 @@ export class TestCatalog extends SynclineSharedSpace<Env> {
     return this.mutate((tx) => tx.upsert(program, { id, status }));
   }
 
+  /** Server write: deletes a program (changing nothing if it is missing). */
+  withdraw(id: string) {
+    return this.mutate((tx) => tx.delete(program, { id }));
+  }
+
   /** Schedules a chore via RPC, recording it in fired when executed. */
   remind(name: string, at: number) {
     this.schedule(name, at);

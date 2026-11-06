@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { flush } from '../test/test-drive.ts';
 import { closed, type FakeWorker, open, opened, worker } from '../test/test-web.ts';
 import { openSyncline } from './web.ts';
@@ -46,14 +46,35 @@ test.each([
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open']);
 });
 
-test('relays synchronous token() throw back to Worker as error so Worker does not stall', async () => {
+test.each([
+  { thrown: 'an Error', error: new Error('Not signed in') },
+  { thrown: 'a non-Error value', error: 'Not signed in' },
+])('relays a synchronous token() throw of $thrown back to Worker as error text so Worker does not stall', async ({ error }) => {
   open(() => {
-    throw new Error('Not signed in');
+    throw error;
   });
   const { instance } = worker().last('open');
   worker().deliver(instance, { type: 'token', request: 7, channel: '' });
   await flush();
   expect(worker().posted.at(-1)).toEqual({ instance, call: { type: 'token', request: 7, error: 'Not signed in' } });
+});
+
+test('errors the core reports reach reportError as errors, and its warnings reach console.warn', async () => {
+  const { instance } = await opened();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const reported = reportedIn(() =>
+      worker().deliver(
+        instance,
+        { type: 'report', error: { message: 'local data does not match cloud' } },
+        { type: 'warn', message: 'read queued behind an open local write' },
+      ),
+    );
+    expect(reported).toEqual([new Error('local data does not match cloud')]);
+    expect(warn.mock.calls).toEqual([['read queued behind an open local write']]);
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test('reports unhandled Worker error on page without treating Worker as broken', async () => {
@@ -151,26 +172,46 @@ test('in-flight calls fail with "Local database is closed" when close reply arri
   await expect(reading).rejects.toMatchObject(closedError);
 });
 
-test('relays error to core when Standard Schema returns a Promise, rolling back write while processing remaining events', async () => {
-  const asynchronous = { '~standard': { version: 1 as const, vendor: 'test', validate: async () => ({ value: {} }) } };
-  const space = openSyncline({
-    name: 'web-test',
-    schema: { note },
-    validation: new Map([[note, asynchronous]]),
-    url: 'https://sync.test/space',
-    token: async () => 'valid',
-  });
-  const { instance } = worker().last('open');
-  const changed: ReadonlySet<string>[] = [];
-  space.onChange((tables) => changed.push(tables));
-  worker().deliver(
-    instance,
-    { type: 'validate', write: 1, rows: [{ table: 'note', row: { id: 'n1' } }] },
-    { type: 'changed', tables: ['note'] },
-  );
-  expect(worker().last('validated').call).toEqual({ type: 'validated', write: 1, error: expect.stringContaining('returned a Promise') });
-  expect(changed).toEqual([new Set(['note'])]);
+test('a close the core fails rejects with its error, and later calls fail with "Local database is closed"', async () => {
+  const { space, instance } = await opened();
+  const closing = space.close();
+  worker().deliver(instance, { type: 'reply', id: worker().last('close').call.id ?? -1, error: { message: 'disk I/O error' } });
+  await expect(closing).rejects.toThrow('disk I/O error');
+  await expect(space.db.select().from(note).all()).rejects.toMatchObject(closedError);
 });
+
+test.each([
+  { failure: 'returns a Promise', validate: async () => ({ value: {} }), error: expect.stringContaining('returned a Promise') },
+  {
+    failure: 'throws a non-Error value',
+    validate: () => {
+      throw 'schema exploded';
+    },
+    error: 'schema exploded',
+  },
+])(
+  'relays error to core when Standard Schema $failure, rolling back write while processing remaining events',
+  async ({ validate, error }) => {
+    const failing = { '~standard': { version: 1 as const, vendor: 'test', validate } };
+    const space = openSyncline({
+      name: 'web-test',
+      schema: { note },
+      validation: new Map([[note, failing]]),
+      url: 'https://sync.test/space',
+      token: async () => 'valid',
+    });
+    const { instance } = worker().last('open');
+    const changed: ReadonlySet<string>[] = [];
+    space.onChange((tables) => changed.push(tables));
+    worker().deliver(
+      instance,
+      { type: 'validate', write: 1, rows: [{ table: 'note', row: { id: 'n1' } }] },
+      { type: 'changed', tables: ['note'] },
+    );
+    expect(worker().last('validated').call).toEqual({ type: 'validated', write: 1, error });
+    expect(changed).toEqual([new Set(['note'])]);
+  },
+);
 
 test('deletes database file after closing, issuing separate removal instance to remove file', async () => {
   const { space, instance } = await opened();
