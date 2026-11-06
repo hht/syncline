@@ -94,7 +94,8 @@ impl Client {
         &self.device
     }
 
-    /// Dispatches an input event at `now` (in milliseconds), returning accumulated instructions.
+    /// Dispatches an input event at `now` (in milliseconds), returning accumulated instructions. No input may follow `Input::Close`:
+    /// hosts answer later calls themselves (see `call_id`).
     pub fn control(&mut self, input: Input, now: f64) -> Vec<Instruction> {
         let mut jobs = Vec::new();
         self.dispatch(input, &mut jobs, now);
@@ -125,12 +126,6 @@ impl Client {
     }
 
     fn dispatch(&mut self, input: Input, jobs: &mut Vec<Job>, now: f64) {
-        if self.closed {
-            if let Some(id) = call_id(&input) {
-                self.reply(id, Err(Failure::new("local database is closed")));
-            }
-            return;
-        }
         match input {
             Input::Query { id, sql, params } => self.enqueue(Task::Query { id, sql, params }),
             Input::TablesOf { id, sql } => {

@@ -1,6 +1,7 @@
 //! Inbound cloud data parsed into exact types at the boundary: HTTP pull results, WebSocket notifications and hints; mismatches are errors, no guessing.
-//! Shape is validated by serde against `protocol` types; additional invariants not representable in types are checked here: numbers are non-negative safe integers, clear only at the beginning, primary key ranges have at least one column,
-//! drop does not specify both columns and ranges, checksum is 32-bit.
+//! Shape is validated by serde against `protocol` types (which also refuses numbers outside their type, such as a checksum beyond 32 bits or a float beyond `f64`);
+//! additional invariants not representable in types are checked here: numbers are non-negative safe integers, clear only at the beginning, primary key ranges have at least one column,
+//! drop does not specify both columns and ranges.
 //! What it should not know: where messages originate, how parsed data is used.
 
 use crate::change::MAX_SAFE_INTEGER;
@@ -56,7 +57,6 @@ fn advice_ok(advice: &Advice) -> bool {
     advice
         .spread
         .is_none_or(|spread| spread >= 0.0 && spread.fract() == 0.0 && spread <= MAX_SAFE_INTEGER as f64)
-        && advice.expires_in.is_none_or(f64::is_finite)
 }
 
 fn base_ok(base: Option<&Cookie>) -> bool {
@@ -102,9 +102,10 @@ fn poke_ok(poke: &Poke) -> bool {
         && advice_ok(&poke.advice)
         && poke.lmids.values().copied().all(count)
         && poke.held.iter().flatten().all(|held| count(held.id))
-        && poke.checksum.as_ref().is_none_or(|checksum| {
-            u64::from(checksum.sum) < 1 << 32 && count(checksum.rows) && checksum.parts.iter().all(|part| range_ok(&part.range))
-        })
+        && poke
+            .checksum
+            .as_ref()
+            .is_none_or(|checksum| count(checksum.rows) && checksum.parts.iter().all(|part| range_ok(&part.range)))
 }
 
 fn hint_ok(hint: &Hint) -> bool {
@@ -137,6 +138,20 @@ mod tests {
         assert!(pulled(late_clear).is_err());
         // Messages over connection must carry a cookie: intermediate chunks do not qualify.
         assert!(message(r#"{"base":null,"next":"n","patch":[]}"#).is_err());
+    }
+
+    #[test]
+    fn leaves_numbers_outside_their_type_to_serde() {
+        let poke = |field: &str| format!(r#"{{"base":null,"cookie":{{"version":1,"nonce":1}},"lmids":{{}},"patch":[],{field}}}"#);
+        assert!(message(&poke(r#""checksum":{"parts":[],"sum":4294967295,"rows":1}"#)).is_ok());
+        for field in [r#""checksum":{"parts":[],"sum":4294967296,"rows":1}"#, r#""expiresIn":1e400"#] {
+            let error = message(&poke(field)).err().unwrap_or_default();
+            // Refused by serde, which names what it could not parse, rather than by the checks here
+            assert!(
+                error.starts_with("invalid notification") && !error.ends_with("(invalid value)"),
+                "{field}: {error}"
+            );
+        }
     }
 
     fn last(patch: &str) -> String {

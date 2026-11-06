@@ -171,7 +171,7 @@ export class Shell {
   }
 
   /**
-   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls reply "local database is closed", as the closed core does.
+   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls reply "local database is closed" here: the core takes no input after closing.
    */
   close() {
     this.#closed = true;
