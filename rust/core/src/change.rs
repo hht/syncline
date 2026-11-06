@@ -184,7 +184,9 @@ pub fn key_bytes(key: &Row) -> usize {
     key.json().len()
 }
 
-/// Value passed to JS: errors if integer exceeds safe integer range (unreadable in JS); infinity and NaN serialize to null (matching `JSON.stringify`).
+/// Value passed to JS: errors if integer exceeds safe integer range (unreadable in JS); `serde_json` writes infinity and NaN as null (matching `JSON.stringify`).
+/// @see <https://github.com/serde-rs/json/blob/v1.0.154/src/ser.rs#L169-L174>
+/// @see <https://github.com/serde-rs/json/blob/v1.0.154/src/value/from.rs#L47-L60>
 struct ToJs<'value>(&'value Value);
 
 impl Serialize for ToJs<'_> {
@@ -192,11 +194,11 @@ impl Serialize for ToJs<'_> {
         match self.0 {
             Value::Integer(integer) if integer.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs() => serializer.serialize_i64(*integer),
             Value::Integer(integer) => Err(serde::ser::Error::custom(format!("integer exceeds safe integer range: {integer}"))),
-            Value::Real(real) if real.is_finite() => serializer.serialize_f64(*real),
-            // Local writes upload neither non-finite reals nor BLOB (`recorder::reading::transferable`, validation); only values written outside
-            // Syncline reach these arms, such as an infinite key of a deleted row, which serializes to null as in `JSON.stringify`.
-            Value::Null | Value::Real(_) => serializer.serialize_unit(),
+            Value::Real(real) => serializer.serialize_f64(*real),
+            Value::Null => serializer.serialize_unit(),
             Value::Text(text) => serializer.serialize_str(text),
+            // Never reached: rows reach JS parsed from JSON (pending and held writes) or checked against their declaration
+            // (`validation::check`), and neither holds BLOB.
             Value::Blob(bytes) => serializer.collect_seq(bytes),
         }
     }
