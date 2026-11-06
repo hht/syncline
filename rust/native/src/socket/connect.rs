@@ -258,4 +258,23 @@ mod tests {
         );
         assert!(started.elapsed() < FALLBACK_DELAY);
     }
+
+    #[test]
+    fn addresses_left_when_the_deadline_passes_are_not_tried_and_the_first_error_is_returned() {
+        let (first, second): (SocketAddr, SocketAddr) = ("192.0.2.1:443".parse().unwrap(), "192.0.2.2:443".parse().unwrap());
+        let tried = std::sync::Mutex::new(Vec::new());
+        let unanswered = |address: SocketAddr, timeout: Duration| -> std::io::Result<()> {
+            tried.lock().unwrap().push(address);
+            std::thread::sleep(timeout);
+            Err(std::io::Error::other(format!("{address} timed out")))
+        };
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(100);
+        assert_eq!(
+            serial(&[first, second], deadline, &unanswered),
+            Err("192.0.2.1:443 timed out".to_owned())
+        );
+        assert_eq!(*tried.lock().unwrap(), [first]);
+        assert!(started.elapsed() < SANE_MINIMUM, "{:?}", started.elapsed());
+    }
 }

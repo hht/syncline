@@ -253,3 +253,26 @@ fn timer_beyond_representable_time_never_fires_instead_of_panicking() {
     host.execute(vec![Instruction::Schedule { timer: 1, delay: f64::MAX }]);
     assert!(host.timers.is_empty());
 }
+
+#[test]
+fn a_panic_on_the_sync_thread_delivers_broken_with_its_message_after_releasing_the_database_file() {
+    let library = Library::start("panic");
+    library.open(1);
+    // An event the network thread never sends breaks an internal invariant of the sync thread.
+    library
+        .handle
+        .events
+        .send(crate::host::Event::Network(syncline::client::Input::Fired { timer: 1 }))
+        .unwrap();
+    let batch: Vec<Json> = serde_json::from_str(&library.handle.next().expect("stream ended before broken")).unwrap();
+    assert_eq!(
+        batch,
+        [json!({
+            "type": "broken",
+            "message": "Syncline sync thread panicked: internal error: entered unreachable code: network thread only delivers socket and request events"
+        })]
+    );
+    // The app may remove or reopen the database as soon as it sees broken.
+    crate::remove(&library.directory.join("test.db")).unwrap();
+    assert_eq!(library.handle.next(), None);
+}

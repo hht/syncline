@@ -237,3 +237,25 @@ fn over_tls_messages_larger_than_the_socket_and_tls_buffers_flow_both_ways_while
         assert!(matches!(next(&events), Input::Message { socket: 7, data } if data == *message));
     }
 }
+
+#[test]
+fn a_connection_reset_while_the_device_is_still_sending_yields_an_abnormal_close() {
+    let (port, _) = server(|_| {
+        // Closing with the device's bytes unread resets the connection.
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    let (socket, events) = opened(port);
+    socket.send("x".repeat(1 << 23));
+    assert!(matches!(next(&events), Input::Closed { socket: 7, code: 1006, reason } if !reason.is_empty()));
+}
+
+#[test]
+fn binary_frames_are_ignored_and_text_frames_after_them_still_arrive() {
+    let (port, _) = server(|ws| {
+        ws.send(Message::binary(vec![1, 2, 3])).unwrap();
+        ws.send(Message::text("after")).unwrap();
+        while ws.read().is_ok() {}
+    });
+    let (_socket, events) = opened(port);
+    assert!(matches!(next(&events), Input::Message { socket: 7, data } if data == "after"));
+}
