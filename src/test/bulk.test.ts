@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import type { Event } from '../cloud/events.ts';
+import type { SynclineEvent } from '../cloud/events.ts';
 import { Space } from '../cloud/space.ts';
 import { Device } from '../test/test-device.ts';
 import { drain } from './test-drive.ts';
@@ -64,7 +64,7 @@ const insertExercises = (device: Device, count: number, workout_id?: string, fro
 function setup() {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, tables);
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const { network, server } = serving(space, undefined, (event) => events.push(event));
   const devices = [0, 1].map((index) => {
     // Switch to incremental auto_vacuum before creating tables (as openSyncline does); reclaimed only after stage tables clear.

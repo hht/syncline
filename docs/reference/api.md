@@ -116,7 +116,7 @@ Durable Object for private spaces. Extend it: `super(ctx, env, schema, options?)
 | `retired` | Permanently removed tables and columns (`table.column`), never returning to sync, identical to device declarations; cannot be re-declared |
 | `validation` | Same as devices: re-validates uploaded client writes and server writes on the cloud |
 | `readOnly` | Synced tables writable only by the cloud, identical to device declarations: modified only by server writes (`mutate`). Device writes touching them are held (pushed only by modified clients), and resubmitting them also throws if they touch read-only tables. Must not reference tables writable by devices (cascaded deletes would delete their rows); checked on open. To change an existing table to read-only, deploy app updates that stop writing to it first: un-upgraded apps writing to it will have those writes held |
-| `onEvent` | Callback for cloud events |
+| `onEvent` | Callback for cloud events (`SynclineEvent`), for logs and alerts; see [Errors](errors.md#events) |
 | `writeQuota` | Token-bucket rate limit on pushed writes from devices: `{ rate, burst }`. Refills `rate` rows per second up to `burst` rows (counted as row changes); closes the connection with 1013 when exceeded. Unlimited if omitted; see [Limits](limits.md) |
 | `dailyWrites` | Maximum number of billed SQLite row writes from client pushes per UTC day (including indexes and commit log; server writes do not count). Closes the connection with 1013 when reached, resuming the next day. Unlimited if omitted; see [Limits](limits.md) |
 | `connections` | Maximum concurrent connections (positive integer), default 32; see [Limits](limits.md). Increase for users with many devices |
@@ -161,4 +161,4 @@ Restores a private space to `at` (millisecond timestamp). Rejects when the objec
 
 ### Types
 
-`Exporter` (`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`), `Identity` (`{ space, expiresAt }`), `SharedIdentity` (`{ buckets, expiresAt }`), `Bucket`, `BucketRules`, `Change` (a modified row within a write), `ValidationError`.
+`SynclineEvent` (an event `onEvent` receives; see [Errors](errors.md#events)), `Exporter` (`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`), `Identity` (`{ space, expiresAt }`), `SharedIdentity` (`{ buckets, expiresAt }`), `Bucket`, `BucketRules`, `Change` (a modified row within a write), `ValidationError`.

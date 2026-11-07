@@ -4,7 +4,7 @@ import { parseMutations } from '../common/parse.ts';
 import type { Mutation } from '../common/protocol.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage } from '../test/test-storage.ts';
-import type { Event } from './events.ts';
+import type { SynclineEvent } from './events.ts';
 import { Server } from './server.ts';
 import { Space } from './space.ts';
 
@@ -54,7 +54,7 @@ test('storage error (not mutation flaw) after earlier writes committed: committe
 test('value cannot fit cloud table (type mismatch across ends, single value exceeding 2 MB): mutation flaw holds write, advances lmid, subsequent writes execute normally', () => {
   // Cloud body is STRICT integer column (cloudStorage adds WITHOUT ROWID), while device schema defines it as text.
   const cloud = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body INTEGER) STRICT,');
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const space = new Space(cloud, [note], { events: (event) => events.push(event) });
   const body = (client: string, value: string): Mutation => ({
     client,
@@ -110,7 +110,7 @@ test('reject reason containing storage error substring (column name or validator
 /** Sets up space where client a has pushed mutation 1; events collects subsequent events. */
 function pushedOnce() {
   const cloud = cloudStorage(createNote);
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const space = new Space(cloud, [note], { events: (event) => events.push(event) });
   space.push([put('a', 1)]);
   return { cloud, events, space };
@@ -145,7 +145,7 @@ test('sequence gap (earlier mutation missing): skips mutation, emits write.skipp
 /** Server instance with open connections for phone and tablet; events collects cloud events. */
 function online() {
   const cloud = cloudStorage(createNote);
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const phone = new RecordingSocket();
   const tablet = new RecordingSocket();
   const sockets = { acceptWebSocket: () => undefined, getWebSockets: () => [phone, tablet] };

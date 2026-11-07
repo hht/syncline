@@ -57,34 +57,4 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 ## 报错
 
-### 写入出现后又消失了
-
-云端拒绝执行这条写入，比如它超出了某项[限制](limits.md)，或违反了你云端代码中的规则。云端会暂扣这条写入，而不是丢弃。
-
-用 `onHeld` 监听，告诉用户哪里失败了。每条被暂扣的写入最多报告一次，时机是云端向这台设备确认这条写入时，所以由后台 `syncOnce` 收到确认的写入永远不会报给它。完整列表保存在云端：用 `held()` 读取。问题修复后，在云端用 `resubmit` 重新提交或丢弃这条写入。
-
-### 打开数据库时出现 `PendingWritesError`
-
-上一个用户还有待上传的写入，用新的 `userID` 打开会删掉它们。
-
-请上一个用户重新登录并完成同步。如果要丢弃这些写入，用 `discardPending: true` 打开。
-
-### `downloadError` 中出现 `AccountMismatchError`
-
-云端报告的账号和这个数据库首次同步时的账号不同。为避免数据上传到错误的账号，同步已停止。请用当前用户的 `userID` 重新打开数据库。
-
-### `updateNeeded` 为 true
-
-云端比应用新，或者应用用到了云端已退役的表或列。请发布应用更新。
-
-### `uploadError` 显示代码 1007
-
-云端拒绝了上传的一批写入：无法解析，或超出了限制。上传会暂停，直到应用重启或调用 `resync()`。如果这些写入永远无法成功，用 `resync({ discardPending: true })` 丢弃。
-
-### 加了触发器之后下载一直失败
-
-同步表上的触发器抛错，可能阻塞下载或打开数据库。删除这个触发器，或者让它在 Syncline 修改行时不抛错。
-
-### Web 应用只能在一个标签页里用
-
-每个站点只能有一个标签页打开数据库。第二个标签页会失败，报错以 `Local database is open in another tab` 开头：它的 `waitForReady()` 被拒绝，`downloadError` 显示这个错误。关闭另一个标签页，再刷新当前页。
+每种报错的含义和处理方法见[报错](errors.md)。

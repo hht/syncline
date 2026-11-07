@@ -55,34 +55,4 @@ Pass `allowCleartext: true` to `openSyncline`, and use `http://localhost:8787` f
 
 ## Errors
 
-### A write appears, then disappears
-
-The cloud refused to run it, for example because it broke a [limit](limits.md) or a rule in your cloud code. The cloud holds the write instead of dropping it.
-
-Listen with `onHeld` to show the user what failed. It reports each held write at most once, when the cloud confirms that write to this device, so a write whose confirmation a background `syncOnce` received is never reported to it. The cloud keeps the full list: read it with `held()`. Once the cause is fixed, resubmit or discard the write in the cloud with `resubmit`.
-
-### `PendingWritesError` when opening the database
-
-The previous user still has writes waiting to upload, and opening for a new `userID` would delete them.
-
-Ask the previous user to sign in again and sync. To drop their writes instead, open with `discardPending: true`.
-
-### `AccountMismatchError` in `downloadError`
-
-The cloud reports a different account than the one this database first synced with. Sync stops so nothing uploads to the wrong account. Reopen the database with the current user's `userID`.
-
-### `updateNeeded` is true
-
-The cloud is newer than the app, or the app uses a table or column the cloud has retired. Ship an app update.
-
-### `uploadError` shows code 1007
-
-The cloud rejected a batch of uploaded writes: it could not read it, or the batch broke a limit. Uploads stop until the app restarts or calls `resync()`. If the writes can never succeed, `resync({ discardPending: true })` drops them.
-
-### Downloads keep failing after I added a trigger
-
-A trigger on a synced table that raises an error can block downloads, or opening the database. Remove the trigger, or stop it from raising when Syncline changes rows.
-
-### The web app works in one tab only
-
-Only one tab per site can open the database. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
+See [Errors](errors.md) for what each error means and how to handle it.

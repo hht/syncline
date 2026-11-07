@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect } from 'vitest';
-import type { Event } from '../cloud/events.ts';
+import type { SynclineEvent } from '../cloud/events.ts';
 import type { Quota } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import type { Mutation } from '../common/protocol.ts';
@@ -63,7 +63,7 @@ export function setup(quota?: Quota) {
   space.mutate((tx) => {
     for (const id of ids) tx.insert(note, { id });
   });
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const { network, server } = serving(space, chunkLimit, (event) => events.push(event), { quota });
   const storage = deviceStorage(createNote, createDraft);
   const device = new Device(storage, [note, draft]);
