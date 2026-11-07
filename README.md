@@ -17,7 +17,7 @@ Your app reads and writes a local SQLite database. Syncline keeps it in sync wit
 - **No lost writes.** Network drops, retries, and crashes never lose a write or apply it twice.
 - **iOS, Android, and web.** One API on every platform.
 - **Cheap to run.** One Durable Object per user. Idle connections are not billed for duration.
-- **Shared data.** Catalogs and other shared data download through the CDN.
+- **Shared data.** Data the cloud writes for many users downloads through the CDN; each device gets only the parts its token allows.
 
 ## Quick start
 
