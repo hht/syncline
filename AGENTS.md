@@ -58,7 +58,7 @@ Code standards not covered by automated gates and enforced by pre-commit review:
 
 ## Commands
 
-The single check entrypoint is `pnpm check` (identical to the local git hook); work is complete only when it is fully green.
+The single check entrypoint is `pnpm check` (the local git hook runs it on changed files; CI runs it in full, after auditing production dependencies for high and critical advisories); work is complete only when it is fully green.
 
 - `pnpm check`: runs gates in two parallel batches (Rust-compiling gates finish first), printing only `file:line rule message` with full logs in `.check/<gate>.log`; `--changed` checks only files modified or untracked relative to `HEAD` (used by pre-commit); the full run also measures coverage against the thresholds in `tools/check/coverage.ts`, listing uncovered lines in `.check/test.log`.
 - `pnpm q <command>`: prints a concise summary with full logs in `.q/`.
