@@ -16,7 +16,8 @@ const native = await vi.hoisted(async () =>
 );
 vi.mock('expo', () => ({ requireNativeModule: () => native.module }));
 
-const open = (name = 'native-test') => openSyncline({ name, schema: {}, url: 'https://sync.test/space', token: async () => 'valid' });
+const open = (name = 'native-test') =>
+  openSyncline({ name, userID: 'u1', schema: {}, url: 'https://sync.test/space', token: async () => 'valid' });
 
 test('reopening database under same name before close finishes does not throw "already open" and starts a new handle', () => {
   const first = open();
@@ -41,13 +42,21 @@ test('opening blocked by PendingWrites: sync() rejects with PendingWrites and th
   expect(await syncing).toMatchObject({ userID: 'u0', count: 2 });
   expect(blocked.status().downloadError).toBeInstanceOf(PendingWrites);
   expect(() =>
-    openSyncline({ name: 'native-pending', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', discardPending: true }),
+    openSyncline({
+      name: 'native-pending',
+      userID: 'u1',
+      schema: {},
+      url: 'https://sync.test/space',
+      token: async () => 'valid',
+      discardPending: true,
+    }),
   ).not.toThrow();
 });
 
 test('syncOnce opens without discardPending even when given it, so a background sync never discards pending writes', () => {
   void syncOnce({
     name: 'native-background',
+    userID: 'u1',
     schema: {},
     url: 'https://sync.test/space',
     token: async () => 'valid',

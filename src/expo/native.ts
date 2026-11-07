@@ -51,7 +51,7 @@ export function openSyncline<S extends Schema>(options: OpenOptions<S>) {
 }
 
 function open<S extends Schema>(options: OpenOptions<S>) {
-  const { name, token } = options;
+  const { name } = options;
   const module = native();
   // Lazily acquires a handle on the first call (open) so schema validation errors throw before allocating a handle.
   let handle: number | undefined;
@@ -83,7 +83,7 @@ function open<S extends Schema>(options: OpenOptions<S>) {
         await module.remove(name);
       },
     },
-    token,
+    options.token,
   );
   // A database that could not open (e.g. PendingWrites) is closed, so the app can open the name again (e.g. with discardPending).
   client.opening.catch(() => close().catch(() => undefined));

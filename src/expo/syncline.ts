@@ -53,10 +53,11 @@ export type OpenOptions<S extends Schema> = {
   /** Database name identifying the local SQLite database file. */
   name: string;
   /**
-   * ID of the signed-in user the private space belongs to: if it differs from the one recorded, clears the previous user's data while
-   * preserving shared spaces. If the previous user left un-uploaded pending writes, throws PendingWrites unless discardPending is set.
+   * ID of the signed-in user the private space belongs to (an app with one user passes a constant): if it differs from the one recorded,
+   * clears the previous user's data while preserving shared spaces. If the previous user left un-uploaded pending writes, opening fails
+   * with PendingWrites unless discardPending is set. Required, so data of one user never shows to the next.
    */
-  userID?: string;
+  userID: string;
   /** Discards un-uploaded pending writes from a previous user when switching users; ignored by syncOnce. */
   discardPending?: boolean;
   schema: S;

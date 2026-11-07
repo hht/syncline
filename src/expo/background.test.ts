@@ -62,6 +62,7 @@ function define(signedIn = true) {
   databases += 1;
   const options: OpenOptions<Schema> = {
     name: `background-${databases}`,
+    userID: 'u1',
     schema: {},
     url: 'https://sync.test/space',
     token: async () => 'valid',

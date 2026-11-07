@@ -195,6 +195,7 @@ test.each([
     const failing = { '~standard': { version: 1 as const, vendor: 'test', validate } };
     const space = openSyncline({
       name: 'web-test',
+      userID: 'u1',
       schema: { note },
       validation: new Map([[note, failing]]),
       url: 'https://sync.test/space',
@@ -242,6 +243,7 @@ test('deleting database after Worker crash succeeds by spawning a new Worker to 
 test('sync on a space waits for its connect reply; connect carries allowCleartext when set', async () => {
   const space = openSyncline({
     name: 'web-test',
+    userID: 'u1',
     schema: {},
     url: 'http://localhost:8787/space',
     token: async () => 'valid',

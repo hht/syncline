@@ -54,11 +54,12 @@ function post(message: HostMessage) {
 
 /** Opens or creates a local database and starts synchronizing its private space. */
 export function openSyncline<S extends Schema>(options: OpenOptions<S>) {
-  const { name, token } = options;
+  const { name } = options;
   const instance = nextInstance++;
   const client = new Client((call) => post({ instance, call }), options);
-  instances.set(instance, client);
+  // Registered after open, which throws on invalid options before anything is posted; replies arrive asynchronously
   const main = client.open({ name });
+  instances.set(instance, client);
   /** Closes database and unsubscribes this instance from worker messages. */
   const close = () => client.close({ type: 'close', name, remove: false }, () => instances.delete(instance));
   /** Deletes database: awaits close, then issues a dedicated removal instance to delete database file. */
@@ -69,5 +70,5 @@ export function openSyncline<S extends Schema>(options: OpenOptions<S>) {
     instances.set(removal, remover);
     await remover.call<void>({ type: 'close', name, remove: true }).finally(() => instances.delete(removal));
   };
-  return syncline(name, client.local, main, { shared: client.share, close, delete: remove }, token);
+  return syncline(name, client.local, main, { shared: client.share, close, delete: remove }, options.token);
 }
