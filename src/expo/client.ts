@@ -169,7 +169,7 @@ export class Client {
     return this.channel('', url, token);
   }
 
-  /** Settles with the open call: rejects with the reason the database could not open (e.g. PendingWrites). */
+  /** Settles with the open call: rejects with the reason the database could not open (e.g. PendingWritesError). */
   get opening() {
     return this.#opened;
   }

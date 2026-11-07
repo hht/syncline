@@ -29,7 +29,7 @@ Apps that have not updated keep syncing after you add tables or columns. After y
 
 ### How do I share data between users?
 
-Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See `shared()` in the [API](api.md).
+Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See `openShared()` in the [API](api.md).
 
 ### Can the app sync in the background?
 
@@ -51,13 +51,13 @@ The cloud refused to run it, for example because it broke a [limit](limits.md) o
 
 Listen with `onHeld` to show the user what failed. Once the cause is fixed, resubmit or discard the write in the cloud with `resubmit`.
 
-### `PendingWrites` when opening the database
+### `PendingWritesError` when opening the database
 
 The previous user still has writes waiting to upload, and opening for a new `userID` would delete them.
 
 Ask the previous user to sign in again and sync. To drop their writes instead, open with `discardPending: true`.
 
-### `AccountMismatch` in `downloadError`
+### `AccountMismatchError` in `downloadError`
 
 The cloud reports a different account than the one this database first synced with. Sync stops so nothing uploads to the wrong account. Reopen the database with the current user's `userID`.
 

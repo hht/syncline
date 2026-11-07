@@ -59,7 +59,8 @@ export function defineBackgroundSync(options: () => OpenOptions<Schema> | undefi
 }
 
 /** Starts background sync after sign-in. The system wakes the app no more often than every `minimumInterval` minutes (minimum 15). */
-export const startBackgroundSync = (minimumInterval = 15) => registerTaskAsync(task, { minimumInterval });
+export const startBackgroundSync = ({ minimumInterval = 15 }: { minimumInterval?: number } = {}) =>
+  registerTaskAsync(task, { minimumInterval });
 
 /** Stops background sync on sign-out. */
 export const stopBackgroundSync = () => unregisterTaskAsync(task);

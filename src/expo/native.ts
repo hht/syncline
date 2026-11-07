@@ -85,7 +85,7 @@ function open<S extends Schema>(options: OpenOptions<S>) {
     },
     options.token,
   );
-  // A database that could not open (e.g. PendingWrites) is closed, so the app can open the name again (e.g. with discardPending).
+  // A database that could not open (e.g. PendingWritesError) is closed, so the app can open the name again (e.g. with discardPending).
   client.opening.catch(() => close().catch(() => undefined));
   return instance;
 }
@@ -98,7 +98,7 @@ function open<S extends Schema>(options: OpenOptions<S>) {
  * If the user opens the app during sync, the foreground closes this instance and opens its own, and this resolves. Aborts via signal or failure close
  * opened databases; on iOS background time expiration the app is suspended immediately, which may preclude graceful closure.
  * Synchronizes only the private space. Preserves pending writes regardless of discardPending: switching users while pending writes
- * remain rejects with PendingWrites for resolution in the foreground.
+ * remain rejects with PendingWritesError for resolution in the foreground.
  */
 export function syncOnce<S extends Schema>({ discardPending: _, ...options }: OpenOptions<S>, settings: { signal?: AbortSignal } = {}) {
   return opened.syncOnce(options.name, () => open(options), settings);

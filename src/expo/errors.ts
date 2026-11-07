@@ -8,9 +8,9 @@ import type { SyncStatus } from './status.ts';
  * Bridges errors across the Worker-page boundary and from the Rust core back to JavaScript.
  *
  * Structured cloning in `postMessage` preserves only standard error names and messages (call stacks differ across browsers). The Rust
- * core reports errors that integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatch`, `PendingWrites`,
+ * core reports errors that integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatchError`, `PendingWritesError`,
  * `VersionMismatch`, `SchemaMismatch`, and `Reject`) in the serialized shape, and the page reconstructs them identical to native mobile,
- * as it does sync status errors (`downloadError`, `uploadError`) via `deserializeStatus`. Errors the Worker raises retain only their message. The two device-only error classes (`AccountMismatch`, `PendingWrites`) are defined here.
+ * as it does sync status errors (`downloadError`, `uploadError`) via `deserializeStatus`. Errors the Worker raises retain only their message. The two device-only error classes (`AccountMismatchError`, `PendingWritesError`) are defined here.
  * What this module must not know: Where errors originate or how the page handles them.
  * @see https://html.spec.whatwg.org/multipage/structured-data.html#serializable-objects
  */
@@ -22,13 +22,13 @@ import type { SyncStatus } from './status.ts';
  * signed in with a different token). Sync stops without pushing pending writes into the other space. The app should reopen with the
  * current account (`userID`) or prompt the user to sign in again.
  */
-export class AccountMismatch extends Error {
+export class AccountMismatchError extends Error {
   readonly stored: string;
   readonly cloud: string;
 
   constructor(stored: string, cloud: string) {
     super(`Account mismatch: local database belongs to ${stored}, but cloud is ${cloud}; sync stopped, reopen with current account`);
-    this.name = 'AccountMismatch';
+    this.name = 'AccountMismatchError';
     this.stored = stored;
     this.cloud = cloud;
   }
@@ -40,7 +40,7 @@ export class AccountMismatch extends Error {
  * Prevents clearing or opening the database so pending writes are not lost. The app should prompt the user to sign back in as `userID` to
  * finish syncing, or explicitly pass `discardPending` when opening.
  */
-export class PendingWrites extends Error {
+export class PendingWritesError extends Error {
   /** ID of the previous user. */
   readonly userID: string;
   /** Number of pending writes waiting to upload. */
@@ -48,7 +48,7 @@ export class PendingWrites extends Error {
 
   constructor(userID: string, count: number) {
     super(`Previous user (${userID}) still has ${count} pending writes waiting to upload`);
-    this.name = 'PendingWrites';
+    this.name = 'PendingWritesError';
     this.userID = userID;
     this.count = count;
   }
@@ -80,8 +80,8 @@ export function deserializeError(serialized: SerializedError) {
 
 function restored({ message, validation, account, pending, version, schema, reject }: SerializedError): Error {
   if (validation) return new ValidationError(validation.table, validation.issues);
-  if (account) return new AccountMismatch(account.stored, account.cloud);
-  if (pending) return new PendingWrites(pending.owner, pending.count);
+  if (account) return new AccountMismatchError(account.stored, account.cloud);
+  if (pending) return new PendingWritesError(pending.owner, pending.count);
   if (version !== undefined) return new VersionMismatch(version);
   if (schema) return new SchemaMismatch(schema);
   if (reject) return new Reject(message);

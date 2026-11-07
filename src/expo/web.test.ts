@@ -130,7 +130,7 @@ test('queries on closed database fail with "Local database is closed"; new event
 test('marks downloadError on private space and shared spaces when open fails without lingering in connecting state', async () => {
   const space = open(async () => 'valid');
   const { instance, call } = worker().last('open');
-  const catalog = space.shared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
+  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
   worker().deliver(instance, { type: 'reply', id: call.id ?? -1, error: { message: 'Local database is open in another tab' } });
   await flush();
   const failed = { connecting: false, downloadError: expect.objectContaining({ message: 'Local database is open in another tab' }) };
@@ -145,7 +145,7 @@ test('marks downloadError on private space and shared spaces when open fails wit
 test('opening a shared space reaches the core before queries issued after it, so a user switch clears rows before they are read', async () => {
   const { space } = await opened();
   worker().posted.length = 0;
-  space.shared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
+  space.openShared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
   void space.db
     .select()
     .from(note)
@@ -162,11 +162,11 @@ test('opening a shared space reaches the core before queries issued after it, so
 test('reopening identical shared space returns open instance without reopening; throws when url or user differs', async () => {
   const { space } = await opened();
   const options = { schema: {}, url: 'https://sync.test/catalog', userID: 'u1' };
-  const first = space.shared('catalog', options);
-  expect(space.shared('catalog', options)).toBe(first);
+  const first = space.openShared('catalog', options);
+  expect(space.openShared('catalog', options)).toBe(first);
   await flush();
   expect(worker().posted.filter(({ call }) => call.type === 'shared')).toHaveLength(1);
-  expect(() => space.shared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
+  expect(() => space.openShared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
 });
 
 test('in-flight calls fail with "Local database is closed" when close reply arrives without waiting indefinitely', async () => {
@@ -278,12 +278,12 @@ test('waitForReady() resolves once open and connect succeed, and rejects with th
   expect(settled).toBe(false);
   worker().deliver(instance, { type: 'reply', id: worker().last('connect').call.id ?? -1 });
   await opening;
-  const clashing = space.shared('clashing', { schema: {}, url: 'https://sync.test/clashing' });
+  const clashing = space.openShared('clashing', { schema: {}, url: 'https://sync.test/clashing' });
   await flush();
   const refused = { message: 'table has the same name as an existing synced or local-only table: note' };
   worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1, error: refused });
   await expect(clashing.waitForReady()).rejects.toThrow(refused.message);
-  const catalog = space.shared('catalog', { schema: {}, url: 'https://sync.test/catalog?bucket=a' });
+  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog?bucket=a' });
   await flush();
   worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1 });
   await flush();

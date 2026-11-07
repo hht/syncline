@@ -133,7 +133,7 @@ A mismatched section is downloaded again. Pending writes are kept.
 
 ## Things to know
 
-- **Signing out.** Opening the database for another `userID` clears the previous user's data. It fails with `PendingWrites` instead if that user still has writes to upload.
+- **Signing out.** Opening the database for another `userID` clears the previous user's data. It fails with `PendingWritesError` instead if that user still has writes to upload.
 - **App triggers.** Triggers on synced tables fire again whenever the device undoes and redoes your pending writes. A trigger that raises an error can block downloads until you remove it.
 - **Foreign keys on your own tables.** SQLite does not enforce them. A synced row your table points at can be deleted.
 - **Changing tokens.** Call `reconnect()` when a user's permissions change. In shared spaces, live updates follow the old access until at most a minute after the old token expires; downloads check the token every time.

@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import { AccountMismatch, PendingWrites } from '../expo/errors.ts';
+import { AccountMismatchError, PendingWritesError } from '../expo/errors.ts';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, tables, workout, workouts, write } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
@@ -29,10 +29,10 @@ async function used() {
 
 const programs = (storage: ReturnType<typeof deviceStorage>) => storage.sql.exec('SELECT id FROM program').toArray();
 
-test('opened with different owner and previous owner has pending writes: throws PendingWrites (who and how many), clears nothing; reopened by same owner, private data, pending writes, and cookie intact', async () => {
+test('opened with different owner and previous owner has pending writes: throws PendingWritesError (who and how many), clears nothing; reopened by same owner, private data, pending writes, and cookie intact', async () => {
   const storage = await used();
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(expect.objectContaining({ userID: 'alice', count: 1 }));
-  expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(PendingWrites);
+  expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(PendingWritesError);
   const device = new Device(storage, tables, { owner: 'alice' });
   expect(workouts(storage)).toHaveLength(2);
   expect(device.private.pendingCount()).toBe(1);
@@ -65,7 +65,7 @@ test('shared space switches logged-in owner: rows viewed by previous owner clear
   expect(catalog.cookie()).toBeNull();
 });
 
-test('cloud space differs from the one recorded on first sync (account switched on device, token belongs to another): throws AccountMismatch, rejects message; re-recorded only after owner change', async () => {
+test('cloud space differs from the one recorded on first sync (account switched on device, token belongs to another): throws AccountMismatchError, rejects message; re-recorded only after owner change', async () => {
   const storage = deviceStorage(createWorkout);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.private.receive({
@@ -76,8 +76,8 @@ test('cloud space differs from the one recorded on first sync (account switched 
   await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'unuploaded' }));
   await expect(
     device.private.receive({ base: device.private.cookie(), cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [], space: 'bob' }),
-  ).rejects.toThrow(AccountMismatch);
-  await expect(device.private.notified({ hint: { version: 9, nonce: 9 }, space: 'bob' }, false)).rejects.toThrow(AccountMismatch);
+  ).rejects.toThrow(AccountMismatchError);
+  await expect(device.private.notified({ hint: { version: 9, nonce: 9 }, space: 'bob' }, false)).rejects.toThrow(AccountMismatchError);
   expect([workouts(storage).length, device.private.pendingCount(), device.private.cookie()]).toEqual([2, 1, { version: 1, nonce: 1 }]);
   device.close();
 

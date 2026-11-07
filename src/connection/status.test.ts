@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import { type Mutation, pullNeeded } from '../common/protocol.ts';
-import { AccountMismatch } from '../expo/errors.ts';
+import { AccountMismatchError } from '../expo/errors.ts';
 import { Device } from '../test/test-device.ts';
 import { drain, flush, withFakeTimers } from '../test/test-drive.ts';
 import { privateCloud } from '../test/test-entry.ts';
@@ -245,7 +245,7 @@ test('mutation with malformed changes in upload queue: held by cloud while prece
   connection.stop();
 });
 
-test('space identity change (account switch): stops sync with AccountMismatch without retrying, preserving data and pending writes', async () => {
+test('space identity change (account switch): stops sync with AccountMismatchError without retrying, preserving data and pending writes', async () => {
   const space = new Space(cloudStorage(createNote, createDraft), [note, draft]);
   space.mutate((tx) => tx.insert(note, { id: 'n1' }));
   let identity = 'alice';
@@ -263,7 +263,7 @@ test('space identity change (account switch): stops sync with AccountMismatch wi
   identity = 'bob';
   network.breakOne();
   await drain(network);
-  expect(connection.status()).toMatchObject({ connected: false, connecting: false, downloadError: expect.any(AccountMismatch) });
+  expect(connection.status()).toMatchObject({ connected: false, connecting: false, downloadError: expect.any(AccountMismatchError) });
   expect(network.fire()).toBe(false);
   expect(device.private.cookie()).not.toBeNull();
   expect(reported).toHaveLength(1);

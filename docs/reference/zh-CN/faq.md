@@ -31,7 +31,7 @@
 
 ### 怎么在用户之间共享数据？
 
-使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见 [API](../api.md)（英文）中的 `shared()`。
+使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见 [API](../api.md)（英文）中的 `openShared()`。
 
 ### 应用能在后台同步吗？
 
@@ -53,13 +53,13 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 用 `onHeld` 监听，告诉用户哪里失败了。问题修复后，在云端用 `resubmit` 重新提交或丢弃这条写入。
 
-### 打开数据库时出现 `PendingWrites`
+### 打开数据库时出现 `PendingWritesError`
 
 上一个用户还有待上传的写入，用新的 `userID` 打开会删掉它们。
 
 请上一个用户重新登录并完成同步。如果要丢弃这些写入，用 `discardPending: true` 打开。
 
-### `downloadError` 中出现 `AccountMismatch`
+### `downloadError` 中出现 `AccountMismatchError`
 
 云端报告的账号和这个数据库首次同步时的账号不同。为避免数据上传到错误的账号，同步已停止。请用当前用户的 `userID` 重新打开数据库。
 

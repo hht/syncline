@@ -145,7 +145,7 @@ test('on Android no expiration listener is added', async () => {
 
 test('starting registers the task with a minimum interval of 15 minutes unless given one; stopping unregisters it', async () => {
   await startBackgroundSync();
-  await startBackgroundSync(60);
+  await startBackgroundSync({ minimumInterval: 60 });
   await stopBackgroundSync();
   expect(os.registered).toEqual([
     ['register', 'syncline-background-sync', { minimumInterval: 15 }],
