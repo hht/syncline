@@ -146,7 +146,7 @@ A mismatched section is downloaded again. Pending writes are kept.
 
 ## Connection errors
 
-The cloud closes a connection with codes such as these. Devices handle them on their own; the code shows in `uploadError` or `downloadError`.
+The cloud closes a connection with codes such as these. Devices handle them on their own. Except for 4000, 4002, and 4003, the code shows in `uploadError` or `downloadError`.
 
 | Code | Meaning | What the device does |
 |---|---|---|
