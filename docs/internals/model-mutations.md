@@ -90,6 +90,7 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 - Versions without keys (rule changes, rebuilds) not treated as "too many" (`MCFanout`: `Covers`)
 - Send empty catch-up chained onto device cookie when head version cannot be queried (`MCFanout`: `Covers`)
 - Shard acknowledgments adopt head instead of reverting to persisted version after shared space actor restart (`MCFanout`: S2)
+- Tokens never expire (`Expire` removed; `MCFanoutLate`: `CatchesUp`; a round the fanout gave up on reaches the shard after a reset, moves its known version back, and the hint it pushes to a device whose catch-up was lost names a version the device then holds, so nothing tells it about the latest)
 
 ## Schedule (`Schedule.tla`)
 

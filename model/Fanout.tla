@@ -18,7 +18,9 @@
 (* may be lost on the way, its send may time out while it waits for the   *)
 (* shard's query, or its acknowledgment may be lost: progress does not     *)
 (* advance and a new round goes out later. A round the fanout gave up on   *)
-(* before it arrived never arrives later (not modeled: a late arrival).    *)
+(* before it arrived (lost, timed out, or forgotten by a restart) may      *)
+(* still arrive later: the call is not cancelled. The shard handles it as  *)
+(* any round, but nobody waits for its acknowledgment (one per shard).     *)
 (* When the shared space restarts, rounds in flight are forgotten and cur  *)
 (* rolls back to conf; a fresh fanout sends an empty round at the latest  *)
 (* version. When too many buckets are touched, the round carries only     *)
@@ -45,7 +47,9 @@
 (* Catch-up versions are scoped to the connection and never written to     *)
 (* known, which would suppress fanout for other connections. A device that *)
 (* hears nothing on a connection within its catch-up deadline gives up on  *)
-(* it and connects again.                                                  *)
+(* it and connects again. Every connection closes when the device's token *)
+(* expires, and the device connects again with a fresh token: a device a   *)
+(* late round left behind catches up then at the latest.                   *)
 (* Resident device: permanently connected to ResShard with ResSub, tracking*)
 (* the highest pushed version in aSeen.                                    *)
 (* Device: chains and lands notices matching cookie, otherwise records the *)
@@ -58,7 +62,9 @@ CONSTANTS
     Buckets, Shards,
     Sub,              \* Buckets subscribed by the device
     ResShard, ResSub, \* Shard and subscribed buckets for the resident device
-    MaxWrites, MaxFaults, MaxConns
+    MaxWrites, MaxFaults, MaxConns,
+    LateRounds        \* Whether rounds the fanout gave up on can arrive late, and tokens expire: only MCFanoutLate.cfg enables both,
+                      \* which multiply the state space, and only catching up after a late round needs token expiry
 
 NoShard == "none"
 Unknown == -1
@@ -72,6 +78,7 @@ VARIABLES
     cur,        \* Cloud (memory): last version acknowledged by shard (Unknown: no round sent yet)
     conf,       \* Cloud (persisted): version acknowledged by all shards (Unknown: no round sent yet)
     sent,       \* Cloud (memory): round in flight to each shard (NoRound if none); waiting: the shard received it and waits for its query
+    late,       \* Network: a round the fanout gave up on that may still reach each shard (NoRound if none)
     known,      \* Broadcast shard (memory): latest version known
     asked,      \* Broadcast shard (memory): last query answer (Unknown if none)
     held,       \* Broadcast shard (memory): a round that did not chain waits for the query (possibly one the fanout has forgotten)
@@ -90,7 +97,7 @@ VARIABLES
 shard == <<known, asked, held, asking>>
 conn == <<dShard, dPhase, cCookie, cPushed, chan, aSeen, gaps>>
 dev == <<dCookie, dWant, dInflight, dIssued, wasted>>
-vars == <<touched, cur, conf, sent, shard, conn, dev, faults, conns>>
+vars == <<touched, cur, conf, sent, late, shard, conn, dev, faults, conns>>
 
 Latest == Len(touched)
 TouchedIn(lo, hi) == UNION {touched[v].b : v \in lo + 1..hi}
@@ -123,7 +130,7 @@ Ack(s, r) ==
     /\ conf' = IF \A x \in Shards : cur'[x] = Latest THEN Latest ELSE conf
 
 Init ==
-    /\ touched = <<>> /\ cur = [s \in Shards |-> Unknown] /\ conf = Unknown /\ sent = [s \in Shards |-> NoRound]
+    /\ touched = <<>> /\ cur = [s \in Shards |-> Unknown] /\ conf = Unknown /\ sent = [s \in Shards |-> NoRound] /\ late = [s \in Shards |-> NoRound]
     /\ known = [s \in Shards |-> Unknown] /\ asked = [s \in Shards |-> Unknown] /\ held = [s \in Shards |-> FALSE] /\ asking = [s \in Shards |-> FALSE]
     /\ dShard = NoShard /\ dPhase = "open" /\ cCookie = 0 /\ cPushed = Unknown /\ chan = <<>> /\ aSeen = 0 /\ gaps = 0
     /\ dCookie = 0 /\ dWant = 0 /\ dInflight = Unknown /\ dIssued = 0 /\ wasted = 0
@@ -132,7 +139,7 @@ Init ==
 Write(B, wide) ==
     /\ Latest < MaxWrites
     /\ touched' = Append(touched, [b |-> B, wide |-> wide])
-    /\ UNCHANGED <<cur, conf, sent, shard, conn, dev, faults, conns>>
+    /\ UNCHANGED <<cur, conf, sent, late, shard, conn, dev, faults, conns>>
 
 \* Starting version for round to shard s: fresh shards start at latest version (empty round establishing the incarnation)
 Base(s) == IF cur[s] = Unknown THEN Latest ELSE cur[s]
@@ -142,7 +149,7 @@ Send(s) ==
     /\ sent[s] = NoRound /\ cur[s] < Latest
     /\ \E many \in IF Wide(Base(s), Latest) THEN {TRUE} ELSE BOOLEAN :
           sent' = [sent EXCEPT ![s] = [b |-> Base(s), v |-> Latest, many |-> many, waiting |-> FALSE]]
-    /\ UNCHANGED <<touched, cur, conf, shard, conn, dev, faults, conns>>
+    /\ UNCHANGED <<touched, cur, conf, late, shard, conn, dev, faults, conns>>
 
 \* Chaining rule: a round chains onto known, or, with known unknown, when it is not empty. A shard that lost known (reset or eviction)
 \* still chains a non-empty round: its base is a version the shard acknowledged before (cur only advances on acknowledgment, and
@@ -161,7 +168,7 @@ ArriveChained(s, ack) ==
        ELSE UNCHANGED <<known, asked, chan, cPushed, aSeen, gaps>>
     /\ IF ack THEN Ack(s, r) /\ UNCHANGED faults ELSE faults < MaxFaults /\ faults' = faults + 1 /\ UNCHANGED <<cur, conf>>
     /\ sent' = [sent EXCEPT ![s] = NoRound]
-    /\ UNCHANGED <<touched, held, asking, dShard, dPhase, cCookie, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, late, held, asking, dShard, dPhase, cCookie, conns>> /\ UNCHANGED dev
 
 \* Round reaches shard s and does not chain. With a fresh answer at or past its version, the shard settles it at once: hints to every
 \* connection at the answer, which becomes known, then the acknowledgment (`ack` says whether it reaches the fanout). Otherwise the round
@@ -179,7 +186,7 @@ ArriveUnchained(s, ack) ==
           /\ sent' = [sent EXCEPT ![s] = [NoRound EXCEPT !.v = r.v, !.waiting = TRUE]] /\ held' = [held EXCEPT ![s] = TRUE]
           /\ asking' = [asking EXCEPT ![s] = TRUE]
           /\ UNCHANGED <<known, cur, conf, chan, cPushed, aSeen, gaps, faults>>
-    /\ UNCHANGED <<touched, asked, dShard, dPhase, cCookie, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, late, asked, dShard, dPhase, cCookie, conns>> /\ UNCHANGED dev
 
 \* The device's connection to shard s waits for catch-up
 Asking(s) == dShard = s /\ dPhase = "asking"
@@ -204,7 +211,7 @@ Answer(s) ==
                   ELSE UNCHANGED <<chan, cPushed>>
                /\ dPhase' = IF Asking(s) THEN "open" ELSE dPhase
     /\ cCookie' = IF Asking(s) THEN 0 ELSE cCookie
-    /\ UNCHANGED <<touched, dShard, gaps, faults, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, late, dShard, gaps, faults, conns>> /\ UNCHANGED dev
 
 \* Shard s's query fails: the waiting round fails (no acknowledgment); catch-up falls back to a hint at known, or sends nothing
 QueryFail(s) ==
@@ -216,7 +223,30 @@ QueryFail(s) ==
        THEN IF known[s] # Unknown THEN CatchupWith(known[s], FALSE) ELSE dPhase' = "open" /\ UNCHANGED <<chan, cPushed>>
        ELSE UNCHANGED <<dPhase, chan, cPushed>>
     /\ cCookie' = IF Asking(s) THEN 0 ELSE cCookie
-    /\ UNCHANGED <<touched, cur, conf, known, asked, dShard, aSeen, gaps, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, cur, conf, late, known, asked, dShard, aSeen, gaps, conns>> /\ UNCHANGED dev
+
+\* The round in flight to shard s once the fanout gives up on it: one not yet arrived either is lost or `stays` in the network (one per
+\* shard), and may arrive later
+Abandon(s, stays) == IF LateRounds /\ stays /\ late[s] = NoRound /\ sent[s] # NoRound /\ ~sent[s].waiting THEN [late EXCEPT ![s] = sent[s]] ELSE late
+
+\* A round the fanout gave up on reaches shard s: chained rounds push as any other, unchained ones settle from a fresh answer or wait for
+\* the query; no acknowledgment reaches the fanout
+ArriveLate(s) ==
+    LET r == late[s] IN
+    /\ r # NoRound
+    /\ late' = [late EXCEPT ![s] = NoRound]
+    /\ IF Chains(s, r)
+       THEN IF r.v > known[s]
+            THEN /\ known' = [known EXCEPT ![s] = r.v] /\ PushAll(s, r.b, r.v, TouchedIn(r.b, r.v), r.many)
+                 /\ asked' = [asked EXCEPT ![s] = IF @ < r.v THEN Unknown ELSE @]
+                 /\ UNCHANGED <<held, asking>>
+            ELSE UNCHANGED <<known, asked, held, asking, chan, cPushed, aSeen, gaps>>
+       ELSE IF asked[s] >= r.v
+            THEN /\ known' = [known EXCEPT ![s] = asked[s]] /\ PushAll(s, asked[s], asked[s], {}, TRUE)
+                 /\ UNCHANGED <<asked, held, asking>>
+            ELSE /\ held' = [held EXCEPT ![s] = TRUE] /\ asking' = [asking EXCEPT ![s] = TRUE]
+                 /\ UNCHANGED <<known, asked, chan, cPushed, aSeen, gaps>>
+    /\ UNCHANGED <<touched, cur, conf, sent, dShard, dPhase, cCookie, faults, conns>> /\ UNCHANGED dev
 
 \* A round in flight is lost, or its send times out while it waits for the shard's query (the shard still settles it, unacknowledged); the
 \* fanout sends again later
@@ -224,6 +254,7 @@ SendFail(s) ==
     /\ sent[s] # NoRound /\ faults < MaxFaults
     /\ faults' = faults + 1
     /\ sent' = [sent EXCEPT ![s] = NoRound]
+    /\ \E stays \in BOOLEAN : late' = Abandon(s, stays)
     /\ UNCHANGED <<touched, cur, conf, shard, conn, dev, conns>>
 
 \* Broadcast shard reset: memory cleared (known, last answer, query and its waiters); hibernating connections preserved, and a connection waiting for catch-up never gets it
@@ -235,14 +266,15 @@ ShardReset(s) ==
     /\ sent' = IF sent[s].waiting THEN [sent EXCEPT ![s] = NoRound] ELSE sent
     /\ dPhase' = IF Asking(s) THEN "open" ELSE dPhase
     /\ cCookie' = IF Asking(s) THEN 0 ELSE cCookie
-    /\ UNCHANGED <<touched, cur, conf, dShard, cPushed, chan, aSeen, gaps, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, cur, conf, late, dShard, cPushed, chan, aSeen, gaps, conns>> /\ UNCHANGED dev
 
 \* Shared space restart (deploy, memory eviction): rounds in flight are forgotten (rounds waiting for a shard's query still settle there,
-\* unacknowledged; rounds not yet arrived never arrive), and per-shard acknowledged versions roll back to persisted conf
+\* unacknowledged; rounds not yet arrived are lost or arrive late), and per-shard acknowledged versions roll back to persisted conf
 Restart ==
     /\ faults < MaxFaults /\ \E s \in Shards : cur[s] # conf \/ sent[s] # NoRound
     /\ faults' = faults + 1
     /\ cur' = [s \in Shards |-> conf] /\ sent' = [s \in Shards |-> NoRound]
+    /\ \E stay \in SUBSET Shards : late' = [s \in Shards |-> Abandon(s, s \in stay)[s]]
     /\ UNCHANGED <<touched, conf, shard, conn, dev, conns>>
 
 \* Device connects to shard s carrying its cookie and joins the recipient list. Catch-up comes at once from the shard's last answer while it
@@ -256,20 +288,27 @@ Connect(s) ==
           /\ dPhase' = "open" /\ UNCHANGED <<cCookie, asking>>
        \/ /\ dPhase' = "asking" /\ cCookie' = dCookie /\ cPushed' = Unknown /\ asking' = [asking EXCEPT ![s] = TRUE]
           /\ UNCHANGED chan
-    /\ UNCHANGED <<touched, cur, conf, sent, known, asked, held, aSeen, gaps, faults>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, cur, conf, sent, late, known, asked, held, aSeen, gaps, faults>> /\ UNCHANGED dev
 
 \* Disconnect: reconnects allowed while connection budget remains
 Disconnect ==
     /\ dShard # NoShard /\ conns < MaxConns
     /\ dShard' = NoShard /\ dPhase' = "open" /\ cCookie' = 0 /\ chan' = <<>>
-    /\ UNCHANGED <<touched, cur, conf, sent, shard, cPushed, aSeen, gaps, faults, conns>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, cPushed, aSeen, gaps, faults, conns>> /\ UNCHANGED dev
+
+\* Token expiry: the shard closes the connection and the device connects again with a fresh token, without spending the connection budget
+\* (tokens expire indefinitely often). A token outlives catch-up and the delivery of what was pushed: expiry comes only once both are done
+Expire ==
+    /\ LateRounds /\ dShard # NoShard /\ dPhase = "open" /\ chan = <<>>
+    /\ dShard' = NoShard /\ dPhase' = "open" /\ cCookie' = 0 /\ chan' = <<>> /\ conns' = conns - 1
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, cPushed, aSeen, gaps, faults>> /\ UNCHANGED dev
 
 \* Catch-up deadline: a connection that heard nothing after its catch-up was lost (query failure with nothing known, or shard reset) is
 \* given up, without spending the connection budget (each loss already spends a fault)
 GiveUp ==
     /\ dShard # NoShard /\ dPhase = "open" /\ cPushed = Unknown
     /\ dShard' = NoShard /\ conns' = conns - 1
-    /\ UNCHANGED <<touched, cur, conf, sent, shard, dPhase, cCookie, cPushed, chan, aSeen, gaps, faults>> /\ UNCHANGED dev
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, dPhase, cCookie, cPushed, chan, aSeen, gaps, faults>> /\ UNCHANGED dev
 
 Deliver ==
     /\ dShard # NoShard /\ chan # <<>>
@@ -278,13 +317,13 @@ Deliver ==
           THEN dCookie' = m.cookie /\ UNCHANGED dWant
           ELSE dWant' = Max({dWant, m.cookie}) /\ UNCHANGED dCookie
     /\ chan' = Tail(chan)
-    /\ UNCHANGED <<touched, cur, conf, sent, shard, dShard, dPhase, cCookie, cPushed, aSeen, gaps, faults, conns, dInflight, dIssued, wasted>>
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, dShard, dPhase, cCookie, cPushed, aSeen, gaps, faults, conns, dInflight, dIssued, wasted>>
 
 \* Pull when behind, using target version as floor
 PullStart ==
     /\ dInflight = Unknown /\ dWant > dCookie
     /\ dInflight' = dWant /\ dIssued' = dWant
-    /\ UNCHANGED <<touched, cur, conf, sent, shard, conn, faults, conns, dCookie, dWant, wasted>>
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, conn, faults, conns, dCookie, dWant, wasted>>
 
 \* Pull response: cache returns freshly computed response at or after the floor
 PullDone(t) ==
@@ -292,22 +331,23 @@ PullDone(t) ==
     /\ dCookie' = Max({dCookie, t})
     /\ wasted' = IF t < dIssued THEN wasted + 1 ELSE wasted
     /\ dInflight' = Unknown /\ dIssued' = 0
-    /\ UNCHANGED <<touched, cur, conf, sent, shard, conn, faults, conns, dWant>>
+    /\ UNCHANGED <<touched, cur, conf, sent, late, shard, conn, faults, conns, dWant>>
 
 Next ==
     \/ \E B \in SUBSET Buckets \ {{}} : Write(B, FALSE)
     \/ Write({}, TRUE)
     \/ \E s \in Shards :
           \/ Send(s) \/ ArriveChained(s, TRUE) \/ ArriveChained(s, FALSE) \/ ArriveUnchained(s, TRUE) \/ ArriveUnchained(s, FALSE)
-          \/ Answer(s) \/ QueryFail(s) \/ SendFail(s) \/ ShardReset(s) \/ Connect(s)
-    \/ Restart \/ Disconnect \/ GiveUp \/ Deliver \/ PullStart
+          \/ ArriveLate(s) \/ Answer(s) \/ QueryFail(s) \/ SendFail(s) \/ ShardReset(s) \/ Connect(s)
+    \/ Restart \/ Disconnect \/ Expire \/ GiveUp \/ Deliver \/ PullStart
     \/ \E t \in 0..Latest : PullDone(t)
 
-\* Fairness: fanout steps, query answers (assumes a shard's query to the shared space eventually settles), connection lifecycle, message
-\* delivery, and pulls proceed; cache expiry eventually forces fresh computation
+\* Fairness: fanout steps, query answers (assumes a shard's query to the shared space eventually settles), connection lifecycle including
+\* token expiry, message delivery, and pulls proceed; cache expiry eventually forces fresh computation. Late rounds need no fairness: they
+\* may never arrive
 Spec == Init /\ [][Next]_vars
             /\ \A s \in Shards : WF_vars(Send(s)) /\ WF_vars(ArriveChained(s, TRUE)) /\ WF_vars(ArriveUnchained(s, TRUE)) /\ WF_vars(Answer(s))
-            /\ WF_vars(\E x \in Shards : Connect(x)) /\ WF_vars(GiveUp)
+            /\ WF_vars(\E x \in Shards : Connect(x)) /\ WF_vars(GiveUp) /\ WF_vars(Expire)
             /\ WF_vars(Deliver) /\ WF_vars(PullStart)
             /\ WF_vars(\E t \in 0..Latest : PullDone(t)) /\ SF_vars(PullDone(Latest))
 
