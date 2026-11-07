@@ -105,7 +105,8 @@ export function useSyncline() {
 /**
  * Executes a reactive Drizzle query against the local database.
  *
- * The query remains fresh indefinitely and automatically re-executes only when referenced tables mutate.
+ * The query remains fresh indefinitely and re-executes only when referenced tables mutate, or when the SQL or parameters build returns
+ * change (such as a captured variable), which makes it a new query.
  */
 export function useQuery<T>(build: (db: Database) => PromiseLike<T> & { toSQL(): { sql: string; params: unknown[] } }) {
   const sync = useSyncline();

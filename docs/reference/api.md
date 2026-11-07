@@ -80,7 +80,7 @@ Must be used inside TanStack's `QueryClientProvider`.
 | Export | Description |
 |---|---|
 | `SynclineProvider` | `<SynclineProvider value={space}>`: Provides a database to the subtree; `value` can be `undefined` (logged out). Clears the query cache of the previous database when switching databases or unmounting |
-| `useQuery(build)` | `build(db)` defines a Drizzle query; returns TanStack query results, re-running only when read tables change |
+| `useQuery(build)` | `build(db)` defines a Drizzle query; returns TanStack query results, re-running only when read tables change. A changed SQL text or parameter (such as a captured variable) makes it a new query |
 | `useSyncline()` | Returns the current database instance (used for writes, manual sync, and shared spaces); throws if missing |
 | `useSyncStatus()` | Returns the current database sync status, triggering re-renders on change |
 
