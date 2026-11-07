@@ -50,7 +50,7 @@ export type Platform = {
 };
 
 /** Configuration options for opening a local database. */
-export type OpenOptions<S extends Schema> = {
+export type OpenOptions<S extends Schema = Schema> = {
   /** Database name identifying the local SQLite database file. */
   name: string;
   /**
@@ -144,3 +144,6 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
 }
 
 export type Syncline = ReturnType<typeof syncline>;
+
+/** A shared space opened by `openShared`. */
+export type SharedSpace = ReturnType<Syncline['openShared']>;

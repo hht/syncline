@@ -3,7 +3,7 @@ import { addExpirationListener, BackgroundTaskResult, registerTaskAsync, unregis
 import { defineTask } from 'expo-task-manager';
 import { report } from '../common/listeners.ts';
 import { syncOnce } from './native.ts';
-import type { OpenOptions, Schema } from './syncline.ts';
+import type { OpenOptions } from './syncline.ts';
 
 /**
  * Runs background synchronization when the app is not in the foreground.
@@ -35,7 +35,7 @@ const budget = 3 * 60_000;
  * Defines background sync work. The `options` callback provides the database configuration (same as `openSyncline`); returns undefined
  * when signed out to skip the run. Must be called at the top level of a module.
  */
-export function defineBackgroundSync(options: () => OpenOptions<Schema> | undefined | Promise<OpenOptions<Schema> | undefined>) {
+export function defineBackgroundSync(options: () => OpenOptions | undefined | Promise<OpenOptions | undefined>) {
   defineTask(task, async () => {
     const opened = await options();
     if (!opened) return BackgroundTaskResult.Success;

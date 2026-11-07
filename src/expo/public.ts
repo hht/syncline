@@ -4,4 +4,4 @@ export type { Schema } from '../tables/table-definitions.ts';
 export { ValidationError } from '../tables/validation.ts';
 export { AccountMismatchError, PendingWritesError } from './errors.ts';
 export type { SyncStatus } from './status.ts';
-export type { Database, Syncline } from './syncline.ts';
+export type { Database, Held, OpenOptions, SharedSpace, Syncline } from './syncline.ts';

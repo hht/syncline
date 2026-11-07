@@ -61,7 +61,7 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 
 ### Types
 
-`Database` (Drizzle database), `Schema`, `Syncline`, `SyncStatus`, `ValidationError` (modified row violates schema; `issues` provides field paths and reasons), `PendingWritesError` (see `userID`), `AccountMismatchError` (the space reported by the cloud differs from the space recorded on first sync, indicating an account switch on this device: sync halts without pushing, reported in `downloadError`, with `stored` and `cloud` identifying both spaces; reopen under the current account, switching `userID`).
+`Database` (Drizzle database), `Schema`, `OpenOptions` (the options of `openSyncline`), `Syncline`, `SharedSpace` (returned by `openShared`), `Held` (one element of the array `onHeld` passes), `SyncStatus`, `ValidationError` (modified row violates schema; `issues` provides field paths and reasons), `PendingWritesError` (see `userID`), `AccountMismatchError` (the space reported by the cloud differs from the space recorded on first sync, indicating an account switch on this device: sync halts without pushing, reported in `downloadError`, with `stored` and `cloud` identifying both spaces; reopen under the current account, switching `userID`).
 
 ## `syncline/expo/background`
 
