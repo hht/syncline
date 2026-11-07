@@ -3,7 +3,7 @@ import type { Cookie } from '../common/protocol.ts';
 import { type Confirmed, Fanout } from './fanout.ts';
 import type { Round } from './shared.ts';
 
-// Fanout across multiple shards (FanTo(s) in model/Fanout.tla): stalled shards delay only themselves; persists only when all shards acknowledge head; concurrent calls queue at most one round; identical starting points compute the round once.
+// Fanout across multiple shards (Send(s) and Ack in model/Fanout.tla): stalled shards delay only themselves; persists only when all shards acknowledge head; concurrent calls queue at most one round; identical starting points compute the round once.
 
 const at = (version: number): Cookie => ({ version, nonce: version + 100 });
 

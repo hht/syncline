@@ -1,0 +1,3 @@
+---- MODULE MCFanoutLive ----
+EXTENDS MCFanout
+====

@@ -113,7 +113,7 @@ export class Broadcast<S extends Socket> {
 
   /**
    * Accepts a new connection: registers it for pushes (rounds arriving during queries push hints before catch-up completes),
-   * then fetches the latest round for catch-up, applying the result only to this connection (Connect and Catchup in model/Fanout.tla).
+   * then fetches the latest round for catch-up, applying the result only to this connection (Connect, Answer, and QueryFail in model/Fanout.tla).
    * `cookie` is the connection URL cookie (parsed by caller), and `subscribed` is derived from the token at the entry point.
    * Accepts the socket before closing: unaccepted WebSockets cannot be closed in workerd.
    */
@@ -129,7 +129,7 @@ export class Broadcast<S extends Socket> {
     const attachment = socket.deserializeAttachment() as Attachment;
     // A newer round was already pushed (as a hint) while querying; skip catch-up.
     if (!newer(pointOf(point), attachment.pushed)) return;
-    // Catch-up (Catchup in model/Fanout.tla): if no prior push occurred and the query matches the device cookie, send an empty catch-up; otherwise send a hint.
+    // Catch-up (CatchupWith in model/Fanout.tla): if no prior push occurred and the query matches the device cookie, send an empty catch-up; otherwise send a hint.
     const caught = latest && !attachment.pushed && sameCookie(cookie, latest.cookie);
     const message = caught ? pokeOf({ ...latest, base: cookie }, attachment.sub, []) : hintOf(point, attachment.sub);
     socket.send(JSON.stringify({ ...message, spread: this.#spread(), ...expiresIn(expiresAt) }));
@@ -137,7 +137,7 @@ export class Broadcast<S extends Socket> {
   }
 
   /**
-   * Processes a shared space round (ShardReceive in model/Fanout.tla): if unchained (distinct incarnation, base version newer than known cookie,
+   * Processes a shared space round (ArriveChained and ArriveUnchained in model/Fanout.tla): if unchained (distinct incarnation, base version newer than known cookie,
    * or nothing known and the round is empty),
    * queries the latest round, records it, and pushes hints to every connection; throws if the query fails (prompting shared space retry with backoff).
    * If chained and newer, pushes to every connection and updates the known round; drops retransmissions and late arrivals.

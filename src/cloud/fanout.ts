@@ -22,7 +22,7 @@ type Host = {
 };
 
 /**
- * Fans out shared-space head updates to all broadcast shards (following FanTo(s) in model/Fanout.tla, running independently per shard):
+ * Fans out shared-space head updates to all broadcast shards (following Send(s) and Ack in model/Fanout.tla, running independently per shard):
  * sends changes from each shard's last acknowledged version to head; advances only on successful delivery, leaving failures for retry;
  * limits in-flight traffic to at most one round per shard at a time, queuing at most one subsequent round (which samples head at send time,
  * including all commits prior to dispatch); stalled shards delay only themselves.

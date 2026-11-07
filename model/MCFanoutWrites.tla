@@ -1,0 +1,3 @@
+---- MODULE MCFanoutWrites ----
+EXTENDS MCFanout
+====
