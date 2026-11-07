@@ -12,6 +12,13 @@ iOS, Android, and web share the same entrypoint and options: bundles on mobile r
 
 Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open, it closes that instance first, then opens with the current options.
 
+Opening fails in one of two ways:
+
+- `openSyncline` throws for problems it sees without the database: a missing `userID`, a database already open on mobile, and the declaration rules checked in JavaScript (names, primary keys, column types, defaults, indexes, `readOnly`).
+- Everything else rejects `waitForReady()`, shows as `downloadError`, and makes `sync()` reject. This covers rules checked against the stored database or across tables (a changed column type, a new non-null column without a default, table name case, foreign keys), `PendingWrites`, an invalid `url`, and the database open in another tab.
+
+Await `waitForReady()` before relying on the database. On mobile, if opening the private space fails (such as `PendingWrites` or a changed column type), the database is closed, so the name can be opened again. After an invalid `url` it stays open: call `close()` before opening it again.
+
 | Option | Description |
 |---|---|
 | `name` | Database name; the file is `<name>.db`. One per app |
@@ -37,6 +44,7 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 | Member | Description |
 |---|---|
 | `name` | Database name |
+| `waitForReady(): Promise<void>` | Resolves once the database is open and the private space starts syncing, without waiting for the network; rejects with the reason it cannot (see above) |
 | `db` | Read-only Drizzle database instance |
 | `write(body): Promise<T>` | Executes a local write. `body(tx)` runs in a local transaction, where `tx` is a read-write Drizzle database instance |
 | `onChange(listener): () => void` | Invoked after synced tables or local-only tables change, providing modified table names (`ReadonlySet<string>`) |
@@ -47,7 +55,7 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 | `sync({ signal }?): Promise<void>` | Syncs immediately, waiting until caught up and all local writes are confirmed (succeeds immediately if already up to date). Fails on errors or when `signal` aborts; fails immediately if the cloud rejected pushed writes with 1007 since sync last restarted (see 1007 in [Limits](limits.md)) |
 | `resync({ signal, discardPending }?): Promise<void>` | Re-downloads synced tables from scratch, replacing local copies (used when local data is corrupted). Keeps pending writes and pushes them as usual after re-downloading. When `discardPending: true`, drops pending writes as well (used when uploads are permanently rejected with 1007): reverts them at once, keeping the other rows visible until the re-download lands; if a revert fails (synced tables modified outside Syncline, or an app trigger raising; see [Limits](limits.md)), reports why as an app error (`reportError`) and clears synced tables instead |
 | `reconnect(): void` | Reconnects immediately and re-invokes `token`. Call when credentials change (updating permissions and visible scopes for shared spaces), such as inside Firebase's `onIdTokenChanged` |
-| `shared(name, { schema, url, token?, userID? })` | Opens a read-only shared space in the same database, with its own `status`, `onStatus`, `sync`, `resync`, and `reconnect`. The cloud determines visible rows based on token (defaults to private space token if omitted). If `userID` (signed-in user) differs from last time, clears previously viewed rows before any query issued after this call runs, even if the space then fails to open (such as a release changing a column type), unless the declaration itself is rejected (such as a table name already used by another space, or a retired name). A table the space no longer declares is wiped when it opens, and a table it declares for the first time that already holds rows is wiped before any read (see [Limits](limits.md)) |
+| `shared(name, { schema, url, token?, userID? })` | Opens a read-only shared space in the same database, with its own `waitForReady`, `status`, `onStatus`, `sync`, `resync`, and `reconnect`. Throws for the declaration rules `openSyncline` checks in JavaScript, and when `name` is already open with a different `url` or `userID`. Its `waitForReady()` rejects when the declaration is refused, the database failed to open, or the `url` is invalid. Its tables are created in the background: if that fails (such as a changed column type), `waitForReady()` still resolves, and the failure shows as its `downloadError` while it retries. The cloud determines visible rows based on token (defaults to private space token if omitted). If `userID` (signed-in user) differs from last time, clears previously viewed rows before any query issued after this call runs, even if the space then fails to open (such as a release changing a column type), unless the declaration itself is rejected (such as a table name already used by another space, or a retired name). A table the space no longer declares is wiped when it opens, and a table it declares for the first time that already holds rows is wiped before any read (see [Limits](limits.md)) |
 | `close(): Promise<void>` | Stops sync and closes the database |
 | `delete(): Promise<void>` | Closes the database and deletes database files (clearing local data) |
 

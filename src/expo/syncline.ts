@@ -34,6 +34,7 @@ export type LocalDatabase = {
 
 /** Sync channel interface for a space required from Client. */
 export type Channel = {
+  waitForReady(): Promise<void>;
   status(): SyncStatus;
   onStatus(listener: (status: SyncStatus) => void): () => void;
   sync(options?: { signal?: AbortSignal }): Promise<void>;
@@ -79,6 +80,12 @@ export type OpenOptions<S extends Schema> = {
 };
 
 const channelOf = (channel: Channel) => ({
+  /**
+   * Resolves once the space is open and syncing starts, without waiting for the network; rejects with the reason it cannot open (such as
+   * PendingWrites or an invalid URL), which downloadError also shows. Rules checked in JavaScript throw from the opening call instead.
+   * A shared space creates its tables in the background: if that fails, this still resolves and downloadError shows the failure.
+   */
+  waitForReady: () => channel.waitForReady(),
   /** Current synchronization status snapshot. */
   status: () => channel.status(),
   /** Subscribes to sync status changes, returning an unsubscribe callback. */

@@ -40,6 +40,7 @@ test('opening blocked by PendingWrites: sync() rejects with PendingWrites and th
   native.deliver({ handle: started.length, data: JSON.stringify([{ type: 'reply', id: 1, error: pending }]) });
   expect(await syncing).toBeInstanceOf(PendingWrites);
   expect(await syncing).toMatchObject({ userID: 'u0', count: 2 });
+  await expect(blocked.waitForReady()).rejects.toBeInstanceOf(PendingWrites);
   expect(blocked.status().downloadError).toBeInstanceOf(PendingWrites);
   expect(() =>
     openSyncline({

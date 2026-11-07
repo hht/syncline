@@ -26,6 +26,7 @@ function open(name = 'app', queried: () => void = () => undefined) {
   };
   const listeners = new Set<(status: SyncStatus) => void>();
   const channel = {
+    waitForReady: async () => undefined,
     status: () => status,
     onStatus: (listener: (status: SyncStatus) => void) => {
       listeners.add(listener);

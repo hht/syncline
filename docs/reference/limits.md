@@ -14,7 +14,7 @@ Read [Schema](#schema) and [Writes](#writes) before you design your tables. Each
 - A non-null column added to an existing table needs a constant default.
 - These rules apply to local-only tables too.
 
-Breaking a rule throws when the app opens the database, or when the cloud creates `SynclineSpace`.
+An unsupported type throws when the app opens the database. A changed storage type or a non-null column without a constant default fails opening: `sync()` rejects and `downloadError` is set. For the private space, `waitForReady()` rejects too. In the cloud, breaking any of these rules makes `SynclineSpace` throw.
 
 ### Table and column names
 
@@ -24,7 +24,7 @@ Breaking a rule throws when the app opens the database, or when the cloud create
 - Table names ignore case: `Note` and `note` are the same table. Keep the spelling a table was first created with.
 - Don't start a table name with `_syncline_`, and don't name a column `_extra`. Syncline reserves both.
 
-Breaking a rule throws when the app opens the database, or when the cloud creates `SynclineSpace`.
+Breaking a rule throws when the app opens the database, except a table name spelled differently from the stored table, which fails opening the same way as a changed storage type. In the cloud, `SynclineSpace` throws.
 
 ### Keys
 
@@ -32,7 +32,7 @@ Breaking a rule throws when the app opens the database, or when the cloud create
 - A foreign key can point only at the primary key of a synced table in the same space.
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
 
-A foreign key to another column fails opening: `downloadError` is set and `sync()` rejects. In the cloud, `SynclineSpace` throws.
+A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` throws.
 
 A primary key that is too long fails the write with `ValidationError`.
 
