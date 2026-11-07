@@ -206,7 +206,7 @@ test('cloud rejects unrecognized push batch (1007): reports uploadError without 
   expect(connection.status()).toMatchObject({
     connected: true,
     pending: 1,
-    uploadError: expect.objectContaining({ message: expect.stringContaining('unrecognized push') }),
+    uploadError: expect.objectContaining({ message: expect.stringContaining('unrecognized push (code 1007: invalid push)') }),
   });
   // Disables push; pending count remains non-zero: sync() fails immediately with upload error.
   const outcome = connection.sync().then(
