@@ -67,7 +67,7 @@ export type Exporter = {
  * Export options: exporter map (name -> exporter); schedules alarm export exportDelay ms (default 60s) after writes;
  * each alarm runs up to exportBudget ms (default 10m), failing the run if an exporter does not respond before deadline.
  */
-export type ExportOptions = { exports?: Record<string, Exporter>; exportDelay?: number; exportBudget?: number };
+export type ExportOptions = { exporters?: Record<string, Exporter>; exportDelay?: number; exportBudget?: number };
 
 /**
  * Private space object context provided to exports: reads a chunk (omitting user-facing events), registers schedule tasks with deadlines,
@@ -94,7 +94,10 @@ export class Exports {
   readonly #budget: number;
   readonly #prefix: string;
 
-  constructor(context: Context, { exports = {}, exportDelay = defaultExportDelay, exportBudget = defaultExportBudget }: ExportOptions) {
+  constructor(
+    context: Context,
+    { exporters: exports = {}, exportDelay = defaultExportDelay, exportBudget = defaultExportBudget }: ExportOptions,
+  ) {
     // Each name becomes a schedule entry: SQLite stores a lone surrogate as-is and reads it back replaced, so that entry would never match its row.
     const malformed = Object.keys(exports).find((name) => !name.isWellFormed());
     if (malformed !== undefined) throw new Error(`Exporter name must be well-formed text (no lone surrogates): ${malformed}`);

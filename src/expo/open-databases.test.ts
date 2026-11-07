@@ -69,9 +69,9 @@ test('syncOnce reports an open failure even though the failed instance closed it
   space.sync = async () => {
     // A database that could not open closes itself before its pending calls reject.
     await space.close();
-    throw new Error('PendingWrites');
+    throw new Error('PendingWritesError');
   };
-  await expect(databases.syncOnce('app', () => space)).rejects.toThrow('PendingWrites');
+  await expect(databases.syncOnce('app', () => space)).rejects.toThrow('PendingWritesError');
 });
 
 test('a second syncOnce sharing the background instance resolves when the foreground supersedes it', async () => {

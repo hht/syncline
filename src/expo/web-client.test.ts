@@ -16,6 +16,7 @@ async function openedWith(options: Partial<Parameters<typeof openSyncline>[0]> =
     schema: { note },
     url: 'https://sync.test/space',
     token: async () => 'valid',
+    userID: 'u1',
     ...options,
   });
   const { instance, call } = worker().last('open');
@@ -39,13 +40,18 @@ function replying(instance: number) {
   };
 }
 
-test('open carries the user ID, discardPending, and checksum budget given to openSyncline', async () => {
-  const { open } = await openedWith({ userID: 'u1', discardPending: true, checksumRowsPerDay: 500 });
-  expect(open).toMatchObject({ options: { owner: 'u1', discardPending: true, checksum: { rowsPerDay: 500 } } });
+test('open carries the user ID, discardPending, and checksum budget given to openSyncline, and throws without a user ID', async () => {
+  const { open } = await openedWith({ userID: 'u2', discardPending: true, checksumRowsPerDay: 500 });
+  expect(open).toMatchObject({ options: { owner: 'u2', discardPending: true, checksum: { rowsPerDay: 500 } } });
   const { open: plain } = await openedWith();
-  expect(plain.options).not.toHaveProperty('owner');
+  expect(plain.options).toMatchObject({ owner: 'u1' });
   expect(plain.options).not.toHaveProperty('discardPending');
   expect(plain.options).toMatchObject({ checksum: {} });
+  // Callers without type checking can still leave it out
+  for (const userID of [undefined, ''])
+    expect(() =>
+      openSyncline({ name: 'web-test', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', userID: userID as string }),
+    ).toThrow('userID must be a non-empty string');
 });
 
 test('a write begins, executes, and commits under one write id, and a body that throws ends it without committing', async () => {
@@ -123,4 +129,12 @@ test('resync carries discardPending, false unless asked', async () => {
   await answer();
   await discarding;
   expect(worker().last('resync').call).toMatchObject({ discardPending: true });
+});
+
+test('opening a shared space with an empty name throws and leaves the private space status reporting', async () => {
+  const { space, instance } = await openedWith();
+  expect(() => space.openShared('', { schema: {}, url: 'https://sync.test/catalog' })).toThrow('Shared space name must not be empty');
+  const status = { ...offline, connected: true, pending: 0, hasSynced: true, updateNeeded: false };
+  worker().deliver(instance, { type: 'status', channel: '', status: { ...status, downloadError: undefined, uploadError: undefined } });
+  expect(space.status()).toMatchObject(status);
 });

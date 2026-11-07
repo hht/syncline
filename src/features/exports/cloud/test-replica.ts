@@ -107,7 +107,7 @@ export async function cloud(storage: Storage) {
 export const exportsTo = (space: () => Space, exporter: Exporter, limit: number, exportBudget?: number) =>
   new Exports(
     { poll: (position) => space().poll(position, limit), by: () => undefined, reserved: 'syncline:', events: () => undefined },
-    { exports: { replica: exporter }, ...(exportBudget === undefined ? {} : { exportBudget }) },
+    { exporters: { replica: exporter }, ...(exportBudget === undefined ? {} : { exportBudget }) },
   );
 
 /** Scheduled export task of the exporter named replica, as an alarm starting at started runs it. */

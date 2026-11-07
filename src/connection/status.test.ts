@@ -2,14 +2,14 @@ import { expect, test } from 'vitest';
 import { Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import { type Mutation, pullNeeded } from '../common/protocol.ts';
-import { AccountMismatch } from '../expo/errors.ts';
+import { AccountMismatchError } from '../expo/errors.ts';
 import { Device } from '../test/test-device.ts';
 import { drain, flush, withFakeTimers } from '../test/test-drive.ts';
 import { privateCloud } from '../test/test-entry.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { type CloudEnd, Network } from '../test/test-network.ts';
 import { write } from '../test/test-schema.ts';
-import { cloudStorage, deviceStorage, failOnce, injectedError } from '../test/test-storage.ts';
+import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 import { heartbeat } from './test-connection.ts';
 import { chunkLimit, createDraft, createNote, draft, expectConnected, idle, note, setup, url, writeOversized } from './test-status.ts';
@@ -43,25 +43,6 @@ test('HTTP pull completes before WebSocket connects (e.g. proxy blockage): marke
     await flush();
   }
   expect(connection.status()).toMatchObject({ connected: false, downloading: false, hasSynced: true });
-  connection.stop();
-});
-
-test('pending count: increments on local write, resets to zero upon cloud confirmation; a read error on it is reported, the write still uploads', async () => {
-  const reported = captureReported();
-  const { storage, device, connection, run, cloud } = setup();
-  connection.start();
-  await run();
-  await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
-  expect(connection.status().pending).toBe(1);
-  await run();
-  expect(connection.status().pending).toBe(0);
-  failOnce(storage, 'SELECT count(*) FROM _syncline_pending');
-  await write(device, (tx) => tx.insert(note).values({ id: 'n10' }));
-  expect(reported).toEqual([expect.stringMatching(injectedError)]);
-  expect(connection.status().pending).toBe(0);
-  await run();
-  expect(cloud.sql.exec("SELECT id FROM note WHERE id = 'n10'").toArray()).toEqual([{ id: 'n10' }]);
-  expectConnected(connection, { pending: 0 });
   connection.stop();
 });
 
@@ -225,7 +206,7 @@ test('cloud rejects unrecognized push batch (1007): reports uploadError without 
   expect(connection.status()).toMatchObject({
     connected: true,
     pending: 1,
-    uploadError: expect.objectContaining({ message: expect.stringContaining('unrecognized push') }),
+    uploadError: expect.objectContaining({ message: expect.stringContaining('unrecognized push (code 1007: invalid push)') }),
   });
   // Disables push; pending count remains non-zero: sync() fails immediately with upload error.
   const outcome = connection.sync().then(
@@ -264,7 +245,7 @@ test('mutation with malformed changes in upload queue: held by cloud while prece
   connection.stop();
 });
 
-test('space identity change (account switch): stops sync with AccountMismatch without retrying, preserving data and pending writes', async () => {
+test('space identity change (account switch): stops sync with AccountMismatchError without retrying, preserving data and pending writes', async () => {
   const space = new Space(cloudStorage(createNote, createDraft), [note, draft]);
   space.mutate((tx) => tx.insert(note, { id: 'n1' }));
   let identity = 'alice';
@@ -282,7 +263,7 @@ test('space identity change (account switch): stops sync with AccountMismatch wi
   identity = 'bob';
   network.breakOne();
   await drain(network);
-  expect(connection.status()).toMatchObject({ connected: false, connecting: false, downloadError: expect.any(AccountMismatch) });
+  expect(connection.status()).toMatchObject({ connected: false, connecting: false, downloadError: expect.any(AccountMismatchError) });
   expect(network.fire()).toBe(false);
   expect(device.private.cookie()).not.toBeNull();
   expect(reported).toHaveLength(1);

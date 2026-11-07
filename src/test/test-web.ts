@@ -53,7 +53,8 @@ export const worker = () => {
   return created;
 };
 
-export const open = (token: () => Promise<string>) => openSyncline({ name: 'web-test', schema: {}, url: 'https://sync.test/space', token });
+export const open = (token: () => Promise<string>) =>
+  openSyncline({ name: 'web-test', userID: 'u1', schema: {}, url: 'https://sync.test/space', token });
 
 /** Opens database, mocks successful Worker open reply, and returns instance ID. */
 export async function opened() {

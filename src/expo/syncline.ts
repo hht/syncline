@@ -34,6 +34,7 @@ export type LocalDatabase = {
 
 /** Sync channel interface for a space required from Client. */
 export type Channel = {
+  waitForReady(): Promise<void>;
   status(): SyncStatus;
   onStatus(listener: (status: SyncStatus) => void): () => void;
   sync(options?: { signal?: AbortSignal }): Promise<void>;
@@ -49,14 +50,15 @@ export type Platform = {
 };
 
 /** Configuration options for opening a local database. */
-export type OpenOptions<S extends Schema> = {
+export type OpenOptions<S extends Schema = Schema> = {
   /** Database name identifying the local SQLite database file. */
   name: string;
   /**
-   * ID of the signed-in user the private space belongs to: if it differs from the one recorded, clears the previous user's data while
-   * preserving shared spaces. If the previous user left un-uploaded pending writes, throws PendingWrites unless discardPending is set.
+   * ID of the signed-in user the private space belongs to (an app with one user passes a constant): if it differs from the one recorded,
+   * clears the previous user's data while preserving shared spaces. If the previous user left un-uploaded pending writes, opening fails
+   * with PendingWritesError unless discardPending is set. Required, so data of one user never shows to the next.
    */
-  userID?: string;
+  userID: string;
   /** Discards un-uploaded pending writes from a previous user when switching users; ignored by syncOnce. */
   discardPending?: boolean;
   schema: S;
@@ -78,6 +80,12 @@ export type OpenOptions<S extends Schema> = {
 };
 
 const channelOf = (channel: Channel) => ({
+  /**
+   * Resolves once the space is open and syncing starts, without waiting for the network; rejects with the reason it cannot open (such as
+   * PendingWritesError or an invalid URL), which downloadError also shows. Rules checked in JavaScript throw from the opening call instead.
+   * A shared space creates its tables in the background: if that fails, this still resolves and downloadError shows the failure.
+   */
+  waitForReady: () => channel.waitForReady(),
   /** Current synchronization status snapshot. */
   status: () => channel.status(),
   /** Subscribes to sync status changes, returning an unsubscribe callback. */
@@ -109,7 +117,7 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
     onHeld: (listener: (writes: Held[]) => void) => local.onHeld(listener),
     ...channelOf(channel),
     /**
-     * Subscribes to a shared space (device-read-only) in the same database.
+     * Opens a shared space (device-read-only) in the same database.
      *
      * Table names must not collide with private space or other shared spaces. Reopening returns the open instance.
      * If token is omitted, defaults to the private space token getter.
@@ -117,7 +125,9 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
      * If userID differs from the previous session, previously viewed shared data is cleared to prevent data leakage across users.
      * Query shared tables through db as usual; onChange notifications fire together.
      */
-    shared: (sharedName: string, options: { schema: Schema; url: string; token?: () => Promise<string>; userID?: string }) => {
+    openShared: (sharedName: string, options: { schema: Schema; url: string; token?: () => Promise<string>; userID?: string }) => {
+      // The private space is the channel named '', so a shared space under that name would replace its status
+      if (sharedName === '') throw new Error('Shared space name must not be empty');
       const known = opened.get(sharedName);
       if (known?.url === options.url && known.userID === options.userID) return known.channel;
       if (known) throw new Error(`Shared space ${sharedName} is already open with a different URL or user`);
@@ -136,3 +146,6 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
 }
 
 export type Syncline = ReturnType<typeof syncline>;
+
+/** A shared space opened by `openShared`. */
+export type SharedSpace = ReturnType<Syncline['openShared']>;

@@ -14,7 +14,7 @@ Read [Schema](#schema) and [Writes](#writes) before you design your tables. Each
 - A non-null column added to an existing table needs a constant default.
 - These rules apply to local-only tables too.
 
-Breaking a rule throws when the app opens the database, or when the cloud creates `SynclineSpace`.
+An unsupported type throws when the app opens the database. A changed storage type or a non-null column without a constant default fails opening: `sync()` rejects and `downloadError` is set. For the private space, `waitForReady()` rejects too. In the cloud, breaking any of these rules makes `SynclineSpace` throw.
 
 ### Table and column names
 
@@ -24,7 +24,7 @@ Breaking a rule throws when the app opens the database, or when the cloud create
 - Table names ignore case: `Note` and `note` are the same table. Keep the spelling a table was first created with.
 - Don't start a table name with `_syncline_`, and don't name a column `_extra`. Syncline reserves both.
 
-Breaking a rule throws when the app opens the database, or when the cloud creates `SynclineSpace`.
+Breaking a rule throws when the app opens the database, except a table name spelled differently from the stored table, which fails opening the same way as a changed storage type. In the cloud, `SynclineSpace` throws.
 
 ### Keys
 
@@ -32,7 +32,7 @@ Breaking a rule throws when the app opens the database, or when the cloud create
 - A foreign key can point only at the primary key of a synced table in the same space.
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
 
-A foreign key to another column fails opening: `downloadError` is set and `sync()` rejects. In the cloud, `SynclineSpace` throws.
+A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` throws.
 
 A primary key that is too long fails the write with `ValidationError`.
 
@@ -133,7 +133,7 @@ A mismatched section is downloaded again. Pending writes are kept.
 
 ## Things to know
 
-- **Signing out.** Opening the database for another `userID` clears the previous user's data. It fails with `PendingWrites` instead if that user still has writes to upload.
+- **Signing out.** Opening the database for another `userID` clears the previous user's data. It fails with `PendingWritesError` instead if that user still has writes to upload.
 - **App triggers.** Triggers on synced tables fire again whenever the device undoes and redoes your pending writes. A trigger that raises an error can block downloads until you remove it.
 - **Foreign keys on your own tables.** SQLite does not enforce them. A synced row your table points at can be deleted.
 - **Changing tokens.** Call `reconnect()` when a user's permissions change. In shared spaces, live updates follow the old access until at most a minute after the old token expires; downloads check the token every time.
@@ -142,11 +142,11 @@ A mismatched section is downloaded again. Pending writes are kept.
 - **Large tables in the cloud.** Building an index on a very large table can run past the CPU time limit. Raise `limits.cpu_ms` in wrangler if that happens.
 - **Scheduled tasks.** A task that keeps resetting the object pauses for a day after 3 tries in a row, and the failure is reported.
 - **Corrupted local state.** Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database to recover; pending writes are lost.
-- **Pending count.** If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, so `sync()` can resolve early. The write still uploads.
+- **Pending count.** If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, and `sync()` rejects with the error: calls waiting at that moment, and a call whose own read fails. The write still uploads.
 
 ## Connection errors
 
-The cloud closes a connection with codes such as these. Devices handle them on their own; the code shows in `uploadError` or `downloadError`.
+The cloud closes a connection with codes such as these. Devices handle them on their own. Except for 4000, 4002, and 4003, the code shows in `uploadError` or `downloadError`.
 
 | Code | Meaning | What the device does |
 |---|---|---|

@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
+import { eq } from 'drizzle-orm';
 import { createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, test, vi } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, tables, workout } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
-import { invalidateOnChange, queryOptions, SynclineProvider, useQuery, useSyncStatus } from './react.ts';
+import { invalidateOnChange, queryOptions } from './query-cache.ts';
+import { SynclineProvider, useQuery, useSyncStatus } from './react.ts';
 import { offline, type SyncStatus } from './status.ts';
 import { syncline } from './syncline.ts';
 
@@ -26,6 +28,7 @@ function open(name = 'app', queried: () => void = () => undefined) {
   };
   const listeners = new Set<(status: SyncStatus) => void>();
   const channel = {
+    waitForReady: async () => undefined,
     status: () => status,
     onStatus: (listener: (status: SyncStatus) => void) => {
       listeners.add(listener);
@@ -95,13 +98,13 @@ test('generates distinct query keys for databases reopened under the same name a
   expect(keyOf(first)).toEqual(keyOf(first));
 });
 
-/** Renders children under a query client and a provider of database (none if undefined), collecting errors React could not render past. */
+/** Renders children under a query client and a provider of database (none if undefined), collecting errors React could not render past; show renders again with another database or children. */
 function render(client: QueryClient, database: ReturnType<typeof open> | undefined, children: ReactNode) {
   const container = document.createElement('div');
   const errors: unknown[] = [];
   const root = createRoot(container, { onUncaughtError: (error) => errors.push(error) });
-  const show = (shown: ReturnType<typeof open> | undefined) =>
-    root.render(createElement(QueryClientProvider, { client }, createElement(SynclineProvider, { value: shown }, children)));
+  const show = (shown: ReturnType<typeof open> | undefined, content: ReactNode = children) =>
+    root.render(createElement(QueryClientProvider, { client }, createElement(SynclineProvider, { value: shown }, content)));
   show(database);
   return { text: () => container.textContent, errors, show, unmount: () => root.unmount() };
 }
@@ -128,6 +131,20 @@ test('useQuery renders local rows and re-renders after a write to its table; unm
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(results).toEqual([[{ id: 'w1' }]]);
   unsubscribe();
+});
+
+test('useQuery runs again when a value its query captures changes, without any write', async () => {
+  const sync = open('app');
+  await sync.write((tx) => tx.insert(workout).values([{ id: 'w1' }, { id: 'w2' }]));
+  function One({ id }: { id: string }) {
+    const { data } = useQuery((db) => db.select().from(workout).where(eq(workout.id, id)));
+    return data ? `rows:${data.map((row) => row.id).join(',')}` : 'loading';
+  }
+  const rendered = render(new QueryClient(), sync, createElement(One, { id: 'w1' }));
+  await vi.waitFor(() => expect(rendered.text()).toBe('rows:w1'));
+  rendered.show(sync, createElement(One, { id: 'w2' }));
+  await vi.waitFor(() => expect(rendered.text()).toBe('rows:w2'));
+  rendered.unmount();
 });
 
 test('switching the provided database drops the cached queries of the previous one and reads the new one', async () => {

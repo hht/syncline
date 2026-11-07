@@ -76,7 +76,7 @@ impl Connection {
             PULL_NEEDED | SCHEMA_MISMATCH => self.repull(ctx),
             INVALID_PUSH => {
                 // Cloud rejected this push batch: client bug, retrying would only fail again. Report, stop pushing for this session, downloads continue
-                let error = Failure::new(format!("cloud rejected unrecognized push ({reason})"));
+                let error = Failure::new(format!("cloud rejected unrecognized push (code {code}: {reason})"));
                 self.pushes.refuse(error.clone());
                 ctx.out.report(error.clone());
                 self.fail(ctx, attempt, error, Kind::Upload);

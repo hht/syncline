@@ -45,6 +45,8 @@ export const decodeRows = (rows: unknown[][]) =>
 /** Serializes opening options for the core: encodes tables as metadata; leaves daily checksum rows to core defaults unless specified. */
 function opening<S extends Schema>(options: OpenOptions<S>) {
   const { schema, localOnly = {}, retired = [], readOnly = [], validation, userID, discardPending, checksumRowsPerDay } = options;
+  // Without an owner the core records and clears nothing, so the next user to sign in would read this one's rows
+  if (typeof userID !== 'string' || userID === '') throw new TypeError(`userID must be a non-empty string, got ${JSON.stringify(userID)}`);
   const tables = Object.values(schema);
   const localTables = Object.values(localOnly);
   checkDeclared(tables);
@@ -56,7 +58,7 @@ function opening<S extends Schema>(options: OpenOptions<S>) {
       retired,
       schemas: [...tables, ...localTables].filter((table) => validation?.has(table)).map(tableName),
     },
-    ...(userID !== undefined && { owner: userID }),
+    owner: userID,
     ...(discardPending && { discardPending }),
     checksum: checksumRowsPerDay === undefined ? {} : { rowsPerDay: checksumRowsPerDay },
   };
@@ -167,7 +169,7 @@ export class Client {
     return this.channel('', url, token);
   }
 
-  /** Settles with the open call: rejects with the reason the database could not open (e.g. PendingWrites). */
+  /** Settles with the open call: rejects with the reason the database could not open (e.g. PendingWritesError). */
   get opening() {
     return this.#opened;
   }
@@ -308,6 +310,7 @@ export class Client {
     connected.catch((error: Error) => this.failed(name, error));
     const after = <T>(call: Call) => connected.then(() => this.call<T>(call));
     return {
+      waitForReady: () => connected,
       status: () => space.status,
       onStatus: subscribe(space.listeners),
       sync: (options) => abortable(after({ type: 'sync', channel: name }), options?.signal),

@@ -24,7 +24,7 @@ async function forwarded(target: string, headers: Record<string, string> = {}, m
     entry: () => entry,
     broadcast: env.CATALOG_BROADCAST,
     space: 'catalog',
-    definition: { schema: { program }, buckets: { public: { program: {} } } },
+    definition: { schema: { program }, rules: { public: { program: {} } } },
   };
   const response = await forwardShared(
     new Request(target, { method, headers: { Authorization: 'Bearer t', ...headers } }),
@@ -99,7 +99,7 @@ test('returns 400 without forwarding to broadcast shards on unrecognized WebSock
     entry: () => ({ fetch: async () => new Response('{}') }),
     broadcast: { getByName: () => ({ fetch: async (request: Request) => shards.push(request) && new Response(null) }) },
     space: 'catalog',
-    definition: { schema: { program }, buckets: { public: { program: {} } } },
+    definition: { schema: { program }, rules: { public: { program: {} } } },
   };
   for (const target of [`${url}?v=${protocolVersion}&cookie=abc`, `${pullURL(url, { cookie: null })}&x=1`]) {
     const request = new Request(target, { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}t` } });
@@ -118,7 +118,7 @@ test("routes each WebSocket to a random one of the definition's broadcast shards
     entry: () => ({ fetch: async () => new Response('{}') }),
     broadcast: { getByName: (name: string) => ({ fetch: async () => shards.push(name) && new Response(null) }) },
     space: 'catalog',
-    definition: { schema: { program }, buckets: { public: { program: {} } }, ...(shardsSet && { shards: shardsSet }) },
+    definition: { schema: { program }, rules: { public: { program: {} } }, ...(shardsSet && { shards: shardsSet }) },
   });
   const random = vi.spyOn(Math, 'random');
   try {

@@ -16,9 +16,19 @@
 
 ### 怎么知道同步完成了？
 
-调用 `await space.sync()`。设备追上云端、且云端确认了所有本地写入后，它才会完成。
+调用 `await syncline.sync()`。设备追上云端、且云端确认了所有本地写入后，它才会完成。
 
 要做实时状态显示，读取 `status()` 或用 `onStatus` 订阅。`status().pending` 是尚未确认的写入数。
+
+### 怎么让用户退出登录？
+
+先上传这个用户的写入，再关闭数据库：
+
+1. 停止写入。
+2. 调用 `await syncline.sync()`。如果它被拒绝，`status().pending` 就是还没上传的写入数。
+3. 调用 `await syncline.close()`，并给 `SynclineProvider` 传入 `undefined`。在 iOS 和 Android 上，还要调用 `stopBackgroundSync()`。
+
+之后用下一个 `userID` 打开数据库时，会清除这个用户的私有数据和仅本地表，保留共享空间。如果还有待上传的写入，打开会失败并抛出 `PendingWritesError`，什么都不清除。`delete()` 会立即删除数据库，连同还没上传的写入，而且不报错。
 
 ### 怎么修改表结构？
 
@@ -31,7 +41,7 @@
 
 ### 怎么在用户之间共享数据？
 
-使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见 [API](../api.md)（英文）中的 `shared()`。
+使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见 [API](../api.md)（英文）中的 `openShared()`。
 
 ### 应用能在后台同步吗？
 
@@ -51,15 +61,15 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 云端拒绝执行这条写入，比如它超出了某项[限制](limits.md)，或违反了你云端代码中的规则。云端会暂扣这条写入，而不是丢弃。
 
-用 `onHeld` 监听，告诉用户哪里失败了。问题修复后，在云端用 `resubmit` 重新提交或丢弃这条写入。
+用 `onHeld` 监听，告诉用户哪里失败了。每条被暂扣的写入最多报告一次，时机是云端向这台设备确认这条写入时，所以由后台 `syncOnce` 收到确认的写入永远不会报给它。完整列表保存在云端：用 `held()` 读取。问题修复后，在云端用 `resubmit` 重新提交或丢弃这条写入。
 
-### 打开数据库时出现 `PendingWrites`
+### 打开数据库时出现 `PendingWritesError`
 
 上一个用户还有待上传的写入，用新的 `userID` 打开会删掉它们。
 
 请上一个用户重新登录并完成同步。如果要丢弃这些写入，用 `discardPending: true` 打开。
 
-### `downloadError` 中出现 `AccountMismatch`
+### `downloadError` 中出现 `AccountMismatchError`
 
 云端报告的账号和这个数据库首次同步时的账号不同。为避免数据上传到错误的账号，同步已停止。请用当前用户的 `userID` 重新打开数据库。
 
@@ -77,4 +87,4 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 ### Web 应用只能在一个标签页里用
 
-每个站点只能有一个标签页打开数据库。关闭另一个标签页，再刷新当前页。
+每个站点只能有一个标签页打开数据库。第二个标签页会失败，报错以 `Local database is open in another tab` 开头：它的 `waitForReady()` 被拒绝，`downloadError` 显示这个错误。关闭另一个标签页，再刷新当前页。

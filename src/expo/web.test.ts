@@ -38,6 +38,7 @@ test.each([
   const syncing = space.sync().catch((error: Error) => error);
   fail(first);
   expect((await syncing) as Error).toEqual(expect.objectContaining({ message: expect.stringContaining(message) }));
+  await expect(space.waitForReady()).rejects.toThrow(message);
   expect(space.status().downloadError?.message).toContain(message);
   expect(first.terminated).toBe(true);
 
@@ -129,18 +130,22 @@ test('queries on closed database fail with "Local database is closed"; new event
 test('marks downloadError on private space and shared spaces when open fails without lingering in connecting state', async () => {
   const space = open(async () => 'valid');
   const { instance, call } = worker().last('open');
-  const catalog = space.shared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
+  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
   worker().deliver(instance, { type: 'reply', id: call.id ?? -1, error: { message: 'Local database is open in another tab' } });
   await flush();
   const failed = { connecting: false, downloadError: expect.objectContaining({ message: 'Local database is open in another tab' }) };
   expect([space.status(), catalog.status()]).toEqual([expect.objectContaining(failed), expect.objectContaining(failed)]);
+  const reasons = await Promise.all(
+    [space.waitForReady(), catalog.waitForReady()].map((opening) => opening.catch((error: Error) => error.message)),
+  );
+  expect(reasons).toEqual(['Local database is open in another tab', 'Local database is open in another tab']);
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open', 'shared']);
 });
 
 test('opening a shared space reaches the core before queries issued after it, so a user switch clears rows before they are read', async () => {
   const { space } = await opened();
   worker().posted.length = 0;
-  space.shared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
+  space.openShared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
   void space.db
     .select()
     .from(note)
@@ -157,11 +162,11 @@ test('opening a shared space reaches the core before queries issued after it, so
 test('reopening identical shared space returns open instance without reopening; throws when url or user differs', async () => {
   const { space } = await opened();
   const options = { schema: {}, url: 'https://sync.test/catalog', userID: 'u1' };
-  const first = space.shared('catalog', options);
-  expect(space.shared('catalog', options)).toBe(first);
+  const first = space.openShared('catalog', options);
+  expect(space.openShared('catalog', options)).toBe(first);
   await flush();
   expect(worker().posted.filter(({ call }) => call.type === 'shared')).toHaveLength(1);
-  expect(() => space.shared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
+  expect(() => space.openShared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
 });
 
 test('in-flight calls fail with "Local database is closed" when close reply arrives without waiting indefinitely', async () => {
@@ -195,6 +200,7 @@ test.each([
     const failing = { '~standard': { version: 1 as const, vendor: 'test', validate } };
     const space = openSyncline({
       name: 'web-test',
+      userID: 'u1',
       schema: { note },
       validation: new Map([[note, failing]]),
       url: 'https://sync.test/space',
@@ -242,6 +248,7 @@ test('deleting database after Worker crash succeeds by spawning a new Worker to 
 test('sync on a space waits for its connect reply; connect carries allowCleartext when set', async () => {
   const space = openSyncline({
     name: 'web-test',
+    userID: 'u1',
     schema: {},
     url: 'http://localhost:8787/space',
     token: async () => 'valid',
@@ -257,4 +264,31 @@ test('sync on a space waits for its connect reply; connect carries allowCleartex
   worker().deliver(instance, { type: 'reply', id: connect.call.id ?? -1 });
   await flush();
   expect(worker().last('sync').call).toMatchObject({ type: 'sync' });
+});
+
+test('waitForReady() resolves once open and connect succeed, and rejects with the reason the shared call or connect fails, which downloadError shows too', async () => {
+  const space = open(async () => 'valid');
+  const { instance, call } = worker().last('open');
+  worker().deliver(instance, { type: 'reply', id: call.id ?? -1 });
+  let settled = false;
+  const opening = space.waitForReady().then(() => {
+    settled = true;
+  });
+  await flush();
+  expect(settled).toBe(false);
+  worker().deliver(instance, { type: 'reply', id: worker().last('connect').call.id ?? -1 });
+  await opening;
+  const clashing = space.openShared('clashing', { schema: {}, url: 'https://sync.test/clashing' });
+  await flush();
+  const refused = { message: 'table has the same name as an existing synced or local-only table: note' };
+  worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1, error: refused });
+  await expect(clashing.waitForReady()).rejects.toThrow(refused.message);
+  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog?bucket=a' });
+  await flush();
+  worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1 });
+  await flush();
+  const invalid = { message: 'sync URL must not contain query string or fragment: https://sync.test/catalog?bucket=a' };
+  worker().deliver(instance, { type: 'reply', id: worker().last('connect').call.id ?? -1, error: invalid });
+  await expect(catalog.waitForReady()).rejects.toThrow(invalid.message);
+  expect(catalog.status().downloadError?.message).toBe(invalid.message);
 });

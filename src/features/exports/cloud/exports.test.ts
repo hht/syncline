@@ -127,7 +127,7 @@ test('point-in-time recovery during incremental export (restoring to completed v
 
 test('an exporter name that is not well-formed text throws on construction: stored as-is and read back replaced, its task would never match its own row', () => {
   const exporter = { position: async () => undefined, write: async () => undefined };
-  expect(() => new Exports({ reserved: 'syncline:' } as never, { exports: { 'cut\uD800': exporter } })).toThrow('well-formed');
+  expect(() => new Exports({ reserved: 'syncline:' } as never, { exporters: { 'cut\uD800': exporter } })).toThrow('well-formed');
 });
 
 test('a failing exporter is reported by name with the message it threw, or with the thrown value as text when that is not an Error', async () => {
@@ -145,7 +145,7 @@ test('a failing exporter is reported by name with the message it threw, or with 
     reserved: 'syncline:',
     events: (event: Event) => events.push(event),
   };
-  const exports = new Exports(context, { exports: { stats: failing(new Error('quota exceeded')), search: failing('timeout') } });
+  const exports = new Exports(context, { exporters: { stats: failing(new Error('quota exceeded')), search: failing('timeout') } });
   for (const name of ['stats', 'search']) {
     // The schedule hands a rejected run to failed.
     const chore = exports.chore(`syncline:export:${name}`, Date.now());
@@ -159,7 +159,7 @@ test('a failing exporter is reported by name with the message it threw, or with 
 
 test('an integrator task is no export task, even when its name past the length of the export prefix is an exporter name', () => {
   const exporter = { position: async () => undefined, write: async () => undefined };
-  const exports = new Exports({ reserved: 'syncline:' } as never, { exports: { stats: exporter } });
+  const exports = new Exports({ reserved: 'syncline:' } as never, { exporters: { stats: exporter } });
   expect(exports.chore(`${'x'.repeat('syncline:export:'.length)}stats`, Date.now())).toBeUndefined();
   expect(exports.chore('syncline:export:stats', Date.now())).toBeDefined();
 });

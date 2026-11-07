@@ -131,7 +131,7 @@ import { openSyncline } from 'syncline/expo';
 import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
 import { schema, note } from './schema';
 
-const space = openSyncline({
+const syncline = openSyncline({
   name: 'app',
   userID,
   schema,
@@ -141,7 +141,7 @@ const space = openSyncline({
 
 export function App() {
   return (
-    <SynclineProvider value={space}>
+    <SynclineProvider value={syncline}>
       <Notes />
     </SynclineProvider>
   );

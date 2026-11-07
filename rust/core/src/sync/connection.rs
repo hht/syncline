@@ -176,6 +176,9 @@ impl Connection {
         } else {
             Some(Failure::new("sync has not started"))
         };
+        // The count in status is stale after a failed read, which would let this call resolve with writes still pending: read it again
+        // (a failure rejects this call, which tells the app, so it is not reported as well)
+        let refused = refused.or_else(|| local(ctx, self.mirror()).map(|local| self.status.local(ctx.out, true, local)).err());
         if let Some(error) = refused {
             ctx.out.push(Instruction::Reply {
                 id,
@@ -264,7 +267,7 @@ impl Connection {
         self.attempt.is_some_and(|current| current.id == attempt)
     }
 
-    /// Local database portion of status; reports and returns None on read error. Reads local status and updates sync status alongside change.
+    /// Reads the local portion of status and updates sync status alongside `change`; on a read error, applies only `change` (see `local_or_report`).
     pub(super) fn update_with_local(&mut self, ctx: &mut Context, change: impl FnOnce(&mut SyncStatus)) {
         let local = self.local_or_report(ctx);
         self.status.update(ctx.out, self.started, |status| {
@@ -275,10 +278,12 @@ impl Connection {
         });
     }
 
-    pub(super) fn local_or_report(&self, ctx: &mut Context) -> Option<Local> {
+    /// Reads the local portion of status; on a read error, reports it and fails waiting `sync()` calls the stale pending count would resolve.
+    pub(super) fn local_or_report(&mut self, ctx: &mut Context) -> Option<Local> {
         match local(ctx, self.mirror()) {
             Ok(local) => Some(local),
             Err(error) => {
+                self.status.fail(ctx.out, &error);
                 ctx.out.report(error);
                 None
             }

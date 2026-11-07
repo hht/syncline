@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { PendingWrites } from './errors.ts';
+import { PendingWritesError } from './errors.ts';
 import { openSyncline, syncOnce } from './native.ts';
 
 // Tests native client with mock native module; ordering is guaranteed natively by blocking on active core thread.
@@ -16,7 +16,8 @@ const native = await vi.hoisted(async () =>
 );
 vi.mock('expo', () => ({ requireNativeModule: () => native.module }));
 
-const open = (name = 'native-test') => openSyncline({ name, schema: {}, url: 'https://sync.test/space', token: async () => 'valid' });
+const open = (name = 'native-test') =>
+  openSyncline({ name, userID: 'u1', schema: {}, url: 'https://sync.test/space', token: async () => 'valid' });
 
 test('reopening database under same name before close finishes does not throw "already open" and starts a new handle', () => {
   const first = open();
@@ -32,22 +33,31 @@ test('deleting database after core thread panic succeeds without failing on pani
   expect(removed).toEqual(['native-broken']);
 });
 
-test('opening blocked by PendingWrites: sync() rejects with PendingWrites and the name can be opened again with discardPending', async () => {
+test('opening blocked by PendingWritesError: sync() rejects with PendingWritesError and the name can be opened again with discardPending', async () => {
   const blocked = open('native-pending');
   const syncing = blocked.sync().catch((error: unknown) => error);
   const pending = { message: 'pending writes', pending: { owner: 'u0', count: 2 } };
   native.deliver({ handle: started.length, data: JSON.stringify([{ type: 'reply', id: 1, error: pending }]) });
-  expect(await syncing).toBeInstanceOf(PendingWrites);
+  expect(await syncing).toBeInstanceOf(PendingWritesError);
   expect(await syncing).toMatchObject({ userID: 'u0', count: 2 });
-  expect(blocked.status().downloadError).toBeInstanceOf(PendingWrites);
+  await expect(blocked.waitForReady()).rejects.toBeInstanceOf(PendingWritesError);
+  expect(blocked.status().downloadError).toBeInstanceOf(PendingWritesError);
   expect(() =>
-    openSyncline({ name: 'native-pending', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', discardPending: true }),
+    openSyncline({
+      name: 'native-pending',
+      userID: 'u1',
+      schema: {},
+      url: 'https://sync.test/space',
+      token: async () => 'valid',
+      discardPending: true,
+    }),
   ).not.toThrow();
 });
 
 test('syncOnce opens without discardPending even when given it, so a background sync never discards pending writes', () => {
   void syncOnce({
     name: 'native-background',
+    userID: 'u1',
     schema: {},
     url: 'https://sync.test/space',
     token: async () => 'valid',

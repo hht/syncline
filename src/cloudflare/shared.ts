@@ -86,7 +86,7 @@ type SharedOptions<Env> = SharedDefinition & {
   /** Standard Schema definitions used to validate server writes. */
   validation?: Validation;
   /** Event callback for pulls, resets, and failed broadcast notices. */
-  events?: Events;
+  onEvent?: Events;
   /** Retired tables and columns excluded from sync. */
   retired?: string[];
 };
@@ -110,12 +110,12 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     const shards = Array.from({ length: shardCount(options) }, (_, index) => shardName(name, index));
     if (utf8Bytes(shardName(name, shards.length - 1)) > nameBytes)
       throw new Error(`Shared space name is too long: with its shard suffix (#${shards.length - 1}) it must fit in ${nameBytes} bytes`);
-    const { schema, buckets, chunkRows, validation, events = quiet, retired } = options;
+    const { schema, rules, chunkRows, validation, onEvent: events = quiet, retired } = options;
     const tables = Object.values(schema);
-    const shared = { buckets, ...(chunkRows && { chunkRows }) };
+    const shared = { buckets: rules, ...(chunkRows && { chunkRows }) };
     const storage = ctx.storage as unknown as CloudStorage;
-    const rules = new Buckets(tables, buckets);
-    const indexes = defineTables(storage, tables, tables, (table) => rules.indexes(table));
+    const buckets = new Buckets(tables, rules);
+    const indexes = defineTables(storage, tables, tables, (table) => buckets.indexes(table));
     this.#space = new Space(storage, tables, { shared, events, ...(validation && { validation }), ...(retired && { retired }) });
     this.#events = isolated(events);
     const query = queryOf(storage);
@@ -213,7 +213,7 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
   /** Scheduled alarm epoch ms, or null if no alarm is scheduled. */
   #alarm: number | null | undefined;
 
-  constructor(ctx: DurableObjectState, env: Env, shared: DurableObjectNamespace<SynclineSharedSpace>, events?: Events) {
+  constructor(ctx: DurableObjectState, env: Env, shared: DurableObjectNamespace<SynclineSharedSpace>, onEvent?: Events) {
     super(ctx, env);
     // Resolved per query rather than at construction: Cloudflare documents the name for requests by name and for alarms, not for hibernated
     // WebSocket wakeups, so a wakeup without it must not fail construction
@@ -221,7 +221,7 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
       const name = nameOf(ctx);
       return shared.getByName(name.slice(0, name.lastIndexOf('#')));
     };
-    this.#broadcast = new Broadcast(ctx, async () => (await space().latest()) as Round, events);
+    this.#broadcast = new Broadcast(ctx, async () => (await space().latest()) as Round, onEvent);
     // Configures automatic WebSocket ping-pong handling at the runtime layer without waking the actor.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(ping, pong));
   }

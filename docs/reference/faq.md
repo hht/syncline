@@ -14,9 +14,19 @@ The cloud applies writes column by column, in the order they arrive. If both dev
 
 ### How do I know sync has finished?
 
-Call `await space.sync()`. It resolves once the device is up to date and the cloud has confirmed every local write.
+Call `await syncline.sync()`. It resolves once the device is up to date and the cloud has confirmed every local write.
 
 For a live indicator, read `status()` or subscribe with `onStatus`. `status().pending` is the number of writes not yet confirmed.
+
+### How do I sign a user out?
+
+Upload the user's writes first, then close the database:
+
+1. Stop making writes.
+2. Call `await syncline.sync()`. If it rejects, `status().pending` is the number of writes not uploaded yet.
+3. Call `await syncline.close()` and pass `undefined` to `SynclineProvider`. On iOS and Android, also call `stopBackgroundSync()`.
+
+Opening the database for the next `userID` then clears this user's private data and local-only tables, keeping shared spaces. If writes are still pending, it fails with `PendingWritesError` and clears nothing. `delete()` removes the database at once, including writes not uploaded yet, without an error.
 
 ### How do I change my schema?
 
@@ -29,7 +39,7 @@ Apps that have not updated keep syncing after you add tables or columns. After y
 
 ### How do I share data between users?
 
-Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See `shared()` in the [API](api.md).
+Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See `openShared()` in the [API](api.md).
 
 ### Can the app sync in the background?
 
@@ -49,15 +59,15 @@ Pass `allowCleartext: true` to `openSyncline`, and use `http://localhost:8787` f
 
 The cloud refused to run it, for example because it broke a [limit](limits.md) or a rule in your cloud code. The cloud holds the write instead of dropping it.
 
-Listen with `onHeld` to show the user what failed. Once the cause is fixed, resubmit or discard the write in the cloud with `resubmit`.
+Listen with `onHeld` to show the user what failed. It reports each held write at most once, when the cloud confirms that write to this device, so a write whose confirmation a background `syncOnce` received is never reported to it. The cloud keeps the full list: read it with `held()`. Once the cause is fixed, resubmit or discard the write in the cloud with `resubmit`.
 
-### `PendingWrites` when opening the database
+### `PendingWritesError` when opening the database
 
 The previous user still has writes waiting to upload, and opening for a new `userID` would delete them.
 
 Ask the previous user to sign in again and sync. To drop their writes instead, open with `discardPending: true`.
 
-### `AccountMismatch` in `downloadError`
+### `AccountMismatchError` in `downloadError`
 
 The cloud reports a different account than the one this database first synced with. Sync stops so nothing uploads to the wrong account. Reopen the database with the current user's `userID`.
 
@@ -75,4 +85,4 @@ A trigger on a synced table that raises an error can block downloads, or opening
 
 ### The web app works in one tab only
 
-Only one tab per site can open the database. Close the other tab, then reload this one.
+Only one tab per site can open the database. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.

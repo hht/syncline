@@ -142,6 +142,7 @@ test('a server write storing bytes in a text column of a table created without S
   const space = new Space(storage, [note]);
   const writing = () => space.mutate((tx) => tx.insert(note, { id: 'n1', body: new Uint8Array([1]) as never }));
   expect(writing).toThrow(new ValidationError('note', [{ path: ['body'], message: 'must be a string' }]));
+  expect(writing).toThrow(expect.objectContaining({ name: 'ValidationError' }));
   expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
 });
 
