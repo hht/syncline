@@ -19,6 +19,16 @@ Your app reads and writes a local SQLite database. Syncline keeps it in sync wit
 - **Cheap to run.** One Durable Object per user. Idle connections are not billed for duration.
 - **Shared data.** Data the cloud writes for many users downloads through the CDN; each device gets only the parts its token allows.
 
+## When not to use Syncline
+
+- **Several people editing the same text.** When two devices change the same column, the write reaching the cloud last wins. Use a CRDT such as [Yjs](https://yjs.dev) for that.
+- **Files and binary data.** BLOB columns are not supported, and rows have a size limit.
+- **A backend other than Cloudflare.** The cloud side runs only on Durable Objects.
+- **Devices writing shared data.** Devices only read shared spaces; the cloud writes them.
+- **Expo Go.** Syncline needs a development build.
+
+See [Limits](docs/reference/limits.md) for the full list.
+
 ## Quick start
 
 ### 1. Install
