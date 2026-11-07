@@ -23,13 +23,13 @@ Your app reads and writes a local SQLite database. Syncline keeps it in sync wit
 
 ### 1. Install
 
-Install it from GitHub:
+Install the latest release from GitHub:
 
 ```sh
 pnpm add github:hht/syncline
 ```
 
-Append `#<tag>` to pin a [release](https://github.com/hht/syncline/tags).
+Append `#v<version>` to pin a [release](https://github.com/hht/syncline/releases).
 
 Syncline's `postinstall` script is for its own development. pnpm refuses to install until you decide on it, so turn it off in `pnpm-workspace.yaml`:
 
@@ -53,15 +53,9 @@ module.exports = withSyncline(getDefaultConfig(__dirname));
 <details>
 <summary>Build requirements</summary>
 
-Syncline builds its device runtime from source for now:
-
-- Node.js 26 or later
-- [rustup](https://rustup.rs)
-- LLVM, installed with [mise](https://mise.jdx.dev) (Metro prints the command if it is missing)
-- The `wasm-bindgen` CLI at the exact version Syncline uses: `cargo install wasm-bindgen-cli --version 0.2.130`
-- `cargo-ndk` (Android only)
-
-iOS and Android need a [development build](https://docs.expo.dev/develop/development-builds/introduction/). Expo Go is not supported.
+- Node.js 26 or later.
+- iOS and Android need a [development build](https://docs.expo.dev/develop/development-builds/introduction/). Expo Go is not supported.
+- The first iOS build, Android build, and Metro start download Syncline's prebuilt binaries from its GitHub release, so they need access to `github.com` and `release-assets.githubusercontent.com`. Behind a proxy, set `NODE_USE_ENV_PROXY=1` so Node uses `HTTPS_PROXY`.
 
 </details>
 

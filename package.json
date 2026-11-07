@@ -1,5 +1,6 @@
 {
   "name": "syncline",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -13,8 +14,24 @@
     "model": "node tools/dev/model.ts check",
     "model:setup": "node tools/dev/model.ts setup",
     "model:big": "node tools/dev/model.ts big",
-    "model:trace": "node tools/dev/model.ts trace"
+    "model:trace": "node tools/dev/model.ts trace",
+    "release": "node tools/release.ts"
   },
+  "files": [
+    "src",
+    "!src/test",
+    "!src/**/*.test.ts",
+    "!src/**/test-*.ts",
+    "!src/build-wasm.mjs",
+    "!src/cloudflare/wrangler.jsonc",
+    "ios",
+    "android/build.gradle",
+    "android/src",
+    "metro.cjs",
+    "expo-module.config.json",
+    "README.zh-CN.md",
+    "docs/reference"
+  ],
   "exports": {
     "./expo": {
       "browser": "./src/expo/web.ts",

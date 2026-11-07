@@ -18,7 +18,7 @@ Pod::Spec.new do |s|
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   # Requires Security.framework for ring random bytes (SecRandomCopyBytes) and rustls system certificate verification.
   s.frameworks = 'Security'
-  # Runs on every build (cargo determines whether rebuild is needed); outputs static library to pod configuration build directory.
+  # Runs on every build (cargo determines whether rebuild is needed; installs download each library once); outputs static library to pod configuration build directory.
   s.script_phase = {
     name: 'Build Rust',
     script: '"$PODS_TARGET_SRCROOT/build-rust.sh"',

@@ -145,6 +145,5 @@ export function buildWasm(output) {
 /** Vitest global setup hook that builds node wasm before tests run. */
 export default () => buildWasm('node');
 
-// Executed directly by withSyncline for web builds, or with node or coverage argument for tests.
-// Integrators execute it from dependencies where Node does not strip TypeScript types, so this script is plain JavaScript.
+// Executed directly by withSyncline for web builds in a checkout of this repository, or with node or coverage argument for tests.
 if (import.meta.main) buildWasm(process.argv[2] === 'node' || process.argv[2] === 'coverage' ? process.argv[2] : 'web');

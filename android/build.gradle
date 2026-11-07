@@ -1,5 +1,6 @@
 // Syncline native module: Kotlin Expo module (`SynclineModule.kt`) bridging native Rust sync engine (`rust/native`).
-// Compiles dynamic libraries across target ABIs (`reactNativeArchitectures`) via cargo-ndk into jniLibs before build.
+// Compiles dynamic libraries across target ABIs (`reactNativeArchitectures`) via cargo-ndk into jniLibs before build;
+// installs carry no Rust sources and download the release's libraries instead.
 // Invokes rustup cargo wrapper with cleared RUSTUP_TOOLCHAIN respecting rust/rust-toolchain.toml.
 // @see https://github.com/bbqsrc/cargo-ndk
 plugins {
@@ -19,18 +20,29 @@ android {
   }
 }
 
-def rustLibraries = layout.buildDirectory.dir("rustJniLibs")
+def source = file("../rust/Cargo.toml").exists()
+// Installs download into the package, which each version installs afresh: a build directory an app moves outside it would keep an older
+// release's libraries.
+def rustLibraries = source ? layout.buildDirectory.dir("rustJniLibs").get().asFile : file("../rust/target/jniLibs")
 android.sourceSets.main.jniLibs.srcDirs += rustLibraries
 
-def cargoRust = tasks.register("cargoRust", Exec) {
-  def cargoHome = System.getenv("CARGO_HOME") ?: "${System.getProperty('user.home')}/.cargo"
-  def abis = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,arm64-v8a,x86,x86_64").split(",")
-  workingDir file("../rust")
-  executable "${cargoHome}/bin/cargo"
-  environment "RUSTUP_TOOLCHAIN", ""
-  environment "ANDROID_NDK_HOME", android.ndkDirectory.path
-  args(["ndk", "--platform", "${rootProject.ext.minSdkVersion}", "-o", rustLibraries.get().asFile.path]
-    + abis.collectMany { ["-t", it.trim()] }
-    + ["build", "--locked", "--release", "-p", "syncline-native"])
+def rustTask = tasks.register("rust", Exec) {
+  def abis = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,arm64-v8a,x86,x86_64").split(",").collect { it.trim() }
+  def output = rustLibraries.path
+  if (source) {
+    def cargoHome = System.getenv("CARGO_HOME") ?: "${System.getProperty('user.home')}/.cargo"
+    workingDir file("../rust")
+    executable "${cargoHome}/bin/cargo"
+    environment "RUSTUP_TOOLCHAIN", ""
+    environment "ANDROID_NDK_HOME", android.ndkDirectory.path
+    args(["ndk", "--platform", "${rootProject.ext.minSdkVersion}", "-o", output]
+      + abis.collectMany { ["-t", it] }
+      + ["build", "--locked", "--release", "-p", "syncline-native"])
+  } else {
+    // Installs carry no Rust sources: download the release's libraries with Node, which Expo's Gradle settings already run by name.
+    // @see https://github.com/expo/expo/blob/sdk-58/packages/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-settings-plugin/src/main/kotlin/expo/modules/plugin/ExpoAutolinkingSettingsPlugin.kt
+    executable "node"
+    args([file("../src/prebuilt.mjs").path] + abis.collectMany { ["libsyncline_native-${it}.so", "${output}/${it}/libsyncline_native.so"] })
+  }
 }
-tasks.named("preBuild") { dependsOn cargoRust }
+tasks.named("preBuild") { dependsOn rustTask }

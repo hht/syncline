@@ -81,15 +81,6 @@ test('the Chinese translation states the same numbers as the English limits', ()
   expect(numbers(translation)).toEqual(numbers(limits));
 });
 
-test('the READMEs install the wasm-bindgen CLI at the version the Rust crates pin', () => {
-  const cargo = readFileSync(new URL('../../rust/Cargo.toml', import.meta.url), 'utf8');
-  const version = cargo.match(/^wasm-bindgen = "=([\d.]+)"$/m)?.[1];
-  for (const readme of ['README.md', 'README.zh-CN.md'])
-    expect(readFileSync(new URL(`../../${readme}`, import.meta.url), 'utf8')).toContain(
-      `cargo install wasm-bindgen-cli --version ${version}`,
-    );
-});
-
 test('Rust device-side limits match cloud limits', () => {
   expect(rustLimits()).toMatchObject({
     valueBytes,

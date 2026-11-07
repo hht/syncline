@@ -78,7 +78,7 @@ Must be used inside TanStack's `QueryClientProvider`.
 
 ## `syncline/metro`
 
-`withSyncline(config)`: Wraps the integrator's Metro configuration (`metro.config.js`) and returns the modified configuration: compiles the WebAssembly binary for web when Metro starts (takes 1–2 seconds when unchanged, throws if compilation fails), bundling `.wasm` as an asset.
+`withSyncline(config)`: Wraps the integrator's Metro configuration (`metro.config.js`) and returns the modified configuration: downloads the web WebAssembly binary of the installed release when Metro first starts (needs access to GitHub, throws if the download fails or its checksum does not match), bundling `.wasm` as an asset.
 
 ## `syncline/cloudflare`
 

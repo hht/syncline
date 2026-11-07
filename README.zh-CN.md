@@ -25,13 +25,13 @@
 
 ### 1. 安装
 
-从 GitHub 安装：
+从 GitHub 安装最新发布的版本：
 
 ```sh
 pnpm add github:hht/syncline
 ```
 
-在末尾加上 `#<tag>` 可以固定到某个[版本](https://github.com/hht/syncline/tags)。
+在末尾加上 `#v<version>` 可以固定到某个[版本](https://github.com/hht/syncline/releases)。
 
 Syncline 的 `postinstall` 脚本只用于它自身的开发。不做决定 pnpm 会拒绝安装，所以在 `pnpm-workspace.yaml` 里关掉它：
 
@@ -55,15 +55,9 @@ module.exports = withSyncline(getDefaultConfig(__dirname));
 <details>
 <summary>构建依赖</summary>
 
-目前 Syncline 需要从源码构建设备端运行时：
-
-- Node.js 26 或更高版本
-- [rustup](https://rustup.rs)
-- 用 [mise](https://mise.jdx.dev) 安装的 LLVM（缺少时 Metro 会打印安装命令）
-- 与 Syncline 版本完全一致的 `wasm-bindgen` 命令行工具：`cargo install wasm-bindgen-cli --version 0.2.130`
-- `cargo-ndk`（仅 Android）
-
-iOS 和 Android 需要[开发构建](https://docs.expo.dev/develop/development-builds/introduction/)，不支持 Expo Go。
+- Node.js 26 或更高版本。
+- iOS 和 Android 需要[开发构建](https://docs.expo.dev/develop/development-builds/introduction/)，不支持 Expo Go。
+- 第一次构建 iOS、Android 和第一次启动 Metro 时，会从 Syncline 的 GitHub Release 下载预编译好的二进制，需要能访问 `github.com` 和 `release-assets.githubusercontent.com`。使用代理时，设置 `NODE_USE_ENV_PROXY=1`，让 Node 读取 `HTTPS_PROXY`。
 
 </details>
 
