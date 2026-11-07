@@ -50,6 +50,7 @@ export class ValidationError extends Reject {
 
   constructor(table: string, issues: Issue[]) {
     super(`Table ${table} row violates schema: ${issues.map(({ path, message }) => `${path.join('.')}: ${message}`).join('; ')}`);
+    this.name = 'ValidationError';
     this.table = table;
     this.issues = issues;
   }
