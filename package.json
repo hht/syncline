@@ -1,7 +1,25 @@
 {
   "name": "syncline",
   "version": "0.0.0",
+  "description": "Offline-first SQLite sync for Expo apps, backed by Cloudflare",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hht/syncline.git"
+  },
+  "bugs": "https://github.com/hht/syncline/issues",
+  "homepage": "https://github.com/hht/syncline#readme",
+  "keywords": [
+    "sync",
+    "offline-first",
+    "local-first",
+    "sqlite",
+    "expo",
+    "react-native",
+    "cloudflare",
+    "durable-objects",
+    "drizzle"
+  ],
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.21.0",
