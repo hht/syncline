@@ -1,6 +1,25 @@
 {
   "name": "syncline",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "description": "Offline-first SQLite sync for Expo apps, backed by Cloudflare",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hht/syncline.git"
+  },
+  "bugs": "https://github.com/hht/syncline/issues",
+  "homepage": "https://github.com/hht/syncline#readme",
+  "keywords": [
+    "sync",
+    "offline-first",
+    "local-first",
+    "sqlite",
+    "expo",
+    "react-native",
+    "cloudflare",
+    "durable-objects",
+    "drizzle"
+  ],
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -47,15 +66,15 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@cloudflare/vitest-plugin": "1.3.4",
+    "@cloudflare/vitest-plugin": "1.6.0",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "@tanstack/react-query": "5.104.0",
     "@types/node": "^26.6.3",
     "@types/react": "~19.3.0",
     "@types/react-dom": "~19.3.0",
-    "@vitest/coverage-istanbul": "4.1.11",
+    "@vitest/coverage-istanbul": "4.1.12",
     "dependency-cruiser": "18.4.0",
-    "expo": "~58.0.14",
+    "expo": "~58.0.23",
     "expo-background-task": "~58.0.11",
     "expo-task-manager": "~58.0.12",
     "fast-check": "4.10.2",
@@ -66,9 +85,9 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "typescript": "~6.0.3",
-    "vitest": "4.1.11",
-    "wrangler": "4.145.0",
-    "zod": "4.6.5"
+    "vitest": "4.1.12",
+    "wrangler": "4.158.0",
+    "zod": "4.6.7"
   },
   "peerDependencies": {
     "@tanstack/react-query": "5.104.0",

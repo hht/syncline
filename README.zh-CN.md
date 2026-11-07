@@ -21,6 +21,16 @@
 - **运行成本低**：每个用户一个 Durable Object，空闲连接不按时长计费。
 - **共享数据**：云端为多个用户写入的数据通过 CDN 下载，每台设备只下载其 token 允许的部分。
 
+## 何时不该使用 Syncline
+
+- **多人编辑同一段文本**：两台设备改同一列时，最后到达云端的写入生效。这种需求请用 [Yjs](https://yjs.dev) 这类 CRDT。
+- **文件和二进制数据**：不支持 BLOB 列，行的大小也有上限。
+- **Cloudflare 以外的后端**：云端只能运行在 Durable Objects 上。
+- **设备写入共享数据**：设备只能读取共享空间，由云端写入。
+- **Expo Go**：Syncline 需要开发构建。
+
+完整列表见[限制](docs/reference/zh-CN/limits.md)。
+
 ## 快速上手
 
 ### 1. 安装
@@ -162,3 +172,7 @@ function Notes() {
 - [限制](docs/reference/zh-CN/limits.md)：Syncline 不支持什么，超出每项限制会发生什么。设计 schema 前请先读。
 - [常见问题](docs/reference/zh-CN/faq.md)：常见问题和报错。
 - [API](docs/reference/api.md)（英文）：所有导出和选项。
+
+## 许可证
+
+[Apache License 2.0](LICENSE)

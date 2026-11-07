@@ -12,7 +12,8 @@ import { cookieOf, FanoutCloud, incarnation, pick, shardNames, type Weighted, wh
 // message a connection receives, it must chain onto the previous one and carry every row of its buckets in between (Covers, Complete),
 // versions must only grow, and no hint may name a version past head (NoWastedPull); a final phase without writes or faults checks both
 // devices reach their relevant head (CatchesUp).
-// Left to other tests: incarnations other than one (space rebuilds) and changing the shard set.
+// Left to other tests: incarnations other than one (space rebuilds), changing the shard set, and rounds the fanout gave up on arriving late
+// with tokens expiring.
 // @see https://apple.github.io/foundationdb/testing.html
 
 /** Subscriptions of the device and of the resident device. */

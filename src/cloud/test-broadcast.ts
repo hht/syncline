@@ -82,6 +82,16 @@ export const last = (socket: RecordingSocket) => JSON.parse(socket.sent.at(-1) ?
 /** Returns the cookie from the last message sent to the socket when that message is a hint. */
 export const hinted = (socket: RecordingSocket) => (JSON.parse(socket.sent.at(-1) ?? '') as Hint).hint;
 
+/**
+ * Publishes program p2 without notifying the shard and returns the previous head with the round from it to p2, so a test delivers the
+ * round late, or never.
+ */
+export function unsent(space: Space) {
+  const base = space.head();
+  space.mutate((tx) => tx.upsert(program, { id: 'p2', status: 'published' }), 0);
+  return { base, round: space.round(64_000, base) };
+}
+
 /** Receives the last message (a hint) on the device, pulls to catch up, and verifies that subsequent writes push notifications chaining onto the device cookie. */
 export async function catchesUp({ catalog, commit, pullAll }: Awaited<ReturnType<typeof setup>>, socket: RecordingSocket) {
   await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);

@@ -140,7 +140,8 @@ export class Broadcast<S extends Socket> {
    * Processes a shared space round (ArriveChained and ArriveUnchained in model/Fanout.tla): if unchained (distinct incarnation, base version newer than known cookie,
    * or nothing known and the round is empty),
    * queries the latest round, records it, and pushes hints to every connection; throws if the query fails (prompting shared space retry with backoff).
-   * If chained and newer, pushes to every connection and updates the known round; drops retransmissions and late arrivals.
+   * If chained and newer, pushes to every connection and updates the known round; drops retransmissions and late arrivals not newer than
+   * the known round (a shard that lost it chains a late arrival instead, LateRounds in model/Fanout.tla).
    * Updates state only after pushing: on partial push failure, the shared space retry still delivers to remaining connections without skipping.
    */
   async notify(round: Round) {

@@ -58,7 +58,7 @@ Code standards not covered by automated gates and enforced by pre-commit review:
 
 ## Commands
 
-The single check entrypoint is `pnpm check` (identical to the local git hook); work is complete only when it is fully green.
+The single check entrypoint is `pnpm check` (the local git hook runs it on changed files; CI runs it in full, after auditing production dependencies for high and critical advisories); work is complete only when it is fully green.
 
 - `pnpm check`: runs gates in two parallel batches (Rust-compiling gates finish first), printing only `file:line rule message` with full logs in `.check/<gate>.log`; `--changed` checks only files modified or untracked relative to `HEAD` (used by pre-commit); the full run also measures coverage against the thresholds in `tools/check/coverage.ts`, listing uncovered lines in `.check/test.log`.
 - `pnpm q <command>`: prints a concise summary with full logs in `.q/`.
@@ -69,7 +69,7 @@ The single check entrypoint is `pnpm check` (identical to the local git hook); w
 ## Commits
 
 - `commit` and `push` require explicit user instruction in the current turn; never `amend`, `force-push`, or modify git configuration.
-- Commit to `dev`; `main` moves only through `pnpm release <version>`, which tags, pushes, and publishes a GitHub Release (outward-facing: run it only when the user asks).
+- Commit to `dev`; `main` takes only pull requests, opened by `pnpm release <version>`, which tags, pushes, publishes a GitHub Release, and merges the tag into `main` once CI passes (outward-facing: run it only when the user asks).
 - Before committing, perform a line-by-line deletion-first review of the diff and list in your report what was deleted, what was changed, and any debatable lines kept along with their justification.
 - Before committing, run an **independent review**: dispatch a fresh read-only subagent (not a fork, without this session's context) to review the diff with the changes, related files, and target properties, looking for regressions, bugs, and discrepancies with documentation and models, citing a reproduction or `file:line` for each finding. Only "must-fix" findings block a commit: data loss or corruption, permanent stalls, security issues, or model discrepancies; after fixing, dispatch another fresh subagent to review the updated diff, for at most two rounds, stopping for user decision if must-fix findings remain after the second round. Fix minor findings in the same turn or note them in the report.
 - Each commit makes one self-contained change with its tests in the same commit; keep refactoring separate from features and fixes.

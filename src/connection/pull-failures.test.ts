@@ -3,6 +3,8 @@ import { expect, test } from 'vitest';
 import { receiveTimeout } from '../expo/shell.ts';
 import { type ConnectionOptions, Device, type Mirror } from '../test/test-device.ts';
 import { flush } from '../test/test-drive.ts';
+import { captureReported } from '../test/test-errors.ts';
+import { write } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
 import { Connection } from '../test/test-sync.ts';
 
@@ -28,6 +30,14 @@ async function pulled(
   return connection;
 }
 
+/** Asserts one backoff timer is waiting, then runs it and asserts the pull goes out again. */
+async function retried(timers: (() => void)[], fetched: string[]) {
+  expect(timers).toHaveLength(1);
+  timers[0]?.();
+  for (let step = 0; step < 10; step += 1) await flush();
+  expect(fetched).toHaveLength(2);
+}
+
 test('mismatched cookie from HTTP pull records download error and retries with backoff instead of immediately', async () => {
   const fetched: string[] = [];
   const timers: (() => void)[] = [];
@@ -44,10 +54,7 @@ test('mismatched cookie from HTTP pull records download error and retries with b
   );
   expect(fetched).toHaveLength(1);
   expect(connection.status().downloadError).toEqual(new Error('pull response does not match local cookie'));
-  expect(timers).toHaveLength(1);
-  timers[0]?.();
-  for (let step = 0; step < 10; step += 1) await flush();
-  expect(fetched).toHaveLength(2);
+  await retried(timers, fetched);
   connection.stop();
 });
 
@@ -83,5 +90,37 @@ test('a shared space pull answered 412, which the cloud sends only to a private 
   );
   expect(fetched).toHaveLength(1);
   expect(connection.status().downloadError).toEqual(new Error('pull failed (HTTP 412)'));
+  connection.stop();
+});
+
+test('a pull an auth proxy answers 200 with its sign-in page keeps the pending writes and retries with backoff', async () => {
+  const reported = captureReported();
+  const device = new Device(deviceStorage('CREATE TABLE note (id TEXT PRIMARY KEY)'), tables);
+  await write(device, (tx) => tx.insert(note).values({ id: 'n1' }));
+  const fetched: string[] = [];
+  const timers: (() => void)[] = [];
+  const signIn = '<!DOCTYPE html><html><body><form action="/login"></form></body></html>';
+  const connection = new Connection(device.private, {
+    url,
+    token: async () => 'valid',
+    socket: () => ({}) as WebSocket,
+    // fetch follows a proxy's redirect to its sign-in page and reports that page's 200
+    fetch: async (address) => {
+      fetched.push(address);
+      return new Response(signIn);
+    },
+    schedule: (run, delay) => {
+      if (delay !== receiveTimeout) timers.push(run);
+      return () => undefined;
+    },
+  });
+  connection.start();
+  for (let step = 0; step < 10; step += 1) await flush();
+  expect(reported).toEqual([expect.stringContaining('invalid notification: <!DOCTYPE html>')]);
+  expect(connection.status().downloadError?.message).toBe(reported[0]);
+  expect(device.private.pendingCount()).toBe(1);
+  expect(fetched).toHaveLength(1);
+  await retried(timers, fetched);
+  expect(device.private.pendingCount()).toBe(1);
   connection.stop();
 });

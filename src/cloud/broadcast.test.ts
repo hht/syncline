@@ -3,7 +3,7 @@ import { expired, socketLimit } from '../common/protocol.ts';
 import { program } from '../test/test-catalog.ts';
 import { captureReported } from '../test/test-errors.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
-import { catchesUp, hinted, last, rules, setup, subscriptions } from './test-broadcast.ts';
+import { catchesUp, hinted, last, rules, setup, subscriptions, unsent } from './test-broadcast.ts';
 
 // Broadcast shards in shared spaces (following model/Fanout.tla): connects sockets, registers them for pushes, and fetches latest round for catch-up; filters each round by connection subscription, chained onto its last pushed point; skips rounds unrelated to the subscription; queries the latest round and pushes hints when unchained.
 
@@ -80,9 +80,7 @@ test('pushes hints without closing sockets when round carries no rows; closes ex
 test('drops retransmitted or late rounds not newer than known version without pushing to devices', async () => {
   const { space, shard, catalog, commit, connect, programs } = await setup();
   const socket = await connect();
-  const base = space().head();
-  space().mutate((tx) => tx.upsert(program, { id: 'p2', status: 'published' }), 0);
-  const late = space().round(64_000, base);
+  const { round: late } = unsent(space());
   await shard().notify(late);
   await commit('p3');
   const sent = socket.sent.length;
