@@ -160,3 +160,7 @@ Open the app on two devices. Add a note on one, and it shows up on the other.
 - [Limits](docs/reference/limits.md): what Syncline does not support, and what happens past each limit. Read it before you design your schema.
 - [FAQ](docs/reference/faq.md): common questions and errors.
 - [API](docs/reference/api.md): every export and option.
+
+## License
+
+[Apache License 2.0](LICENSE)

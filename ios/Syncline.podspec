@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
   s.version = '0.0.0'
   s.summary = 'Syncline on-device sync: local database, networking, and sync on Rust worker threads'
   s.homepage = 'https://github.com/hht/syncline'
-  s.license = { type: 'UNLICENSED' }
+  s.license = { type: 'Apache-2.0' }
   s.author = 'Syncline'
   s.source = { git: '' }
   s.platforms = { ios: '16.4' }

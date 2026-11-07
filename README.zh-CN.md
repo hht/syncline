@@ -162,3 +162,7 @@ function Notes() {
 - [限制](docs/reference/zh-CN/limits.md)：Syncline 不支持什么，超出每项限制会发生什么。设计 schema 前请先读。
 - [常见问题](docs/reference/zh-CN/faq.md)：常见问题和报错。
 - [API](docs/reference/api.md)（英文）：所有导出和选项。
+
+## 许可证
+
+[Apache License 2.0](LICENSE)
