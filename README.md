@@ -33,24 +33,24 @@ See [Limits](docs/reference/limits.md) for the full list.
 
 ### 1. Install
 
-Install the latest release from GitHub:
-
-```sh
-pnpm add github:hht/syncline
-```
-
-Append `#v<version>` to pin a [release](https://github.com/hht/syncline/releases).
-
-Syncline's `postinstall` script is for its own development. pnpm refuses to install until you decide on it, so turn it off in `pnpm-workspace.yaml`:
+Syncline's `postinstall` script is for its own development. pnpm refuses to install until you decide on it, so first turn it off in `pnpm-workspace.yaml`:
 
 ```yaml
 allowBuilds:
   syncline: false
 ```
 
-For Jest, add `syncline` to `transformIgnorePatterns`: the package ships TypeScript source.
+Then install the latest release from GitHub, with the Drizzle and TanStack Query versions it works with:
 
-Your app also needs `expo`, `react`, `@tanstack/react-query`, and `drizzle-orm` 1.0.0-rc.4. Then wrap your Metro config:
+```sh
+pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-query@5
+```
+
+Keep the quotes, so your shell passes `*` through. To pin a [release](https://github.com/hht/syncline/releases), use `#v<version>` instead of `#semver:*`. `drizzle-orm` must be exactly the version above.
+
+The package ships TypeScript source whose imports end in `.ts`. So that `tsc` accepts them, set `"allowImportingTsExtensions": true` in your `tsconfig.json`. For Jest, add `syncline` to `transformIgnorePatterns`.
+
+Your app also needs `expo` and `react`. Then wrap your Metro config:
 
 ```js
 // metro.config.js
@@ -119,7 +119,7 @@ Register the class in `wrangler.jsonc`:
 }
 ```
 
-Run `npx wrangler dev` to try it locally, or `npx wrangler deploy` to ship it.
+Allow Wrangler's build scripts by adding `esbuild: true` and `workerd: true` under `allowBuilds`, install it with `pnpm add -D wrangler`, and run `npx wrangler types` to generate the `Env` type. Run `npx wrangler dev` to try it locally, or `npx wrangler deploy` to ship it.
 
 ### 4. Use it in your app
 

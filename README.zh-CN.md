@@ -35,24 +35,24 @@
 
 ### 1. 安装
 
-从 GitHub 安装最新发布的版本：
-
-```sh
-pnpm add github:hht/syncline
-```
-
-在末尾加上 `#v<version>` 可以固定到某个[版本](https://github.com/hht/syncline/releases)。
-
-Syncline 的 `postinstall` 脚本只用于它自身的开发。不做决定 pnpm 会拒绝安装，所以在 `pnpm-workspace.yaml` 里关掉它：
+Syncline 的 `postinstall` 脚本只用于它自身的开发。不做决定 pnpm 会拒绝安装，所以先在 `pnpm-workspace.yaml` 里关掉它：
 
 ```yaml
 allowBuilds:
   syncline: false
 ```
 
-使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`：这个包发布的是 TypeScript 源码。
+然后从 GitHub 安装最新发布的版本，以及与它配套的 Drizzle 和 TanStack Query 版本：
 
-应用还需要 `expo`、`react`、`@tanstack/react-query` 和 `drizzle-orm` 1.0.0-rc.4。然后包装 Metro 配置：
+```sh
+pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-query@5
+```
+
+保留引号，让 shell 原样传递 `*`。要固定到某个[版本](https://github.com/hht/syncline/releases)，把 `#semver:*` 换成 `#v<version>`。`drizzle-orm` 必须正好是上面的版本。
+
+这个包发布的是 TypeScript 源码，导入路径以 `.ts` 结尾。为了让 `tsc` 接受它们，在 `tsconfig.json` 里设置 `"allowImportingTsExtensions": true`。使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`。
+
+应用还需要 `expo` 和 `react`。然后包装 Metro 配置：
 
 ```js
 // metro.config.js
@@ -121,7 +121,7 @@ export default {
 }
 ```
 
-本地试用运行 `npx wrangler dev`，部署运行 `npx wrangler deploy`。
+在 `allowBuilds` 下加上 `esbuild: true` 和 `workerd: true` 允许 Wrangler 的构建脚本，用 `pnpm add -D wrangler` 安装它，再运行 `npx wrangler types` 生成 `Env` 类型。本地试用运行 `npx wrangler dev`，部署运行 `npx wrangler deploy`。
 
 ### 4. 在应用中使用
 
