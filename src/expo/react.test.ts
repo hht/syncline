@@ -7,7 +7,8 @@ import { expect, test, vi } from 'vitest';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, tables, workout } from '../test/test-schema.ts';
 import { deviceStorage } from '../test/test-storage.ts';
-import { invalidateOnChange, queryOptions, SynclineProvider, useQuery, useSyncStatus } from './react.ts';
+import { invalidateOnChange, queryOptions } from './query-cache.ts';
+import { SynclineProvider, useQuery, useSyncStatus } from './react.ts';
 import { offline, type SyncStatus } from './status.ts';
 import { syncline } from './syncline.ts';
 
