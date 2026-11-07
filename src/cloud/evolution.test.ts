@@ -6,7 +6,7 @@ import { defineTables } from '../tables/table-definitions.ts';
 import { Device, Space } from '../test/test-checksum.ts';
 import { workout, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
-import type { Event } from './events.ts';
+import type { SynclineEvent } from './events.ts';
 import { dropRetired, evolve, nextDrop, retiredGrace } from './evolution.ts';
 import { catchUp, createTag, createWorkout, rows, tag, workoutWithReps } from './test-evolution.ts';
 
@@ -14,7 +14,7 @@ import { catchUp, createTag, createWorkout, rows, tag, workoutWithReps } from '.
 // left tables stop syncing and rescan if re-declared; retired names never return to sync and pushed writes touching them are stripped.
 
 function opened(cloud: ReturnType<typeof cloudStorage>, tables: SQLiteTable[], options: { retired?: string[] } = {}) {
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const space = new Space(cloud, tables, { events: (event) => events.push(event), ...options });
   return { space, events };
 }

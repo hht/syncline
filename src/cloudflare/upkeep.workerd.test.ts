@@ -1,7 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import type { Event } from '../cloud/events.ts';
+import type { SynclineEvent } from '../cloud/events.ts';
 import { evolve, nextDrop, retiredGrace } from '../cloud/evolution.ts';
 import type { Storage } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
@@ -76,12 +76,12 @@ type Make = (options?: ConstructorParameters<typeof Upkeep>[5], indexes?: string
 type Query = (text: string, ...bindings: unknown[]) => Record<string, unknown>[];
 
 /** Test helper running Upkeep scenarios in an isolated Durable Object, recording the events every Upkeep it makes reports. */
-async function withUpkeep(run: (make: Make, timetable: Schedule, query: Query, events: Event[]) => Promise<void>) {
+async function withUpkeep(run: (make: Make, timetable: Schedule, query: Query, events: SynclineEvent[]) => Promise<void>) {
   const { name } = await online(1);
   await runInDurableObject(object(name), async (_: TestSpace, state) => {
     const timetable = new Schedule(state.storage);
     const query: Query = (text, ...bindings) => state.storage.sql.exec(text, ...bindings).toArray();
-    const events: Event[] = [];
+    const events: SynclineEvent[] = [];
     const make: Make = (options, indexes = []) => new Upkeep(query, indexes, [], timetable, (event) => events.push(event), options);
     await run(make, timetable, query, events);
   });

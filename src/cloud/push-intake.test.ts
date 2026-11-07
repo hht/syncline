@@ -6,7 +6,7 @@ import type { Mutation } from '../common/protocol.ts';
 import { utf8Bytes } from '../common/size.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage } from '../test/test-storage.ts';
-import type { Event } from './events.ts';
+import type { SynclineEvent } from './events.ts';
 import { Server } from './server.ts';
 import { Space } from './space.ts';
 
@@ -25,7 +25,7 @@ const rows = (cloud: ReturnType<typeof cloudStorage>) => cloud.sql.exec('SELECT 
 function serving(options?: { dailyWrites: number }) {
   const cloud = cloudStorage(createNote);
   const phone = new RecordingSocket();
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const sockets = { acceptWebSocket: () => undefined, getWebSockets: () => [phone] };
   const open = () => {
     const space = new Space(cloud, [note], { events: (event) => events.push(event) });

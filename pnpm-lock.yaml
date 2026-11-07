@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      drizzle-orm:
-        specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(zod@4.6.7)
     devDependencies:
       '@biomejs/biome':
         specifier: 2.5.14
@@ -39,6 +35,9 @@ importers:
       dependency-cruiser:
         specifier: 18.4.0
         version: 18.4.0
+      drizzle-orm:
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4(zod@4.6.7)
       expo:
         specifier: ~58.0.23
         version: 58.0.23(@babel/core@7.29.7(supports-color@10.2.2))(@expo/dom-webview@58.0.2)(react-dom@19.3.0(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2))(react@19.3.0)(supports-color@10.2.2)(typescript@6.0.3)

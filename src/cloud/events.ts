@@ -10,7 +10,7 @@ import { notifyAll } from '../common/listeners.ts';
  * @see https://developers.cloudflare.com/workers/observability/logs/workers-logs/
  * @see https://developers.cloudflare.com/analytics/analytics-engine/
  */
-export type Event =
+export type SynclineEvent =
   /** Pushed write failed execution and was held pending remediation (should alert: requires manual repair and resubmission). */
   | { type: 'write.held'; client: string; id: number; reason: string }
   /** Pushed write skipped earlier missing IDs (sequence gap): skipped without advancing lmid; unexpected during normal operation (should alert). */
@@ -39,7 +39,7 @@ export type Event =
   /** Exporter run failed: rescheduled with backoff and retried until successful (should alert: downstream destination misses changes during sustained failures). */
   | { type: 'export.failed'; name: string; reason: string };
 
-export type Events = (event: Event) => void;
+export type Events = (event: SynclineEvent) => void;
 
 /** Default no-op callback when no listener is provided. */
 export const quiet: Events = () => undefined;

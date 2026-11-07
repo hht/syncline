@@ -10,7 +10,7 @@ import { captureReported } from '../test/test-errors.ts';
 import { pulled, upload, write } from '../test/test-schema.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage, deviceStorage, failOnce, injectedError } from '../test/test-storage.ts';
-import type { Event } from './events.ts';
+import type { SynclineEvent } from './events.ts';
 import { HeldWrites } from './held.ts';
 import { Server, type Socket } from './server.ts';
 import { Space } from './space.ts';
@@ -33,7 +33,7 @@ const heldE1 = [
 /** Sets up cloud and two synced devices with existing workout w1 on cloud. */
 async function setup() {
   const cloud = cloudStorage(...statements);
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const space = new Space(cloud, tables, { events: (event) => events.push(event) });
   space.mutate((tx) => tx.insert(workout, { id: 'w1' }));
   const install = async () => {

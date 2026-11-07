@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import type { Event, Events } from '../../../cloud/events.ts';
+import type { Events, SynclineEvent } from '../../../cloud/events.ts';
 import { Space } from '../../../cloud/space.ts';
 import type { Op } from '../../../common/protocol.ts';
 import { captureReported } from '../../../test/test-errors.ts';
@@ -68,7 +68,7 @@ test('write failure (destination does not save position) redelivers identical ch
 });
 
 test('history changes (point-in-time recovery): position not in history causes next chunk to deliver full snapshot marked reset; exporter discards previous exports before writing; exports are not device pulls and omit pulled chunk events', () => {
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const storage = cloudStorage(createWorkout);
   const space = new Space(storage, tables, { events: (event) => events.push(event) });
   const stats: Destination = { position: undefined };
@@ -132,7 +132,7 @@ test('an exporter name that is not well-formed text throws on construction: stor
 
 test('a failing exporter is reported by name with the message it threw, or with the thrown value as text when that is not an Error', async () => {
   const { space } = setup();
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const failing = (thrown: unknown) => ({
     position: async () => {
       throw thrown;
@@ -143,7 +143,7 @@ test('a failing exporter is reported by name with the message it threw, or with 
     poll: space.poll.bind(space),
     by: () => undefined,
     reserved: 'syncline:',
-    events: (event: Event) => events.push(event),
+    events: (event: SynclineEvent) => events.push(event),
   };
   const exports = new Exports(context, { exporters: { stats: failing(new Error('quota exceeded')), search: failing('timeout') } });
   for (const name of ['stats', 'search']) {

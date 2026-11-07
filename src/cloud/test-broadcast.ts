@@ -6,7 +6,7 @@ import { Device } from '../test/test-device.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 import { Broadcast } from './broadcast.ts';
-import type { Event } from './events.ts';
+import type { SynclineEvent } from './events.ts';
 import { Space } from './space.ts';
 
 // Shared test fixtures for broadcast shards: a program table, shared space with public and all bucket rules, one shard, one synced device, and test mock WebSockets.
@@ -19,7 +19,7 @@ export const subscriptions = { public: viewer, admin };
 function shardSide(space: () => Space) {
   const accepted: RecordingSocket[] = [];
   const asked: string[] = [];
-  const events: Event[] = [];
+  const events: SynclineEvent[] = [];
   const failing = { now: false };
   const sockets = { acceptWebSocket: (socket: RecordingSocket) => accepted.push(socket), getWebSockets: () => accepted };
   const latest = async () => {

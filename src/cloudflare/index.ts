@@ -7,6 +7,7 @@ import type { Schema } from '../tables/table-definitions.ts';
 import { SpaceObject, type SpaceOptions } from './durable-object.ts';
 
 export type { Bucket, BucketRules } from '../cloud/buckets.ts';
+export type { SynclineEvent } from '../cloud/events.ts';
 export type { Change } from '../common/protocol.ts';
 export type { Exporter } from '../features/exports/cloud/exports.ts';
 export { ValidationError } from '../tables/validation.ts';
