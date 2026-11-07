@@ -126,6 +126,8 @@ export function syncline(name: string, local: LocalDatabase, channel: Channel, p
      * Query shared tables through db as usual; onChange notifications fire together.
      */
     openShared: (sharedName: string, options: { schema: Schema; url: string; token?: () => Promise<string>; userID?: string }) => {
+      // The private space is the channel named '', so a shared space under that name would replace its status
+      if (sharedName === '') throw new Error('Shared space name must not be empty');
       const known = opened.get(sharedName);
       if (known?.url === options.url && known.userID === options.userID) return known.channel;
       if (known) throw new Error(`Shared space ${sharedName} is already open with a different URL or user`);

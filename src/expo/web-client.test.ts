@@ -130,3 +130,11 @@ test('resync carries discardPending, false unless asked', async () => {
   await discarding;
   expect(worker().last('resync').call).toMatchObject({ discardPending: true });
 });
+
+test('opening a shared space with an empty name throws and leaves the private space status reporting', async () => {
+  const { space, instance } = await openedWith();
+  expect(() => space.openShared('', { schema: {}, url: 'https://sync.test/catalog' })).toThrow('Shared space name must not be empty');
+  const status = { ...offline, connected: true, pending: 0, hasSynced: true, updateNeeded: false };
+  worker().deliver(instance, { type: 'status', channel: '', status: { ...status, downloadError: undefined, uploadError: undefined } });
+  expect(space.status()).toMatchObject(status);
+});
