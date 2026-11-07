@@ -1,5 +1,5 @@
 //! How sync status is reported and how manual sync waits for catch-up: emits a `status` instruction whenever status changes;
-//! catch-up waiters (app `sync` invocations) succeed when connected, not downloading, and no pending mutations remain; they fail with error on connection failure or stop.
+//! catch-up waiters (app `sync` invocations) succeed when connected, not downloading, and no pending mutations remain; they fail with error on connection failure, stop, or a failed read of the local status.
 //! What it should not know: how connections are established or when to reconnect.
 //! @see <https://github.com/powersync-ja/powersync-js/blob/main/packages/common/src/db/crud/SyncStatus.ts>
 

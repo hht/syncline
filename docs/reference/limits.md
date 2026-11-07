@@ -142,7 +142,7 @@ A mismatched section is downloaded again. Pending writes are kept.
 - **Large tables in the cloud.** Building an index on a very large table can run past the CPU time limit. Raise `limits.cpu_ms` in wrangler if that happens.
 - **Scheduled tasks.** A task that keeps resetting the object pauses for a day after 3 tries in a row, and the failure is reported.
 - **Corrupted local state.** Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database to recover; pending writes are lost.
-- **Pending count.** If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, so `sync()` can resolve early. The write still uploads.
+- **Pending count.** If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, and `sync()` rejects with the error: calls waiting at that moment, and a call whose own read fails. The write still uploads.
 
 ## Connection errors
 
