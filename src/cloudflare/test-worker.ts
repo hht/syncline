@@ -64,8 +64,8 @@ export class TestSpace extends SynclineSpace<Env> {
         readOnly: [plan],
         validation: new Map([[note, allowed('text')]]),
         retired: ['note.color'],
-        events: (event) => ctx.storage.kv.put('events', [...(ctx.storage.kv.get<string[]>('events') ?? []), event.type]),
-        exports: { stats: destination('exported'), search: destination('searched') },
+        onEvent: (event) => ctx.storage.kv.put('events', [...(ctx.storage.kv.get<string[]>('events') ?? []), event.type]),
+        exporters: { stats: destination('exported'), search: destination('searched') },
         // Sets alarm time budget to 1 second so hanging exporter tests avoid 10-minute timeouts.
         exportBudget: 1000,
       },
@@ -151,7 +151,7 @@ const program = sqliteTable('program', { id: text().primaryKey(), status: text()
 /** Shared catalog definition: public bucket filters for published status; 2 broadcast shards; chunk boundary every 2 rows. */
 const catalog = {
   schema: { program },
-  buckets: { public: { program: { where: "status = 'published'" } }, all: { program: {} } },
+  rules: { public: { program: { where: "status = 'published'" } }, all: { program: {} } },
   shards: 2,
   chunkRows: 2,
 } satisfies SharedDefinition;

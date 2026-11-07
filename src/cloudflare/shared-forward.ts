@@ -32,7 +32,7 @@ export type SharedDefinition = {
   /** Synced tables (table name -> Drizzle table). */
   schema: Schema;
   /** Bucket rules mapping rule names to covered tables and conditions. */
-  buckets: BucketRules;
+  rules: BucketRules;
   /** Broadcast shard count, default 128. */
   shards?: number;
   /** Chunk boundary row threshold. */
@@ -56,7 +56,7 @@ const parsed = new WeakMap<SharedDefinition, Buckets>();
 function bucketsOf(definition: SharedDefinition) {
   const known = parsed.get(definition);
   if (known) return known;
-  const buckets = new Buckets(Object.values(definition.schema), definition.buckets);
+  const buckets = new Buckets(Object.values(definition.schema), definition.rules);
   parsed.set(definition, buckets);
   return buckets;
 }

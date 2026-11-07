@@ -23,7 +23,7 @@ import { Upkeep } from './upkeep.ts';
  * - retired: permanently removed table and column names ("table.column") excluded from sync;
  * - validation: Standard Schema definitions validating pushed and server writes;
  * - readOnly: server-write-only synced tables; client mutations touching them are held;
- * - events: callback for held writes, failed pushes, resets, closed connections, and chunks;
+ * - onEvent: callback for held writes, failed pushes, resets, closed connections, and chunks;
  * - writeQuota: client mutation rate limiter (Quota: refill rate and burst capacity);
  * - dailyWrites: UTC daily cap on billed SQLite row writes from client pushes;
  * - connections: maximum concurrent connections (default 32), evicting the oldest when exceeded.
@@ -33,7 +33,7 @@ export type SpaceOptions = {
   retired?: string[];
   readOnly?: SQLiteTable[];
   validation?: Validation;
-  events?: Events;
+  onEvent?: Events;
   writeQuota?: Quota;
   dailyWrites?: number;
   connections?: number;
@@ -98,7 +98,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env, schema: Schema, options: SpaceOptions, { checksum, chores }: Features) {
     super(ctx, env);
-    const { cloud, retired, readOnly, validation, events, writeQuota, dailyWrites, connections } = options;
+    const { cloud, retired, readOnly, validation, onEvent: events, writeQuota, dailyWrites, connections } = options;
     this.#events = isolated(events ?? quiet);
     // Runtime sql.exec().raw() supports toArray() via iterator helpers.
     const storage = ctx.storage as unknown as CloudStorage;

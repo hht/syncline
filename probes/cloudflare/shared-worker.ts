@@ -13,7 +13,7 @@ type Kind = 'spread' | 'move' | 'same';
 
 export class ProbeShared extends SynclineSharedSpace<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, { schema: { item }, buckets: { owner: { item: { by: ['owner'] } } }, broadcast: (bindings) => bindings.BROADCAST });
+    super(ctx, env, { schema: { item }, rules: { owner: { item: { by: ['owner'] } } }, broadcast: (bindings) => bindings.BROADCAST });
   }
 
   /** Returns whether bucket row counting has finished across all tables, ensuring subsequent writes adjust bucket row counts. */
