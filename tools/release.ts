@@ -10,10 +10,12 @@ import { buildWasm } from '../src/build-wasm.mjs';
 /**
  * Publishes a release (`pnpm release <version>`): from a clean `dev` that passes `pnpm check`, builds the device binaries, commits the version
  * and tags it, resets `dev` to the unreleased version, pushes `dev` and the tag, attaches the gzipped binaries and their manifest to a GitHub Release on the tag, and only then
- * fast-forwards `main` to it, so `main` always installs a release whose binaries exist. Installs download the binaries with
- * src/prebuilt.mjs. The binaries build from the tagged tree except its package.json version, which no build reads.
+ * merges the tag into `main` through a pull request, which takes only pull requests, so `main` always installs a release whose binaries
+ * exist. Installs download the binaries with src/prebuilt.mjs. The binaries build from the tagged tree except its package.json version,
+ * which no build reads.
  * Out of scope: release notes beyond what GitHub generates.
  * @see https://cli.github.com/manual/gh_release_create
+ * @see https://cli.github.com/manual/gh_pr_merge
  */
 
 const root = resolve(import.meta.dirname, '..');
@@ -112,13 +114,88 @@ function setVersion(version: string, message: string) {
   run('git', ['commit', '-m', message, '--', 'package.json']);
 }
 
-function release(version: string) {
+const gh = (...args: string[]) => execFileSync('gh', args, { cwd: root, encoding: 'utf8' }).trim();
+
+/** Check conclusions and status states that keep a pull request from merging until it is pushed again. */
+const failed = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
+
+/** Merges the tag into `main` through a pull request once its required checks pass, then points the local `main` at the result. */
+async function merge(tag: string) {
+  const branch = `release/${tag}`;
+  run('git', ['push', 'origin', `${tag}^{commit}:refs/heads/${branch}`]);
+  const url = gh(
+    'pr',
+    'create',
+    '--base',
+    'main',
+    '--head',
+    branch,
+    '--title',
+    `chore: release ${tag}`,
+    '--body',
+    `Merges ${tag} into main.`,
+  );
+  // A merge commit, unlike squashing or rebasing, keeps the tagged commit in main's history; main's tree is the tag's, as main is
+  // always an ancestor of the tag or holds the previous tag's tree. Matching the head keeps anything pushed to the branch out of main.
+  run('gh', ['pr', 'merge', url, '--merge', '--auto', '--match-head-commit', git('rev-parse', `${tag}^{commit}`)]);
+  for (;;) {
+    const { state, statusCheckRollup } = JSON.parse(gh('pr', 'view', url, '--json', 'state,statusCheckRollup')) as {
+      state: string;
+      statusCheckRollup: { name?: string; context?: string; conclusion?: string; state?: string }[];
+    };
+    if (state === 'MERGED') break;
+    const broken = statusCheckRollup.filter((check) => failed.has(check.conclusion ?? check.state ?? ''));
+    if (state === 'CLOSED' || broken.length > 0) {
+      const names = broken.map((check) => check.name ?? check.context).join(', ');
+      throw new Error(
+        `${url} did not merge (${names || state}); ${tag} and its GitHub Release are published: re-run the failed CI job, and auto-merge merges once it passes, or release a new version`,
+      );
+    }
+    console.log(`Waiting for CI on ${url}`);
+    await new Promise((done) => setTimeout(done, 30_000));
+  }
+  run('git', ['fetch', 'origin', 'main']);
+  run('git', ['branch', '--force', 'main', 'origin/main']);
+}
+
+/**
+ * Throws unless main's rules let a release merge on its own: a pull request with no required approval and merge commits only (a squash or
+ * rebase, even by hand, leaves main's history without the tag, so a later release's merge can keep old content), and CI required without
+ * requiring the branch to be up to date (a new tag never contains main's previous merge commit).
+ */
+function mergeable() {
+  type Rule = { type: string; parameters?: Record<string, unknown> };
+  const rules = JSON.parse(gh('api', 'repos/{owner}/{repo}/rules/branches/main')) as Rule[];
+  const request = rules.find((rule) => rule.type === 'pull_request')?.parameters;
+  const checks = rules.find((rule) => rule.type === 'required_status_checks')?.parameters;
+  const methods = request?.allowed_merge_methods as string[] | undefined;
+  if (
+    !request ||
+    !checks ||
+    request.required_approving_review_count !== 0 ||
+    request.require_code_owner_review ||
+    methods?.join() !== 'merge' ||
+    checks.strict_required_status_checks_policy ||
+    rules.some((rule) => rule.type === 'required_linear_history')
+  ) {
+    throw new Error(
+      'Protect main with a ruleset requiring pull requests (no approvals, merge commits only) and the CI check (branches need not be up to date), without linear history',
+    );
+  }
+}
+
+async function release(version: string) {
   if (!/^\d+\.\d+\.\d+$/.test(version) || version === unreleased) throw new Error(`Expected a version like 0.1.0, got ${version}`);
   if (git('branch', '--show-current') !== 'dev') throw new Error('Release from the dev branch');
   if (git('status', '--porcelain')) throw new Error('Release from a clean working tree');
   const tag = `v${version}`;
-  // Checked before anything is tagged: pushing the tag without a release would leave it pointing at missing binaries.
+  // Checked before anything is tagged: pushing the tag without a release would leave it pointing at missing binaries, and a release main
+  // cannot take (auto-merge off, no rule requiring CI, or a check CI runs beyond pnpm check) would leave main on the previous release.
   run('gh', ['auth', 'status']);
+  if (gh('api', 'repos/{owner}/{repo}', '--jq', '.allow_auto_merge') !== 'true')
+    throw new Error('Allow auto-merge in the repository settings');
+  mergeable();
+  run('pnpm', ['audit', '--prod', '--audit-level', 'high']);
   run('pnpm', ['check']);
   const binaries = build();
   setVersion(version, `chore: release ${tag}`);
@@ -129,9 +206,7 @@ function release(version: string) {
   setVersion(unreleased, `chore: reset the version after releasing ${tag}`);
   run('git', ['push', '--atomic', 'origin', 'dev', `refs/tags/${tag}`]);
   run('gh', ['release', 'create', tag, '--verify-tag', '--title', tag, '--generate-notes', ...assets]);
-  // Rejected unless a fast-forward, so main never leaves the history dev builds on.
-  run('git', ['push', 'origin', `${tag}^{commit}:refs/heads/main`]);
-  run('git', ['branch', '--force', 'main', tag]);
+  await merge(tag);
 }
 
-if (import.meta.main) release(process.argv[2] ?? '');
+if (import.meta.main) await release(process.argv[2] ?? '');
