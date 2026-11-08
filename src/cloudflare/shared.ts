@@ -12,7 +12,7 @@ import { type Chunk, type Poke, ping, pong, type Reset, socketLimit, subprotocol
 import { type PullRequest, parsePullRequest } from '../common/pull-url.ts';
 import { utf8Bytes } from '../common/size.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
-import { defineTables } from '../tables/table-definitions.ts';
+import { cloudTables, defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader } from './forward.ts';
 import { reserved } from './schedule.ts';
@@ -83,6 +83,8 @@ function cacheControl(request: PullRequest, chunk: Poke | Chunk | Reset) {
 type SharedOptions<Env> = SharedDefinition & {
   /** Broadcast shard Durable Object namespace for this shared space. */
   broadcast: (env: Env) => DurableObjectNamespace<SynclineBroadcast>;
+  /** Cloud tables as on {@link SynclineSpace}: synced tables with cloud-only columns, and cloud-only tables; bucket rule filters may use cloud-only columns. */
+  cloud?: Schema;
   /** Standard Schema definitions used to validate server writes. */
   validation?: Validation;
   /** Event callback for pulls, resets, and failed broadcast notices. */
@@ -110,16 +112,16 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     const shards = Array.from({ length: shardCount(options) }, (_, index) => shardName(name, index));
     if (utf8Bytes(shardName(name, shards.length - 1)) > nameBytes)
       throw new Error(`Shared space name is too long: with its shard suffix (#${shards.length - 1}) it must fit in ${nameBytes} bytes`);
-    const { schema, rules, chunkRows, validation, onEvent: events = quiet, retired } = options;
+    const { schema, rules, chunkRows, cloud, validation, onEvent: events = quiet, retired } = options;
     const tables = Object.values(schema);
     const shared = { buckets: rules, ...(chunkRows && { chunkRows }) };
     const storage = ctx.storage as unknown as CloudStorage;
     const buckets = new Buckets(tables, rules);
-    const indexes = defineTables(storage, tables, tables, (table) => buckets.indexes(table));
+    const indexes = defineTables(storage, cloudTables(schema, cloud), tables, (table) => buckets.indexes(table));
     this.#space = new Space(storage, tables, { shared, events, ...(validation && { validation }), ...(retired && { retired }) });
     this.#events = isolated(events);
     const query = queryOf(storage);
-    this.#upkeep = new Upkeep(query, indexes, [], this.timetable, this.#events, {
+    this.#upkeep = new Upkeep(query, indexes, Object.values(cloud ?? {}).map(tableName), this.timetable, this.#events, {
       counting: this.#space.bucketRows,
       truncation: this.#space,
     });

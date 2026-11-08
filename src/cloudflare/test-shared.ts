@@ -33,15 +33,16 @@ export async function entryHeaders(who: string) {
   return { [subscriptionHeader]: JSON.stringify(subscription), [subHeader]: await subscriptionHash(subscription) };
 }
 
-/** Pulls chunks sequentially until final chunk, capturing client Cache-Control and cached entry headers. */
+/** Pulls chunks sequentially until final chunk, capturing client Cache-Control, and the cached entry's headers and body. */
 export async function pullAll(who: string) {
-  const chunks: { chunk: Poke | Chunk; cache: string | null; stored: string | null }[] = [];
+  const chunks: { chunk: Poke | Chunk; cache: string | null; stored: string | null; body: string }[] = [];
   for (let cursor: string | undefined; chunks.length < 20; ) {
     const target = pullURL(url, { cookie: null, ...(cursor === undefined ? {} : { cursor }) });
     const response = await exports.default.fetch(target, { headers: { Authorization: `Bearer ${token(who)}` } });
     const stored = await catalog().fetch(new Request(target, { headers: await entryHeaders(who) }));
     const chunk = (await response.json()) as Poke | Chunk;
-    chunks.push({ chunk, cache: response.headers.get('Cache-Control'), stored: stored.headers.get('Cache-Control') });
+    const cache = response.headers.get('Cache-Control');
+    chunks.push({ chunk, cache, stored: stored.headers.get('Cache-Control'), body: await stored.text() });
     if ('cookie' in chunk) return chunks;
     cursor = chunk.next;
   }
@@ -63,4 +64,12 @@ export async function connect(who: string, cookie: Cookie) {
       return event.message;
     },
   };
+}
+
+/** Pulls to the end, connects with the final cookie, and awaits the catch-up notice. */
+export async function online(who: string) {
+  const { chunk: last } = (await pullAll(who)).at(-1) as { chunk: Poke };
+  const device = await connect(who, last.cookie);
+  await device.next();
+  return device;
 }
