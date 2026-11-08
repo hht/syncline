@@ -2,12 +2,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterAll, expect, test, vi } from 'vitest';
-import { subscriptionHash } from '../cloud/buckets.ts';
-import { bearer, type Chunk, type Cookie, chunkLimit, type Poke, socketLimit, subprotocol } from '../common/protocol.ts';
+import { type Chunk, type Cookie, chunkLimit, type Poke, socketLimit, subprotocol } from '../common/protocol.ts';
 import { pullURL } from '../common/pull-url.ts';
 import { expiresHeader } from './forward.ts';
-import { subHeader, subscriptionHeader } from './shared-forward.ts';
-import { fannedOut } from './test-shared.ts';
+import { catalog, connect, entryHeaders, fannedOut, pullAll, token, url } from './test-shared.ts';
 import { inbox } from './test-socket.ts';
 import { alarmAfter } from './test-space.ts';
 
@@ -20,49 +18,7 @@ afterAll(async () => {
   await fannedOut('counting');
 });
 
-const url = 'https://sync.test/catalog';
 const _program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
-/** Test token helper: admin subscribes to all buckets, public subscribes to public bucket. */
-const token = (who: string) => `${who}.${Number.MAX_SAFE_INTEGER}`;
-const catalog = () => env.CATALOG.getByName('catalog');
-
-/** Generates forwarded entry headers (subscription and hash) for direct invocations. */
-async function entryHeaders(who: string) {
-  const subscription = [JSON.stringify([who === 'admin' ? 'all' : who])];
-  return { [subscriptionHeader]: JSON.stringify(subscription), [subHeader]: await subscriptionHash(subscription) };
-}
-
-/** Pulls chunks sequentially until final chunk, capturing client Cache-Control and cached entry headers. */
-async function pullAll(who: string) {
-  const chunks: { chunk: Poke | Chunk; cache: string | null; stored: string | null }[] = [];
-  for (let cursor: string | undefined; chunks.length < 20; ) {
-    const target = pullURL(url, { cookie: null, ...(cursor === undefined ? {} : { cursor }) });
-    const response = await exports.default.fetch(target, { headers: { Authorization: `Bearer ${token(who)}` } });
-    const stored = await catalog().fetch(new Request(target, { headers: await entryHeaders(who) }));
-    const chunk = (await response.json()) as Poke | Chunk;
-    chunks.push({ chunk, cache: response.headers.get('Cache-Control'), stored: stored.headers.get('Cache-Control') });
-    if ('cookie' in chunk) return chunks;
-    cursor = chunk.next;
-  }
-  throw new Error('Pull did not terminate within chunk limit');
-}
-
-/** Connects with cookie through entry to random shard, returning arriving messages. */
-async function connect(who: string, cookie: Cookie) {
-  const response = await exports.default.fetch(pullURL(url, { cookie }), {
-    headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}${token(who)}` },
-  });
-  const socket = response.webSocket;
-  if (!socket) throw new Error('Expected WebSocket upgrade response');
-  const next = inbox(socket);
-  return {
-    next: async () => {
-      const event = await next();
-      if (!('message' in event)) throw new Error(`Expected notice message: ${JSON.stringify(event)}`);
-      return event.message;
-    },
-  };
-}
 
 test('serves HTTP pulls by subscription with cache headers: intermediate 1 day, first 1 min, final 5 sec, no-store for client', async () => {
   for (const [id, status] of [['p1'], ['p2', 'draft'], ['p3'], ['p4']] as const) await catalog().publish(id, status);

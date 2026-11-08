@@ -1,9 +1,9 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterAll, expect, test } from 'vitest';
-import { fannedOut } from './test-shared.ts';
+import { catalog, fannedOut, online, pullAll } from './test-shared.ts';
 
-// Shared space Durable Objects: options wired through (validation of server writes, retired names), and addressing by name only.
+// Shared space Durable Objects: options wired through (validation of server writes, retired names, cloud-only columns), and addressing by name only.
 
 afterAll(async () => {
   await fannedOut('validated');
@@ -35,4 +35,27 @@ test('a broadcast shard reached without a name fails its queries to the space in
   const round = await env.CATALOG.getByName('catalog').latest();
   const shard = env.CATALOG_BROADCAST.get(env.CATALOG_BROADCAST.idFromString(env.CATALOG_BROADCAST.idFromName('unnamed#0').toString()));
   await expect(Promise.resolve().then(() => shard.notify(round))).rejects.toThrow('reach it by name');
+});
+
+/** Ids of rows put by a pull's chunks. */
+const putIds = (chunks: Awaited<ReturnType<typeof pullAll>>) =>
+  chunks.flatMap(({ chunk }) => chunk.patch.flatMap((op) => (op.op === 'put' ? [op.row.id] : [])));
+
+test('cloud-only columns stay on the cloud: pulls, cached chunks, and live notices omit them, and a filter on one moves rows out of buckets', async () => {
+  await catalog().publish('m1');
+  const viewer = await online('public');
+  const admin = await online('admin');
+  await catalog().remove('m1', 'spam');
+  expect((await viewer.next()).patch).toEqual([{ op: 'del', table: 'program', key: { id: 'm1' } }]);
+  // A write changing only a cloud-only column still sends the row again, without that column.
+  expect((await admin.next()).patch).toEqual([{ op: 'put', table: 'program', key: { id: 'm1' }, row: { id: 'm1', status: 'published' } }]);
+  const pulled = await pullAll('admin');
+  expect(putIds(pulled)).toEqual(['m1']);
+  expect(pulled.flatMap(({ chunk }) => chunk.patch)).toContainEqual(expect.objectContaining({ row: { id: 'm1', status: 'published' } }));
+  expect(pulled.filter(({ body }) => body.includes('removed') || body.includes('spam'))).toEqual([]);
+  expect(putIds(await pullAll('public'))).toEqual([]);
+  const stored = await runInDurableObject(catalog(), (_, state) =>
+    state.storage.sql.exec("SELECT removed FROM program WHERE id = 'm1'").toArray(),
+  );
+  expect(stored).toEqual([{ removed: 'spam' }]);
 });

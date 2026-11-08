@@ -22,6 +22,11 @@ export type Schema = Record<string, SQLiteTable>;
 /** Returns the table name for a Drizzle SQLite table definition. */
 export const tableName = (table: SQLiteTable) => getTableConfig(table).name;
 
+const byName = (schema: Schema) => Object.values(schema).map((table) => [tableName(table), table] as const);
+
+/** Combines synced tables with cloud overrides and cloud-only tables: a cloud table replaces the synced table of the same name. */
+export const cloudTables = (schema: Schema, cloud: Schema = {}) => [...new Map([...byName(schema), ...byName(cloud)]).values()];
+
 /**
  * SQLite data types permitted in STRICT tables.
  * @see https://sqlite.org/stricttables.html

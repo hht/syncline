@@ -9,7 +9,7 @@ import { type Change, ping, pong, subprotocol } from '../common/protocol.ts';
 import { type PullRequest, parsePullBody, parsePullRequest } from '../common/pull-url.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
 import { schemaConflict } from '../tables/declaration.ts';
-import { defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
+import { cloudTables, defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader, spaceHeader } from './forward.ts';
 import { isSocket, schemaFingerprintOf } from './requests.ts';
@@ -71,11 +71,6 @@ async function textWithin(request: Request, limit: number) {
   return text + decoder.decode();
 }
 
-const byName = (schema: Schema) => Object.values(schema).map((table) => [tableName(table), table] as const);
-
-/** Combines synced tables with cloud overrides and cloud-only tables. */
-const cloudTables = (schema: Schema, cloud: Schema = {}) => [...new Map([...byName(schema), ...byName(cloud)]).values()];
-
 /**
  * Base Durable Object for a private space (core without pluggable features; integrators subclass {@link SynclineSpace}):
  * connects Worker requests and hibernatable WebSockets to {@link Server}; subclasses pass the synced tables.
@@ -112,7 +107,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
     });
     this.#server = new Server(ctx, this.#space, undefined, events, { quota: writeQuota, dailyWrites, connections });
     const query = queryOf(storage);
-    const keep = byName(cloud ?? {}).map(([name]) => name);
+    const keep = Object.values(cloud ?? {}).map(tableName);
     this.#upkeep = new Upkeep(query, indexes, keep, this.timetable, this.#events, { truncation: this.#space });
     this.#chores = chores?.({
       poll: (position, limit) => this.#space.poll(position, limit),

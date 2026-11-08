@@ -147,11 +147,13 @@ export class TestSpace extends SynclineSpace<Env> {
 }
 
 const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
+/** Cloud-side program: adds the cloud-only reason a program was removed from the public bucket. */
+const listing = sqliteTable('program', { id: text().primaryKey(), status: text().notNull(), removed: text() });
 
-/** Shared catalog definition: public bucket filters for published status; 2 broadcast shards; chunk boundary every 2 rows. */
+/** Shared catalog definition: public bucket filters for published programs not removed; 2 broadcast shards; chunk boundary every 2 rows. */
 const catalog = {
   schema: { program },
-  rules: { public: { program: { where: "status = 'published'" } }, all: { program: {} } },
+  rules: { public: { program: { where: "status = 'published' AND removed IS NULL" } }, all: { program: {} } },
   shards: 2,
   chunkRows: 2,
 } satisfies SharedDefinition;
@@ -160,6 +162,7 @@ export class TestCatalog extends SynclineSharedSpace<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env, {
       ...catalog,
+      cloud: { program: listing },
       validation: new Map([[program, allowed('status')]]),
       retired: ['program.color'],
       broadcast: (bindings) => bindings.CATALOG_BROADCAST,
@@ -169,6 +172,11 @@ export class TestCatalog extends SynclineSharedSpace<Env> {
   /** Server write: upserts a program with the given status. */
   publish(id: string, status = 'published') {
     return this.mutate((tx) => tx.upsert(program, { id, status }));
+  }
+
+  /** Server write: records why a program was removed, in a column devices never receive. */
+  remove(id: string, reason: string) {
+    return this.mutate((tx) => tx.update(listing, { id, removed: reason }));
   }
 
   /** Server write: deletes a program (changing nothing if it is missing). */

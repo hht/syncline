@@ -80,6 +80,22 @@ test('cloud rollback undeclares plan then re-declares it: records table drop upo
   expect(plans(storage)).toEqual(['c']);
 });
 
+test('a cloud-only column entering sync rescans its table: devices receive the values a server write stored while it was cloud-only', async () => {
+  const noted = sqliteTable('program', { id: text().primaryKey(), note: text() });
+  const cloud = cloudStorage('CREATE TABLE program (id TEXT PRIMARY KEY, note TEXT)', schema[1] as string);
+  const before = new Space(cloud, [program, plan], { shared });
+  before.mutate((tx) => tx.insert(noted, { id: 'p1', note: 'kept' }));
+  const storage = deviceStorage(...schema);
+  const mirror = new Device(storage, []).shared('catalog', [program, plan]);
+  await pullAll(mirror, before);
+  expect(storage.sql.exec('SELECT * FROM program').toArray()).toEqual([{ id: 'p1', _extra: null }]);
+
+  const after = new Space(cloud, [noted, plan], { shared });
+  expect(await mirror.receive(after.pullShared(mirror.pullRequest(), everything))).toBe(true);
+  await pullAll(mirror, after);
+  expect(storage.sql.exec('SELECT * FROM program').toArray()).toEqual([{ id: 'p1', _extra: '{"note":"kept"}' }]);
+});
+
 test('lagged shard holding version prior to table departure receives round without row data: shard pushes hint prompting device to pull and drop table', () => {
   const cloud = cloudStorage(...schema);
   const both = new Space(cloud, [program, plan], { shared });

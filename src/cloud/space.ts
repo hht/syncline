@@ -36,7 +36,9 @@ import { WrittenRows } from './written-rows.ts';
  * reconstructs an exact snapshot matching the cloud head.
  * Pushed device writes apply row-level changes; server writes execute via Transaction.
  * Sync scope is governed by the declared schema: only declared tables and columns are streamed; cloud tables may contain extra
- * nullable cloud-only columns (untouched by row writers and Transaction). Undeclared cloud-only tables commit without sync tracking.
+ * cloud-only columns, which pushed writes never touch and server writes set through cloud table definitions; a server write touching a
+ * synced row records it whichever columns changed, since bucket filters may read cloud-only columns. Undeclared cloud-only tables commit
+ * without sync tracking.
  * What it should not know: transport protocols, auth credentials, or application business logic.
  * @see https://doc.replicache.dev/strategies/per-space-version
  * @see https://zero.rocicorp.dev/llms.txt
