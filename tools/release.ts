@@ -116,11 +116,11 @@ function setVersion(version: string, message: string) {
 
 const gh = (...args: string[]) => execFileSync('gh', args, { cwd: root, encoding: 'utf8' }).trim();
 
-/** Check conclusions and status states that keep a pull request from merging until it is pushed again. */
-const failed = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
-
-/** Merges the tag into `main` through a pull request once its required checks pass, then points the local `main` at the result. */
-async function merge(tag: string) {
+/**
+ * Merges the tag into `main` through a pull request, then points the local `main` at the result. Waits for no CI: the tag and its
+ * binaries are already public, and installs resolve tags, so CI on the pull request could keep `main` behind but never stop a release.
+ */
+function merge(tag: string) {
   const branch = `release/${tag}`;
   run('git', ['push', 'origin', `${tag}^{commit}:refs/heads/${branch}`]);
   const url = gh(
@@ -137,63 +137,43 @@ async function merge(tag: string) {
   );
   // A merge commit, unlike squashing or rebasing, keeps the tagged commit in main's history; main's tree is the tag's, as main is
   // always an ancestor of the tag or holds the previous tag's tree. Matching the head keeps anything pushed to the branch out of main.
-  run('gh', ['pr', 'merge', url, '--merge', '--auto', '--match-head-commit', git('rev-parse', `${tag}^{commit}`)]);
-  for (;;) {
-    const { state, statusCheckRollup } = JSON.parse(gh('pr', 'view', url, '--json', 'state,statusCheckRollup')) as {
-      state: string;
-      statusCheckRollup: { name?: string; context?: string; conclusion?: string; state?: string }[];
-    };
-    if (state === 'MERGED') break;
-    const broken = statusCheckRollup.filter((check) => failed.has(check.conclusion ?? check.state ?? ''));
-    if (state === 'CLOSED' || broken.length > 0) {
-      const names = broken.map((check) => check.name ?? check.context).join(', ');
-      throw new Error(
-        `${url} did not merge (${names || state}); ${tag} and its GitHub Release are published: re-run the failed CI job, and auto-merge merges once it passes, or release a new version`,
-      );
-    }
-    console.log(`Waiting for CI on ${url}`);
-    await new Promise((done) => setTimeout(done, 30_000));
-  }
+  run('gh', ['pr', 'merge', url, '--merge', '--match-head-commit', git('rev-parse', `${tag}^{commit}`)]);
   run('git', ['fetch', 'origin', 'main']);
+  // gh exits 0 without merging when main has a merge queue.
+  run('git', ['merge-base', '--is-ancestor', tag, 'origin/main']);
   run('git', ['branch', '--force', 'main', 'origin/main']);
 }
 
 /**
- * Throws unless main's rules let a release merge on its own: a pull request with no required approval and merge commits only (a squash or
- * rebase, even by hand, leaves main's history without the tag, so a later release's merge can keep old content), and CI required without
- * requiring the branch to be up to date (a new tag never contains main's previous merge commit).
+ * Throws unless main's rules let a release merge at once: a pull request with no required approval and merge commits only (a squash or
+ * rebase, even by hand, leaves main's history without the tag, so a later release's merge can keep old content), no required checks
+ * (the merge waits for none), and no linear history.
  */
 function mergeable() {
   type Rule = { type: string; parameters?: Record<string, unknown> };
   const rules = JSON.parse(gh('api', 'repos/{owner}/{repo}/rules/branches/main')) as Rule[];
   const request = rules.find((rule) => rule.type === 'pull_request')?.parameters;
-  const checks = rules.find((rule) => rule.type === 'required_status_checks')?.parameters;
   const methods = request?.allowed_merge_methods as string[] | undefined;
   if (
-    !request ||
-    !checks ||
-    request.required_approving_review_count !== 0 ||
+    request?.required_approving_review_count !== 0 ||
     request.require_code_owner_review ||
     methods?.join() !== 'merge' ||
-    checks.strict_required_status_checks_policy ||
-    rules.some((rule) => rule.type === 'required_linear_history')
+    rules.some((rule) => rule.type === 'required_status_checks' || rule.type === 'required_linear_history')
   ) {
     throw new Error(
-      'Protect main with a ruleset requiring pull requests (no approvals, merge commits only) and the CI check (branches need not be up to date), without linear history',
+      'Protect main with a ruleset requiring pull requests (no approvals, merge commits only), without required checks or linear history',
     );
   }
 }
 
-async function release(version: string) {
+function release(version: string) {
   if (!/^\d+\.\d+\.\d+$/.test(version) || version === unreleased) throw new Error(`Expected a version like 0.1.0, got ${version}`);
   if (git('branch', '--show-current') !== 'dev') throw new Error('Release from the dev branch');
   if (git('status', '--porcelain')) throw new Error('Release from a clean working tree');
   const tag = `v${version}`;
   // Checked before anything is tagged: pushing the tag without a release would leave it pointing at missing binaries, and a release main
-  // cannot take (auto-merge off, no rule requiring CI, or a check CI runs beyond pnpm check) would leave main on the previous release.
+  // cannot take would leave main on the previous release.
   run('gh', ['auth', 'status']);
-  if (gh('api', 'repos/{owner}/{repo}', '--jq', '.allow_auto_merge') !== 'true')
-    throw new Error('Allow auto-merge in the repository settings');
   mergeable();
   run('pnpm', ['audit', '--prod', '--audit-level', 'high']);
   run('pnpm', ['check']);
@@ -206,7 +186,14 @@ async function release(version: string) {
   setVersion(unreleased, `chore: reset the version after releasing ${tag}`);
   run('git', ['push', '--atomic', 'origin', 'dev', `refs/tags/${tag}`]);
   run('gh', ['release', 'create', tag, '--verify-tag', '--title', tag, '--generate-notes', ...assets]);
-  await merge(tag);
+  try {
+    merge(tag);
+  } catch (error) {
+    throw new Error(
+      `${tag} and its GitHub Release are published, but main did not take it: merge its pull request (gh pr merge release/${tag} --merge), then run git fetch origin main && git branch --force main origin/main`,
+      { cause: error },
+    );
+  }
 }
 
-if (import.meta.main) await release(process.argv[2] ?? '');
+if (import.meta.main) release(process.argv[2] ?? '');
