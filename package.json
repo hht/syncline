@@ -49,7 +49,8 @@
     "metro.cjs",
     "expo-module.config.json",
     "README.zh-CN.md",
-    "docs/reference"
+    "docs/reference",
+    "docs/guides"
   ],
   "exports": {
     "./expo": {

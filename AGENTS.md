@@ -27,7 +27,8 @@ rust/           Device side: core (local database and sync state machine, no net
 ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations
 probes/         Probes run against live Cloudflare
-docs/           reference/ is integrator documentation; internals/ is architecture decisions and model notes
+docs/           guides/ and reference/ are integrator documentation; internals/ is architecture decisions and model notes
+examples/       Example Worker and app code the guides quote, type-checked and tested by the gates
 tools/          Gates (check/) and model runner (dev/)
 ```
 
@@ -41,10 +42,10 @@ Dependency direction is enforced by gate `depcruise`; rules and rationale live i
 | Changing the protocol or `model/` | [Models and model checking](docs/internals/model.md) |
 | Changing integrator-visible behavior or numbers | [API](docs/reference/api.md), [Limits](docs/reference/limits.md) |
 
-Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision (presented as in Reporting), and update the architecture decisions once settled. Write integrator documentation ([README](README.md) and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
+Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision (presented as in Reporting), and update the architecture decisions once settled. Write integrator documentation ([README](README.md), `docs/guides/`, and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
 
 Code standards not covered by automated gates and enforced by pre-commit review:
-- Write identifiers, file names, and branch names in simple English. Write all comments, strings, error messages, test names, and documentation in English, except the Chinese translations of integrator documentation (`README.zh-CN.md`, `docs/reference/zh-CN/`), which change in the same commit as their English source.
+- Write identifiers, file names, and branch names in simple English. Write all comments, strings, error messages, test names, and documentation in English, except the Chinese translations of integrator documentation (`README.zh-CN.md`, `docs/guides/zh-CN/`, `docs/reference/zh-CN/`), which change in the same commit as their English source.
 - Make names clear at the call site first and concise second; name by role, one word per concept ([Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)).
 - Use `/** */` on exports: open with one sentence stating what it does, followed by contracts callers must know; inline `//` comments state only why, written as fact.
 - Test real behavior with expected values from independent sources; test through public interfaces, preferring real implementations first, fakes second, and mocks only where neither can be wired in.

@@ -39,7 +39,7 @@ Apps that have not updated keep syncing after you add tables or columns. After y
 
 ### How do I share data between users?
 
-Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See `openShared()` in the [API](api.md).
+Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See the [shared spaces guide](../guides/shared-spaces.md), and `openShared()` in the [API](api.md).
 
 ### Can the app sync in the background?
 

@@ -3,7 +3,7 @@ import type { Problem, SourceText } from './problem.ts';
 const han = /\p{Script=Han}/u;
 
 /** Chinese translations of the integrator documents, which mirror their English sources. */
-const translated = (path: string) => path === 'README.zh-CN.md' || path.startsWith('docs/reference/zh-CN/');
+const translated = (path: string) => path === 'README.zh-CN.md' || /^docs\/(reference|guides)\/zh-CN\//.test(path);
 
 /** The language switcher linking an English document to its translation, such as `English | [Simplified Chinese](README.zh-CN.md)` in Chinese. */
 const switcher = /\[\u7b80\u4f53\u4e2d\u6587\]\([^)\s]*zh-CN[^)\s]*\)/gu;

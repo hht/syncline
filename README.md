@@ -167,6 +167,17 @@ Open the app on two devices. Add a note on one, and it shows up on the other.
 
 ## Documentation
 
+Guides:
+
+- [Shared spaces](docs/guides/shared-spaces.md): set up data the cloud writes for many users, from the Worker to the app.
+- [Bucket rules](docs/guides/bucket-rules.md): decide which rows each user downloads.
+- [Bulk writes](docs/guides/bulk-writes.md): import large amounts of data into a shared space.
+- [Testing](docs/guides/testing.md): test the cloud side with Vitest.
+- [Exports](docs/guides/exports.md): copy private spaces into another database.
+- [Upgrading the cloud](docs/guides/upgrading.md): what carries over between releases, and how to rebuild a space.
+
+Reference:
+
 - [Limits](docs/reference/limits.md): what Syncline does not support, and what happens past each limit. Read it before you design your schema.
 - [Errors](docs/reference/errors.md): what each error means and how to handle it.
 - [FAQ](docs/reference/faq.md): common questions.

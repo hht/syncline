@@ -31,6 +31,7 @@ test('skips Chinese translations and the switcher linking to them, but not other
   const files = [
     { path: 'README.zh-CN.md', text: `# Syncline\n${zh}` },
     { path: 'docs/reference/zh-CN/limits.md', text: zh },
+    { path: 'docs/guides/zh-CN/testing.md', text: zh },
     { path: 'README.md', text: `English | [${zh}](README.zh-CN.md)` },
     { path: 'docs/reference/limits.md', text: `[${zh}](zh-CN/limits.md) ${zh}` },
     { path: 'docs/zh-CN/notes.md', text: zh },
