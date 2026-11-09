@@ -161,4 +161,4 @@ Restores a private space to `at` (millisecond timestamp). Rejects when the objec
 
 ### Types
 
-`SynclineEvent` (an event `onEvent` receives; see [Errors](errors.md#events)), `Exporter` (`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`), `Identity` (`{ space, expiresAt }`), `SharedIdentity` (`{ buckets, expiresAt }`), `Bucket`, `BucketRules`, `Change` (a modified row within a write), `ValidationError`.
+`SynclineEvent` (an event `onEvent` receives; see [Errors](errors.md#events)), `Transaction` (the `tx` that `mutate(write)` passes to `write`: `select`, plus `insert`, `upsert`, `update`, and `delete` by primary key), `Exporter` (`{ position(): Promise<string | undefined>; write({ from, next, reset, patch }): Promise<void> }`), `Identity` (`{ space, expiresAt }`), `SharedIdentity` (`{ buckets, expiresAt }`), `Bucket`, `BucketRules`, `Change` (a modified row within a write), `ValidationError`.

@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import type { Transaction } from 'syncline/cloudflare';
 import { forward, forwardShared, SynclineBroadcast, SynclineSharedEntry, SynclineSharedSpace, SynclineSpace } from 'syncline/cloudflare';
 import { verifyToken } from './auth.ts';
 import { bucketsOf, cloud, imports, shared } from './definition.ts';
@@ -36,7 +37,7 @@ export class SharedSpace extends SynclineSharedSpace<Env> {
   }
 
   /** Copies a document's status onto its revisions and sections, in the write that changes it. */
-  #copyStatus(tx: Parameters<Parameters<SharedSpace['mutate']>[0]>[0], documentID: string, status: string) {
+  #copyStatus(tx: Transaction, documentID: string, status: string) {
     const revisions = tx.select({ id: revision.id }).from(revision).where(eq(revision.document_id, documentID)).all();
     for (const { id } of revisions) {
       tx.update(cloud.revision, { id, status });

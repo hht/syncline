@@ -13,6 +13,7 @@ import { ValidationError } from '../tables/validation.ts';
 
 export type Database = SQLiteAsyncDatabase<'sync', unknown>;
 
+/** The `tx` a server write (`mutate`) receives: Drizzle's `select` for reads, and four writes by primary key. */
 export type Transaction = {
   select: Database['select'];
   /** Does nothing if the primary key already exists. */
