@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  // The cloud entry as integrators type-check it: Workers runtime types only, and the lowest lib the README asks for. The other projects
+  // load Node types, which accept calls Workers types reject.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "lib": ["es2024"],
+    "types": []
+  },
+  "files": ["src/cloudflare/worker-configuration.d.ts", "src/cloudflare/index.ts"]
+}

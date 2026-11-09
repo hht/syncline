@@ -50,7 +50,7 @@ pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-q
 
 保留引号，让 shell 原样传递 `*`。要固定到某个[版本](https://github.com/hht/syncline/releases)，把 `#semver:*` 换成 `#v<version>`。`drizzle-orm` 必须正好是上面的版本。
 
-这个包发布的是 TypeScript 源码，导入路径以 `.ts` 结尾。为了让 `tsc` 接受它们，在 `tsconfig.json` 里设置 `"allowImportingTsExtensions": true`。使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`。
+这个包发布的是 TypeScript 源码，导入路径以 `.ts` 结尾。为了让 `tsc` 接受它们，在 `tsconfig.json` 里设置 `"allowImportingTsExtensions": true`。它的云端代码用到了 ES2024 的 API，所以 Worker 的 `tsconfig.json` 中 `lib` 需要包含 `es2024` 或更新的版本。使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`。
 
 应用还需要 `expo` 和 `react`。然后包装 Metro 配置：
 

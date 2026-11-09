@@ -58,7 +58,7 @@ export const cloud = {
   }
 
   /** Copies a document's status onto its revisions and sections, in the write that changes it. */
-  #copyStatus(tx: Parameters<Parameters<SharedSpace['mutate']>[0]>[0], documentID: string, status: string) {
+  #copyStatus(tx: Transaction, documentID: string, status: string) {
     const revisions = tx.select({ id: revision.id }).from(revision).where(eq(revision.document_id, documentID)).all();
     for (const { id } of revisions) {
       tx.update(cloud.revision, { id, status });
@@ -67,6 +67,8 @@ export const cloud = {
     }
   }
 ```
+
+`Transaction` 是 `tx` 的类型，从 `syncline/cloudflare` 导入。
 
 新的子行在写入时复制该值：
 

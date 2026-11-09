@@ -56,7 +56,7 @@ Publishing a document updates the copies in the same `mutate`, so a device subsc
   }
 
   /** Copies a document's status onto its revisions and sections, in the write that changes it. */
-  #copyStatus(tx: Parameters<Parameters<SharedSpace['mutate']>[0]>[0], documentID: string, status: string) {
+  #copyStatus(tx: Transaction, documentID: string, status: string) {
     const revisions = tx.select({ id: revision.id }).from(revision).where(eq(revision.document_id, documentID)).all();
     for (const { id } of revisions) {
       tx.update(cloud.revision, { id, status });
@@ -65,6 +65,8 @@ Publishing a document updates the copies in the same `mutate`, so a device subsc
     }
   }
 ```
+
+`Transaction`, the type of `tx`, comes from `syncline/cloudflare`.
 
 New children copy the value when they are written:
 
