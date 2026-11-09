@@ -37,23 +37,29 @@ Syncline 在每个空间的存储里保存自己的表，与你的表放在一�
 
 ### 整个类：分两次部署
 
-要重建一个类的所有对象，就删除这个类再重新创建。这需要两次部署，按 Cloudflare 的[类迁移](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/)进行：
+要重建一个类的所有对象，就删除这个类再重新创建。这需要两次部署，按 Cloudflare 的[类迁移](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/)进行。
+
+下面的步骤重建共享空间类。它的广播类随之一起重建：两个类各自接收对方的绑定，而且广播对象不保存数据，删掉不会丢失什么。重建私有空间类时，只列出那一个类。
 
 **第一次部署：删除。**
 
-1. 从 `durable_objects` 中删除这个类的绑定。
-2. 从代码中删除这个类，以及所有对其绑定的使用。
-3. 添加一个新标签的迁移：`{ "tag": "v2", "deleted_classes": ["SharedSpace"] }`。
+1. 从 `durable_objects` 中删除这两个类的绑定。
+2. 删除所有用到这些绑定的东西：
+   - `SharedSpace` 和 `SharedBroadcast`。
+   - `SharedEntry`，以及它在 `exports` 下的条目。
+   - `/shared` 路由。
+   - 其他调用这个空间的代码，比如你的服务端写入。
+3. 添加一个新标签的迁移：`{ "tag": "v2", "deleted_classes": ["SharedSpace", "SharedBroadcast"] }`。
 4. 部署。
 
 **第二次部署：创建。**
 
-1. 恢复这个类和它的绑定。
-2. 再添加一个迁移：`{ "tag": "v3", "new_sqlite_classes": ["SharedSpace"] }`。
+1. 恢复第一次部署删除的所有东西。
+2. 再添加一个迁移：`{ "tag": "v3", "new_sqlite_classes": ["SharedSpace", "SharedBroadcast"] }`。
 3. 部署。
 
-Cloudflare 要求删除类之前先去掉绑定，所以删除和创建不能放在同一次部署里。这样的部署会失败，错误码为 10061（`Cannot apply --delete-class migration to class 'SharedSpace' without also removing the binding that references it`），且不做任何改动。
+两次部署之间，设备无法访问共享空间。
 
-重建共享空间类不影响它的广播类：广播对象不保存数据，会按名字找到新的空间。共享空间被删除期间它的绑定不存在，所以第一次部署还要去掉 `/shared` 路由，以及广播类对这个绑定的使用。
+Cloudflare 要求删除类之前先去掉绑定，所以删除和创建不能放在同一次部署里。这样的部署会失败，错误码为 10061（`Cannot apply --delete-class migration to class 'SharedSpace' without also removing the binding that references it`），且不做任何改动。
 
 如果你的 Worker 用 `exports` 而不是 `migrations` 声明 Durable Object，删除时改用 `"state": "deleted"`。见 [Durable Object 迁移](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)。

@@ -35,23 +35,29 @@ The old object keeps its storage until you empty it.
 
 ### A whole class: two deploys
 
-To rebuild every object of a class, delete the class and create it again. This takes two deploys, following Cloudflare's [class migrations](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/):
+To rebuild every object of a class, delete the class and create it again. This takes two deploys, following Cloudflare's [class migrations](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/).
+
+The steps below rebuild the shared space class. Its broadcast class is rebuilt with it, since each takes the other's binding, and broadcast objects keep no data to lose. To rebuild a private space class, list only that class.
 
 **Deploy 1: delete.**
 
-1. Remove the class's binding from `durable_objects`.
-2. Remove the class from your code, and every use of its binding.
-3. Add a migration with a new tag: `{ "tag": "v2", "deleted_classes": ["SharedSpace"] }`.
+1. Remove both classes' bindings from `durable_objects`.
+2. Remove everything that uses those bindings:
+   - `SharedSpace` and `SharedBroadcast`.
+   - `SharedEntry`, with its entry under `exports`.
+   - The `/shared` route.
+   - Anything else that calls the space, such as your server writes.
+3. Add a migration with a new tag: `{ "tag": "v2", "deleted_classes": ["SharedSpace", "SharedBroadcast"] }`.
 4. Deploy.
 
 **Deploy 2: create.**
 
-1. Restore the class and its binding.
-2. Add another migration: `{ "tag": "v3", "new_sqlite_classes": ["SharedSpace"] }`.
+1. Restore everything deploy 1 removed.
+2. Add another migration: `{ "tag": "v3", "new_sqlite_classes": ["SharedSpace", "SharedBroadcast"] }`.
 3. Deploy.
 
-Cloudflare requires the binding to be gone before a class is deleted, so deleting and creating cannot share one deploy. A deploy that tries fails with code 10061 (`Cannot apply --delete-class migration to class 'SharedSpace' without also removing the binding that references it`) and changes nothing.
+Devices cannot reach the shared space between the two deploys.
 
-Rebuilding a shared space class leaves its broadcast class alone: broadcast objects keep no data, and find the new space by name. While the shared space is deleted its binding is gone, so deploy 1 also removes the `/shared` route and the broadcast class's use of the binding.
+Cloudflare requires the binding to be gone before a class is deleted, so deleting and creating cannot share one deploy. A deploy that tries fails with code 10061 (`Cannot apply --delete-class migration to class 'SharedSpace' without also removing the binding that references it`) and changes nothing.
 
 If your Worker declares Durable Objects under `exports` instead of `migrations`, delete with `"state": "deleted"` instead. See [Durable Object migrations](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
