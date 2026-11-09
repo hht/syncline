@@ -1,7 +1,10 @@
 # Syncline native module: Swift Expo module bridging Rust native core compiled into static library by build script.
+require 'json'
+
 Pod::Spec.new do |s|
   s.name = 'Syncline'
-  s.version = '0.0.0'
+  # The version the release commit writes into package.json, so Podfile.lock names the installed release.
+  s.version = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))['version']
   s.summary = 'Syncline on-device sync: local database, networking, and sync on Rust worker threads'
   s.homepage = 'https://github.com/hht/syncline'
   s.license = { type: 'Apache-2.0' }
