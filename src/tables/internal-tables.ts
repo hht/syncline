@@ -10,8 +10,8 @@ import { queryOf, type Storage } from '../common/storage.ts';
 // Migration step: up statements to advance from previous version, down statements to revert.
 type Step = { up: string[]; down: string[] };
 
-// Migration steps ordered by 1-based version number.
-const steps: Step[] = [
+/** Migration steps ordered by 1-based version number; a released step never changes, later releases only append. */
+export const steps: Step[] = [
   {
     up: [
       // Commit log: tracks modified primary keys per commit; bytes records cumulative primary key UTF-8 bytes to compute delta sizes without scanning.
