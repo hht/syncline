@@ -9,15 +9,12 @@ plugins {
 }
 
 group = 'expo.modules.syncline'
-version = '0.0.0'
+// The version the release commit writes into package.json, so Expo's autolinking names the installed release.
+version = new groovy.json.JsonSlurper().parse(file('../package.json')).version
 
 android {
   namespace "expo.modules.syncline"
   ndkVersion rootProject.ext.ndkVersion
-  defaultConfig {
-    versionCode 1
-    versionName "0.0.0"
-  }
 }
 
 def source = file("../rust/Cargo.toml").exists()

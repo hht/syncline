@@ -12,7 +12,7 @@ import { buildWasm } from '../src/build-wasm.mjs';
  * and tags it, resets `dev` to the unreleased version, pushes `dev` and the tag, attaches the gzipped binaries and their manifest to a GitHub Release on the tag, and only then
  * merges the tag into `main` through a pull request, which takes only pull requests, so `main` always installs a release whose binaries
  * exist. Installs download the binaries with src/prebuilt.mjs. The binaries build from the tagged tree except its package.json version,
- * which no build reads.
+ * which no binary build reads.
  * Out of scope: release notes beyond what GitHub generates.
  * @see https://cli.github.com/manual/gh_release_create
  * @see https://cli.github.com/manual/gh_pr_merge
