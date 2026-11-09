@@ -48,7 +48,7 @@ pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-q
 
 Keep the quotes, so your shell passes `*` through. To pin a [release](https://github.com/hht/syncline/releases), use `#v<version>` instead of `#semver:*`. `drizzle-orm` must be exactly the version above.
 
-The package ships TypeScript source whose imports end in `.ts`. So that `tsc` accepts them, set `"allowImportingTsExtensions": true` in your `tsconfig.json`. For Jest, add `syncline` to `transformIgnorePatterns`.
+The package ships TypeScript source whose imports end in `.ts`. So that `tsc` accepts them, set `"allowImportingTsExtensions": true` in your `tsconfig.json`. Its cloud code uses ES2024 APIs, so your Worker's `tsconfig.json` needs `es2024` or later in `lib`. For Jest, add `syncline` to `transformIgnorePatterns`.
 
 Your app also needs `expo` and `react`. Then wrap your Metro config:
 

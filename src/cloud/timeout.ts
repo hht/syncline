@@ -6,9 +6,7 @@
  * platform wall-clock limits. Unfinished work cannot be cancelled, but is no longer awaited.
  */
 export function withTimeout<T>(work: Promise<T>, ms: number, message: string) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), Math.max(0, ms));
-  });
+  const { promise: expired, reject } = Promise.withResolvers<never>();
+  const timer = setTimeout(() => reject(new Error(message)), Math.max(0, ms));
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
