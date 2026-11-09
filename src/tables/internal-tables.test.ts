@@ -4,6 +4,7 @@ import type { Storage } from '../common/storage.ts';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, pulled, tables, upload, workout, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+import { steps } from './internal-tables.ts';
 
 // Internal schema migrations: databases modified by newer releases roll back via stored down statements when app or worker deployments are reverted.
 
@@ -65,4 +66,31 @@ test('aborts migration rollback and preserves database state if a down statement
 
   expect(() => new Device(storage, tables)).toThrow('_syncline_missing');
   expect(version()).toBe(Number(current) + 1);
+});
+
+// Released steps never change: a space created by v0.1.0 or later reaches the current tables only through steps added after its own.
+test('the internal table step v0.1.0 released stays exactly as released', () => {
+  expect(steps[0]).toMatchInlineSnapshot(`
+    {
+      "down": [],
+      "up": [
+        "CREATE TABLE _syncline_commit (version INTEGER PRIMARY KEY, nonce INTEGER NOT NULL, keys TEXT NOT NULL, day INTEGER, used INTEGER, bytes INTEGER NOT NULL, client TEXT)",
+        "INSERT INTO _syncline_commit (version, nonce, keys, bytes) VALUES (0, abs(random() % 9007199254740992), '[]', 0)",
+        "CREATE TABLE _syncline_incarnation (one INTEGER PRIMARY KEY CHECK (one = 1), nonce INTEGER NOT NULL)",
+        "INSERT INTO _syncline_incarnation SELECT 1, nonce FROM _syncline_commit WHERE version = 0",
+        "CREATE TABLE _syncline_low (one INTEGER PRIMARY KEY CHECK (one = 1), version INTEGER NOT NULL, nonce INTEGER NOT NULL, bytes INTEGER NOT NULL)",
+        "CREATE TABLE _syncline_client (client TEXT PRIMARY KEY, lmid INTEGER NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE _syncline_boundary (version INTEGER PRIMARY KEY)",
+        "CREATE TABLE _syncline_held (client TEXT NOT NULL, mutation_id INTEGER NOT NULL, part INTEGER NOT NULL, version INTEGER NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL, changes TEXT NOT NULL, PRIMARY KEY (client, mutation_id, part))",
+        "CREATE INDEX _syncline_held_version ON _syncline_held (part, version)",
+        "CREATE TABLE _syncline_synced (tbl TEXT NOT NULL, col TEXT NOT NULL, PRIMARY KEY (tbl, col)) WITHOUT ROWID",
+        "CREATE TABLE _syncline_retired (name TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE _syncline_scope (tbl TEXT PRIMARY KEY, since INTEGER NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE _syncline_rules (tbl TEXT PRIMARY KEY, definition TEXT NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE _syncline_bucket_rows (tbl TEXT NOT NULL, gen INTEGER NOT NULL, bucket TEXT NOT NULL, rows INTEGER NOT NULL, PRIMARY KEY (tbl, gen, bucket)) WITHOUT ROWID",
+        "CREATE TABLE _syncline_counted (tbl TEXT PRIMARY KEY, gen INTEGER NOT NULL, after TEXT) WITHOUT ROWID",
+        "CREATE TABLE _syncline_schedule (name TEXT PRIMARY KEY, at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0, resets INTEGER NOT NULL DEFAULT 0)",
+      ],
+    }
+  `);
 });

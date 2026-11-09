@@ -1,6 +1,6 @@
 {
   "name": "syncline",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Offline-first SQLite sync for Expo apps, backed by Cloudflare",
   "license": "Apache-2.0",
   "repository": {
@@ -27,7 +27,7 @@
     "node": ">=26"
   },
   "scripts": {
-    "postinstall": "wrangler types --config src/cloudflare/wrangler.jsonc src/cloudflare/worker-configuration.d.ts",
+    "postinstall": "wrangler types --config src/cloudflare/wrangler.jsonc src/cloudflare/worker-configuration.d.ts && wrangler types --config examples/cloudflare/wrangler.jsonc examples/cloudflare/worker-configuration.d.ts",
     "check": "node tools/check/check.ts",
     "q": "node tools/check/quiet.ts",
     "model": "node tools/dev/model.ts check",
@@ -49,7 +49,8 @@
     "metro.cjs",
     "expo-module.config.json",
     "README.zh-CN.md",
-    "docs/reference"
+    "docs/reference",
+    "docs/guides"
   ],
   "exports": {
     "./expo": {

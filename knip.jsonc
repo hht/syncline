@@ -16,9 +16,14 @@
     "probes/cloudflare/kill.ts",
     "probes/cloudflare/cascade.ts",
     "probes/cloudflare/shared-worker.ts",
-    "probes/cloudflare/shared-write.ts"
+    "probes/cloudflare/shared-write.ts",
+    // Example Worker and app code the integration guides quote, with the Worker's tests and their setup file.
+    "examples/cloudflare/worker.ts",
+    "examples/cloudflare/*.test.ts",
+    "examples/cloudflare/setup.ts",
+    "examples/app/spaces.ts"
   ],
-  "project": ["src/**/*.{ts,mjs}", "tools/**/*.ts", "probes/**/*.ts"],
+  "project": ["src/**/*.{ts,mjs}", "tools/**/*.ts", "probes/**/*.ts", "examples/**/*.ts"],
   // Gates invoke these tools via node_modules/.bin paths undetected by knip; cloudflare:workers is a runtime built-in, not an npm package.
   "ignoreDependencies": ["@biomejs/biome", "dependency-cruiser", "jscpd", "cloudflare"]
 }

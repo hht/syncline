@@ -169,6 +169,17 @@ function Notes() {
 
 ## 文档
 
+指南：
+
+- [共享空间](docs/guides/zh-CN/shared-spaces.md)：从 Worker 到应用，搭建由云端为多个用户写入的数据。
+- [桶规则](docs/guides/zh-CN/bucket-rules.md)：决定每个用户下载哪些行。
+- [批量写入](docs/guides/zh-CN/bulk-writes.md)：向共享空间导入大量数据。
+- [测试](docs/guides/zh-CN/testing.md)：用 Vitest 测试云端。
+- [导出](docs/guides/zh-CN/exports.md)：把私有空间复制到另一个数据库。
+- [升级云端](docs/guides/zh-CN/upgrading.md)：版本之间哪些会保留，以及如何重建空间。
+
+参考：
+
 - [限制](docs/reference/zh-CN/limits.md)：Syncline 不支持什么，超出每项限制会发生什么。设计 schema 前请先读。
 - [报错](docs/reference/zh-CN/errors.md)：每种报错的含义和处理方法。
 - [常见问题](docs/reference/zh-CN/faq.md)：常见问题。

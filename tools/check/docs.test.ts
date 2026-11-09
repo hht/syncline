@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { checkCommands, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
+import { checkCommands, checkGateClaims, checkGuideCode, checkPackagePaths, checkPaths } from './docs.ts';
 
 const messages = (problems: { line: number; message: string }[]) => problems.map((p) => `${p.line} ${p.message}`);
 
@@ -80,4 +80,16 @@ test('referenced gates must exist, free-form text is rejected', () => {
 
 test('throws when required section is missing, preventing false passes', () => {
   expect(() => checkCommands('# Title\n\n## Other\n', [])).toThrow('missing section ## Commands');
+});
+
+test('code blocks in guides must be excerpts of the examples; shell commands and other docs are not checked', () => {
+  const examples = [{ path: 'examples/worker.ts', text: 'const a = 1;\nconst b = 2;\n' }];
+  const guide = ['# Guide', '```ts', 'const b = 2;', '```', '```sql', 'SELECT 1;', '```', '```sh', 'npx wrangler dev', '```'].join('\n');
+  const docs = [
+    { path: 'docs/guides/start.md', text: guide },
+    { path: 'docs/reference/api.md', text: guide },
+  ];
+  expect(checkGuideCode(docs, examples).map((p) => `${p.file}:${p.line} ${p.message}`)).toEqual([
+    'docs/guides/start.md:5 code block is not an excerpt of examples/: copy it from there',
+  ]);
 });

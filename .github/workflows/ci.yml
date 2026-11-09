@@ -1,5 +1,6 @@
-# Runs the same gates as the local git hook (pnpm check) on every push to dev and every pull request, so a change reaches main only
-# after they pass; protocol models (pnpm model) stay a manual gate, see docs/internals/model.md.
+# Runs the same gates as the local git hook (pnpm check) on every push to dev and every pull request; release merges into main do not
+# wait for it, since the release has run pnpm check and published before merging. Protocol models (pnpm model) stay a manual gate, see
+# docs/internals/model.md.
 name: CI
 
 on:

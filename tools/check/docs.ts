@@ -91,3 +91,19 @@ export function checkGateClaims(docs: SourceText[], gates: string[]): Problem[] 
     ...(freeText ? [problem(file, line, 'write gate references as gate `<name>`, or "TODO: ..." for unimplemented gates')] : []),
   ]);
 }
+
+/**
+ * Code blocks in the guides, except shell commands (`sh`), must each appear verbatim in one of `examples`, whose code the gates
+ * type-check and test: a block found nowhere was edited apart from the code that runs.
+ */
+export function checkGuideCode(docs: SourceText[], examples: SourceText[]): Problem[] {
+  return docs
+    .filter(({ path }) => path.startsWith('docs/guides/'))
+    .flatMap(({ path, text }) =>
+      [...text.matchAll(/^```(?!sh$)[^\n]*\n([\s\S]*?)^```$/gm)].flatMap((match) =>
+        examples.some((example) => example.text.includes(match[1] ?? ''))
+          ? []
+          : [problem(path, text.slice(0, match.index).split('\n').length, 'code block is not an excerpt of examples/: copy it from there')],
+      ),
+    );
+}

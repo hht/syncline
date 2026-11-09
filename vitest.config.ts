@@ -49,6 +49,8 @@ export default defineConfig({
         },
       },
       'vitest.workerd.config.ts',
+      // The example Worker the integration guides quote, with its own wrangler.jsonc.
+      'examples/cloudflare/vitest.config.ts',
     ],
   },
 });

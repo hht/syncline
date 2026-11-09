@@ -27,7 +27,8 @@ rust/           Device side: core (local database and sync state machine, no net
 ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations
 probes/         Probes run against live Cloudflare
-docs/           reference/ is integrator documentation; internals/ is architecture decisions and model notes
+docs/           guides/ and reference/ are integrator documentation; internals/ is architecture decisions and model notes
+examples/       Example Worker and app code the guides quote, type-checked and tested by the gates
 tools/          Gates (check/) and model runner (dev/)
 ```
 
@@ -41,10 +42,10 @@ Dependency direction is enforced by gate `depcruise`; rules and rationale live i
 | Changing the protocol or `model/` | [Models and model checking](docs/internals/model.md) |
 | Changing integrator-visible behavior or numbers | [API](docs/reference/api.md), [Limits](docs/reference/limits.md) |
 
-Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision (presented as in Reporting), and update the architecture decisions once settled. Write integrator documentation ([README](README.md) and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
+Code, tests, and models are the source of truth. Documentation records only user-approved decisions and rationale not visible from reading the code; implementation details and trial-and-error history belong in code, tests, and commit messages. Ask the user before changing a user-approved decision (presented as in Reporting), and update the architecture decisions once settled. Write integrator documentation ([README](README.md), `docs/guides/`, and `docs/reference/`) for usage: it may include numbers (numbers in `limits.md` are verified against code by tests), without history.
 
 Code standards not covered by automated gates and enforced by pre-commit review:
-- Write identifiers, file names, and branch names in simple English. Write all comments, strings, error messages, test names, and documentation in English, except the Chinese translations of integrator documentation (`README.zh-CN.md`, `docs/reference/zh-CN/`), which change in the same commit as their English source.
+- Write identifiers, file names, and branch names in simple English. Write all comments, strings, error messages, test names, and documentation in English, except the Chinese translations of integrator documentation (`README.zh-CN.md`, `docs/guides/zh-CN/`, `docs/reference/zh-CN/`), which change in the same commit as their English source.
 - Make names clear at the call site first and concise second; name by role, one word per concept ([Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)).
 - Use `/** */` on exports: open with one sentence stating what it does, followed by contracts callers must know; inline `//` comments state only why, written as fact.
 - Test real behavior with expected values from independent sources; test through public interfaces, preferring real implementations first, fakes second, and mocks only where neither can be wired in.
@@ -69,7 +70,7 @@ The single check entrypoint is `pnpm check` (the local git hook runs it on chang
 ## Commits
 
 - `commit` and `push` require explicit user instruction in the current turn; never `amend`, `force-push`, or modify git configuration.
-- Commit to `dev`; `main` takes only pull requests, opened by `pnpm release <version>`, which tags, pushes, publishes a GitHub Release, and merges the tag into `main` once CI passes (outward-facing: run it only when the user asks).
+- Commit to `dev`; `main` takes only pull requests, opened by `pnpm release <version>`, which tags, pushes, publishes a GitHub Release, and merges the tag into `main` (outward-facing: run it only when the user asks).
 - Before committing, perform a line-by-line deletion-first review of the diff and list in your report what was deleted, what was changed, and any debatable lines kept along with their justification.
 - Before committing, run an **independent review**: dispatch a fresh read-only subagent (not a fork, without this session's context) to review the diff with the changes, related files, and target properties, looking for regressions, bugs, and discrepancies with documentation and models, citing a reproduction or `file:line` for each finding. Only "must-fix" findings block a commit: data loss or corruption, permanent stalls, security issues, or model discrepancies; after fixing, dispatch another fresh subagent to review the updated diff, for at most two rounds, stopping for user decision if must-fix findings remain after the second round. Fix minor findings in the same turn or note them in the report.
 - Each commit makes one self-contained change with its tests in the same commit; keep refactoring separate from features and fixes.
