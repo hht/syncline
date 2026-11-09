@@ -240,3 +240,20 @@ test('pushed write after PITR refetch: restoring device from earlier backup does
   await upload(restored, fromBackup, [fromBackup]);
   expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
 });
+
+// A rebuilt space (class deleted and recreated) starts from empty storage: confirmed rows go with it, but writes the device has not
+// uploaded yet still reach the new space, as after restoring to before the space existed, and apply to its rows.
+test('rebuilt space: device downloads it from scratch and uploads its pending writes, where an update of a removed row does nothing', async () => {
+  const { space } = cloudAt(1);
+  const { device, storage } = await install(space);
+  await confirmed(space, device, 'confirmed before the rebuild');
+  await rename(device, 'pending update of a row the rebuild removes');
+  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'pending at the rebuild' }));
+  const rebuiltCloud = cloudStorage(createWorkout);
+  const rebuilt = new Space(rebuiltCloud, tables);
+
+  const result = await pullAll(rebuilt, device);
+  expect(result.patch[0]?.op).toBe('clear');
+  expect(device.private.pending()).toHaveLength(2);
+  await pushedAs(rebuilt, rebuiltCloud, device, storage, [{ id: 'w2', note: 'pending at the rebuild' }]);
+});

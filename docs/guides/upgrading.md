@@ -22,7 +22,7 @@ Writes and downloads still work, but every alarm fails with `no such column: res
 
 Rebuilding deletes all data in the space. Copy out anything you need first, and write it back afterwards: see [Bulk writes](bulk-writes.md).
 
-Devices download a rebuilt shared space from scratch on their own. For about 60 seconds, new devices may get old data from the cache; the cloud then makes them download again.
+Devices download a rebuilt space from scratch on their own. Writes a device had not uploaded yet are kept and uploaded to the new space, where they apply to its rows: an update or delete of a row the rebuild removed does nothing, and a write the new space cannot run is [held](../reference/errors.md#held-writes). After a shared space is rebuilt, a device may first get old data from the cache; the cloud then makes it download again.
 
 ### One shared space: use a new name
 
