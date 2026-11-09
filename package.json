@@ -27,7 +27,7 @@
     "node": ">=26"
   },
   "scripts": {
-    "postinstall": "wrangler types --config src/cloudflare/wrangler.jsonc src/cloudflare/worker-configuration.d.ts",
+    "postinstall": "wrangler types --config src/cloudflare/wrangler.jsonc src/cloudflare/worker-configuration.d.ts && wrangler types --config examples/cloudflare/wrangler.jsonc examples/cloudflare/worker-configuration.d.ts",
     "check": "node tools/check/check.ts",
     "q": "node tools/check/quiet.ts",
     "model": "node tools/dev/model.ts check",

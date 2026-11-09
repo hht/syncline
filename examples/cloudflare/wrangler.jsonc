@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // Example Worker for the integration guides: run with wrangler dev, tested by vitest.config.ts beside it; not deployed by this repository.
+  "name": "syncline-example",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-30",
+  "durable_objects": {
+    "bindings": [
+      { "name": "USER_SPACE", "class_name": "UserSpace" },
+      { "name": "SHARED_SPACE", "class_name": "SharedSpace" },
+      { "name": "SHARED_BROADCAST", "class_name": "SharedBroadcast" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSpace", "SharedSpace", "SharedBroadcast"] }],
+  "d1_databases": [{ "binding": "EXPORTS", "database_name": "syncline-example-exports", "migrations_dir": "migrations" }],
+  "cache": { "enabled": true },
+  "exports": {
+    "default": { "type": "worker", "cache": { "enabled": false } },
+    "SharedEntry": { "type": "worker", "cache": { "enabled": true } }
+  }
+}

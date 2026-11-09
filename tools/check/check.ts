@@ -67,8 +67,8 @@ const testWorkers = Math.max(1, Math.floor(availableParallelism() / 1.5));
 const gates: Gate[] = [
   // Icons by check type: 🎨 format and style 🔷 types 🧱 layers 🧹 dead code 👯 duplicates 🧪 tests 🏷️ naming 💬 comments 🔤 english 📄 documentation 🦀 Rust
   { name: 'biome', icon: '🎨', run: biome(root) },
-  { name: 'tsc', icon: '🔷', run: typecheck(root, ['.', 'tsconfig.cloudflare.json']) },
-  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools']) },
+  { name: 'tsc', icon: '🔷', run: typecheck(root, ['.', 'tsconfig.cloudflare.json', 'examples/cloudflare']) },
+  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools', 'examples']) },
   { name: 'knip', icon: '🧹', run: deadCode(root) },
   // Report from 30 tokens: shared logic across modules should be extracted to one place; gates, dev scripts, and AGENTS.md follow .jscpd.json at 50.
   // Rust starts from 40: declarations carry serde attributes; a single optional field (TS after?: Row is ~5 tokens) with skip_serializing_if is around twenty tokens;
