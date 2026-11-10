@@ -11,7 +11,9 @@ use crate::sync::error::Failure;
 use crate::sync::instructions::{Beat, Instruction, Out, Timer};
 use crate::sync::pull::After;
 use crate::sync::pushes::{Confirmed, PUSH_LIMIT};
-use crate::sync::{Context, INVALID_PUSH, Job, OVER_QUOTA, PONG, PULL_NEEDED, PUSH_FAILED, SCHEMA_MISMATCH, VERSION_MISMATCH, wire};
+use crate::sync::{
+    Context, INVALID_PUSH, Job, OVER_QUOTA, PONG, PULL_NEEDED, PUSH_FAILED, SCHEMA_MISMATCH, TOO_MANY_CONNECTIONS, VERSION_MISMATCH, wire,
+};
 
 impl Connection {
     /// Returns attempt ID if socket matches current active link
@@ -82,6 +84,11 @@ impl Connection {
                 self.fail(ctx, attempt, error, Kind::Upload);
             }
             _ => {
+                // Catching up reset backoff, so retrying from the first delay would evict the device that took the slot, which
+                // would do the same: devices beyond the limit would take turns about once a second instead of every ~15 seconds.
+                if code == TOO_MANY_CONNECTIONS {
+                    self.backoff.exhaust();
+                }
                 let kind = if code == PUSH_FAILED || code == OVER_QUOTA {
                     Kind::Upload
                 } else {

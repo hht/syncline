@@ -83,7 +83,7 @@ Past either one, the cloud closes the connection with 1013. The device retries l
 
 ### Connections
 
-A private space accepts 32 concurrent connections (`connections`). A new connection closes the oldest one.
+A private space accepts 32 concurrent connections (`connections`). A new connection closes the oldest one, and that device waits a random time up to 30 seconds before reconnecting. Devices beyond the limit that stay online take turns.
 
 ### Held writes
 
@@ -155,7 +155,7 @@ The cloud closes a connection with codes such as these. Devices handle them on t
 | 4002 | App and cloud versions differ | Stops if the cloud is newer (`updateNeeded`), else retries |
 | 4003 | App and cloud schemas differ | Checks compatibility, then connects, stops (`updateNeeded`), or retries |
 | 1007 | Cloud rejected a batch of uploaded writes (unreadable, or past a limit) | Stops uploading until the app restarts or calls `resync()` |
-| 1008 | Too many connections | Retries |
+| 1008 | Too many connections | Retries within 30 seconds |
 | 1011 | Cloud failed to store the upload | Retries |
 | 1013 | Upload quota reached | Retries later |
 | 1003 | Binary message, or an upload to a shared space | Retries |

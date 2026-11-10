@@ -136,16 +136,36 @@ test('heartbeat: confirmation of post-resync batch resets ping timer immediately
     connection.stop();
   }));
 
-test('persistent push rejection (1011): exponential backoff continues across reconnects without resetting on catch-up', () =>
+// Max jitter (random 1): each reconnect waits exactly the backoff bound for that attempt.
+test.each([
+  {
+    name: 'persistent push rejection (1011): exponential backoff continues across reconnects without resetting on catch-up',
+    pending: true,
+    closes: [
+      { code: 1011, wait: 1000 },
+      { code: 1011, wait: 2000 },
+      { code: 1011, wait: 4000 },
+    ],
+  },
+  {
+    // Catch-up with nothing pending resets backoff, so a plain retry would wait 1s and evict whichever device took the slot,
+    // which then does the same.
+    name: 'evicted for too many connections (1008) right after catching up: reconnects within the maximum backoff, then the first again once caught up',
+    pending: false,
+    closes: [
+      { code: 1008, wait: rustLimits().maxDelay },
+      { code: 1006, wait: rustLimits().baseDelay },
+    ],
+  },
+])('$name', ({ pending, closes }) =>
   withFakeTimers(async () => {
-    // Max jitter: delay 1s * 2^n on n-th failure.
     const { device, connection, sockets, open, catchUp } = await heartbeat({ random: () => 1 });
-    await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
-    for (const wait of [1000, 2000, 4000]) {
+    if (pending) await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
+    for (const { code, wait } of closes) {
       open();
       catchUp();
       await flush();
-      sockets.at(-1)?.socket.onclose?.(new CloseEvent('close', { code: 1011 }));
+      sockets.at(-1)?.socket.onclose?.(new CloseEvent('close', { code }));
       const count = sockets.length;
       vi.advanceTimersByTime(wait - 1);
       await flush();
@@ -154,7 +174,8 @@ test('persistent push rejection (1011): exponential backoff continues across rec
       await vi.waitFor(() => expect(sockets).toHaveLength(count + 1));
     }
     connection.stop();
-  }));
+  }),
+);
 
 test('heartbeat: a push an HTTP pull confirms while a ping awaits its pong keeps the pong deadline, closing the link when no pong arrives', () =>
   withFakeTimers(async () => {

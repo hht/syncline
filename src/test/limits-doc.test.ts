@@ -48,6 +48,8 @@ test.each([
   `total at most ${mb(writeKeyBytes)} encoded as JSON.`,
   `Shared spaces accept only server writes, up to ${count(sharedWriteRows)} rows each.`,
   `A private space accepts ${count(defaultConnections)} concurrent connections (\`connections\`).`,
+  `that device waits a random time up to ${seconds(maxDelay)} before reconnecting.`,
+  `| 1008 | Too many connections | Retries within ${seconds(maxDelay)} |`,
   // Downloads, storage, and shared spaces
   `requests at most ${count(rowsPerDay)} rows per day (\`checksumRowsPerDay\`)`,
   `the greater of roughly ${mib(commitFloor)} and 1/4 of the data`,
