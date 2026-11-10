@@ -74,6 +74,8 @@ export function setup(quota?: Quota) {
     ...options,
     socket: (address, protocols) => tampering(options.socket(address, protocols), () => state.tamper),
     token: () => (state.tokenFails ? Promise.reject(new Error('failed to get token')) : Promise.resolve('valid')),
+    // `run` fires only timers due within a second: no jitter keeps every backoff within it
+    random: () => 0,
   });
   const seen: SyncStatus[] = [];
   connection.onStatus((status) => seen.push(status));
