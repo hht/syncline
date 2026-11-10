@@ -41,6 +41,11 @@ impl Backoff {
         self.attempt = 0;
     }
 
+    /// Makes the next delay the longest one, until reset
+    pub fn exhaust(&mut self) {
+        self.attempt = i32::MAX;
+    }
+
     /// Records cloud-provided reconnect window
     pub fn spread(&mut self, spread: f64) {
         self.spread = spread;

@@ -39,6 +39,8 @@ pub const PUSH_FAILED: u16 = 1011;
 pub const INVALID_PUSH: u16 = 1007;
 /// Close code when pushing too much (write quota exceeded): reconnect and retry push after backoff.
 pub const OVER_QUOTA: u16 = 1013;
+/// Close code when a newer connection evicts this one (space at its connection limit): reconnect within the maximum backoff.
+pub const TOO_MANY_CONNECTIONS: u16 = 1008;
 /// Maximum bytes per WebSocket message (UTF-8).
 pub const SOCKET_LIMIT: f64 = 24_000.0;
 /// Slowest assumed network speed in bytes per second, from GPRS CS-1 coding rates.
