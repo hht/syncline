@@ -188,6 +188,7 @@ Rare situations. Most apps never meet them.
 - A value the local column type cannot hold is set aside with a warning. A row arriving with one is hidden from queries.
 - Rolling back both the cloud and the app after devices synced a release that added a column keeps those devices retrying without syncing. They resume once the cloud declares the column again or the app lists it in `retired`. Pending writes are kept.
 - A silent disconnect while pings pause for a large upload goes unnoticed until the pause ends: up to about 2.3 hours for one 8 MiB write.
+- A write uploads in one piece: a disconnect during its upload starts it over on the next connection. On a link that drops before a write finishes uploading, that write and the writes after it never upload. Keep large content in object storage such as R2 and sync a reference to it.
 
 ### Shared spaces
 
