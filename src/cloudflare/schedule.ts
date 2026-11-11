@@ -49,7 +49,12 @@ export class Schedule {
 
   /** Reschedules chore name unconditionally to at epoch ms, resetting any active failure backoff. */
   at(name: string, at: number) {
-    this.#storage.sql.exec('INSERT OR REPLACE INTO _syncline_schedule (name, at) VALUES (?, ?)', name, at);
+    this.#storage.sql.exec(
+      // Writes nothing when the entry already holds this time with no backoff: replacing the row would bill it and its index row again.
+      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at, failures = 0, resets = 0 WHERE at <> excluded.at OR failures <> 0 OR resets <> 0',
+      name,
+      at,
+    );
   }
 
   cancel(name: string) {

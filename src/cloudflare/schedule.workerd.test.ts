@@ -1,9 +1,9 @@
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
-import { lease } from './schedule.ts';
+import { lease, Schedule } from './schedule.ts';
 import { fannedOut } from './test-shared.ts';
-import { alarmAfter, object, online, squat } from './test-space.ts';
+import { alarmAfter, object, online, space, squat } from './test-space.ts';
 
 test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix and lone surrogates', async () => {
   const { name, phone } = await online(1);
@@ -25,6 +25,42 @@ test('executes scheduled callback when due, multiplexes with exports, skips canc
   expect(await object(name).fired()).toEqual(['weekly']);
   expect(await object(name).alarmAt()).toBeNull();
 });
+
+test('rescheduling an entry outright writes no billed row when nothing changes, and one row when its time or backoff does', () =>
+  runInDurableObject(object(space()), (_, { storage }) => {
+    const cursors: { toArray(): unknown[]; rowsWritten: number }[] = [];
+    const schedule = new Schedule({
+      getAlarm: () => storage.getAlarm(),
+      setAlarm: (at) => storage.setAlarm(at),
+      deleteAlarm: () => storage.deleteAlarm(),
+      sync: () => storage.sync(),
+      sql: {
+        exec: (query, ...bindings) => {
+          const cursor = storage.sql.exec(query, ...bindings);
+          cursors.push(cursor);
+          return cursor;
+        },
+      } as Pick<SqlStorage, 'exec'>,
+    });
+    // rowsWritten settles once a cursor is consumed.
+    const written = () =>
+      cursors.splice(0).reduce((rows, cursor) => {
+        cursor.toArray();
+        return rows + cursor.rowsWritten;
+      }, 0);
+    const name = 'syncline:probe';
+    const rescheduled = (at: number) => {
+      schedule.at(name, at);
+      return { rows: written(), ...storage.sql.exec('SELECT at, failures, resets FROM _syncline_schedule WHERE name = ?', name).one() };
+    };
+    rescheduled(1000);
+    expect(rescheduled(1000)).toEqual({ rows: 0, at: 1000, failures: 0, resets: 0 });
+    expect(rescheduled(2000)).toEqual({ rows: 1, at: 2000, failures: 0, resets: 0 });
+    // A backoff and a count of cut runs are cleared as before.
+    storage.sql.exec('UPDATE _syncline_schedule SET failures = 3, resets = 2 WHERE name = ?', name);
+    expect(rescheduled(2000)).toEqual({ rows: 1, at: 2000, failures: 0, resets: 0 });
+    schedule.cancel(name);
+  }));
 
 test('supports recurring tasks that reschedule themselves in scheduled callbacks', async () => {
   const { name } = await online(1);
