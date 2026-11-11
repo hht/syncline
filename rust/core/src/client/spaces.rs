@@ -11,7 +11,7 @@ use crate::sync::{Context, Job};
 use crate::tables::Table;
 
 impl Client {
-    /// App calls directed to a space's sync connection: start, stop (background/foreground), sync once, resync, reconnect.
+    /// Calls directed to a space's sync connection: start, stop (sent by tests only), sync once, resync, reconnect.
     pub(super) fn space(&mut self, input: Input, jobs: &mut Vec<Job>, now: f64) {
         match input {
             Input::Start { channel } => self.with(&channel, jobs, now, Connection::start),
