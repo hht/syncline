@@ -51,9 +51,11 @@ impl Backoff {
         self.spread = spread;
     }
 
-    /// Computes delay before proactive token renewal reconnect given `expires_in` milliseconds remaining; returns None if under 1 minute (token provider may not have fresh token ready)
+    /// Computes delay before proactive token renewal reconnect given `expires_in` milliseconds remaining; returns None if 4 minutes or
+    /// less remain: the reconnect could be due at once, and again on every connection the same or an equally short token opens, so such
+    /// a token is kept until the cloud closes its connection as expired
     pub fn renewal(expires_in: f64, random: &mut Random) -> Option<f64> {
-        (expires_in > RENEW_BEFORE).then(|| (expires_in - RENEW_BEFORE - random() * RENEW_SPREAD).max(0.0))
+        (expires_in > RENEW_BEFORE + RENEW_SPREAD).then(|| expires_in - RENEW_BEFORE - random() * RENEW_SPREAD)
     }
 }
 
@@ -75,8 +77,10 @@ mod tests {
     #[test]
     fn renews_between_one_and_four_minutes_before_expiry() {
         let mut half: Random = Box::new(|| 0.5);
-        assert_eq!(Backoff::renewal(60_000.0, &mut half), None);
         assert_eq!(Backoff::renewal(3_600_000.0, &mut half), Some(3_450_000.0));
-        assert_eq!(Backoff::renewal(61_000.0, &mut half), Some(0.0));
+        // With 4 minutes or less left the latest draw is due at once: not renewed
+        let mut one: Random = Box::new(|| 1.0);
+        assert_eq!(Backoff::renewal(240_000.0, &mut one), None);
+        assert_eq!(Backoff::renewal(241_000.0, &mut one), Some(1000.0));
     }
 }

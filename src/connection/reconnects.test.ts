@@ -91,6 +91,15 @@ test('proactively renews token before expiresIn: schedules renewal 1 to 4 minute
   connection.stop();
 });
 
+test('a token with 4 minutes or less left is not renewed early: a token() that keeps returning it is asked once, not in a loop', async () => {
+  const { network, connection, tokens } = setup({ expiresIn: 240_000 });
+  connection.start();
+  await drain(network);
+  expectConnected(connection);
+  expect(tokens()).toBe(1);
+  connection.stop();
+});
+
 test('handles far-future token expiry exceeding setTimeout 32-bit limit (2^31 - 1 ms) without immediate reconnect loops', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
