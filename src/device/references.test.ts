@@ -56,6 +56,31 @@ test('cascade delete descends level by level, only deleting rows referencing del
   for (const { storage } of [phone, tablet]) expect(read(storage)).toEqual(read(cloud));
 });
 
+test('a write that moves a child to another parent and deletes the old parent keeps the child on the device, the cloud, and another device', async () => {
+  const { cloud, space, phone, tablet, devices } = await withWorkout();
+  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w2' }));
+  await upload(space, phone.device, devices);
+
+  await write(phone.device, async (tx) => {
+    await tx.update(exercise).set({ workout_id: 'w2' }).where(eq(exercise.id, 'e1'));
+    await tx.delete(workout).where(eq(workout.id, 'w1'));
+  });
+  const moved = [{ id: 'e1', workout_id: 'w2', name: 'squat' }];
+  expect(read(phone.storage).exercises).toEqual(moved);
+  // The write lists the delete first: applied in that order, its cascade would take the moved child.
+  expect(phone.device.private.pending().at(-1)?.changes).toEqual([
+    { op: 'del', table: 'workout', key: { id: 'w1' } },
+    { op: 'patch', table: 'exercise', row: { id: 'e1', workout_id: 'w2' } },
+  ]);
+
+  await upload(space, phone.device, devices);
+  expect(space.held()).toEqual([]);
+  for (const storage of [cloud, phone.storage, tablet.storage]) {
+    expect(read(storage).exercises).toEqual(moved);
+    expect(read(storage).workouts.map(({ id }) => id)).toEqual(['w2']);
+  }
+});
+
 test('server mutations also respect foreign keys: deleting parent cascades to children, online devices delete together; referencing missing rows rolls back and throws (children before parent in same mutation is allowed)', async () => {
   const { cloud, space, devices, phone } = await withWorkout();
   const online = async (poke: Poke) => {
