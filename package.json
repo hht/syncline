@@ -1,6 +1,6 @@
 {
   "name": "syncline",
-  "version": "0.1.9",
+  "version": "0.0.0",
   "description": "Offline-first SQLite sync for Expo apps, backed by Cloudflare",
   "license": "Apache-2.0",
   "repository": {
