@@ -83,23 +83,33 @@ test('resync({ discardPending: true }) reverts the discarded writes but keeps sy
   connection.stop();
 });
 
-test('resync(): dedupes pushed mutations on server when resyncing before confirmation, achieving eventual consistency', async () => {
-  const { network, device, connection, run, notes, space } = setup();
-  connection.start();
-  await run();
-  await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
-  const before = space.head().version;
-  while (space.head().version === before) network.deliver();
-  const executed = space.head().version;
+test.for([false, true])(
+  'resync({ discardPending: %s }) before the cloud confirmed a write it already ran: the write runs once and the re-download holds its row',
+  async (discardPending) => {
+    const { network, device, connection, run, notes, space } = setup();
+    connection.start();
+    await run();
+    await write(device, (tx) => tx.insert(note).values({ id: 'n9' }));
+    const before = space.head().version;
+    while (space.head().version === before) network.deliver();
+    const executed = space.head().version;
 
-  const resynced = connection.resync();
-  await run();
-  await resynced;
-  expect(space.head().version).toBe(executed);
-  expect(notes()).toContainEqual({ id: 'n9' });
-  expectConnected(connection, { pending: 0 });
-  connection.stop();
-});
+    const resynced = connection.resync({ discardPending });
+    await flush();
+    // Dropping the write reverts its row at once; the cloud still holds it, so the re-download brings it back.
+    expect(notes().some(({ id }) => id === 'n9')).toBe(!discardPending);
+    await run();
+    await resynced;
+    expect(space.head().version).toBe(executed);
+    expect(notes()).toContainEqual({ id: 'n9' });
+    expectConnected(connection, { pending: 0 });
+    // The next write runs in the cloud: had dropping kept the client, its ID would repeat the dropped write's and be skipped as a duplicate.
+    await write(device, (tx) => tx.insert(note).values({ id: 'n10' }));
+    await retried(connection, run);
+    expect(space.head().version).toBeGreaterThan(executed);
+    connection.stop();
+  },
+);
 
 const retried = (connection: Connection, run: () => Promise<void>) => Promise.all([connection.sync(), run()]);
 
