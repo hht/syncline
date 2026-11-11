@@ -9,6 +9,7 @@ import { item, itemRow, problems, readBack, valueTables } from '../test/test-val
 import { object, space } from './test-space.ts';
 
 // Server writes on Durable Object SQL: values read back as written, or the write throws, including text starting with U+FEFF.
+// Bound numbers are reals.
 
 test('server writes on Durable Object SQL: values read back unchanged, or the write throws', async () => {
   await runInDurableObject(object(space()), async (_, state) => {
@@ -32,5 +33,12 @@ test('server writes on Durable Object SQL: values read back unchanged, or the wr
       { numRuns: 100 },
     );
     expect(storage.sql.exec('SELECT ? AS value', '\uFEFFa').toArray()).toEqual([{ value: '\uFEFFa' }]);
+  });
+});
+
+test('Durable Object SQL binds every number as a real, which the cloud test double copies (src/test/sqlite-wasm.test.ts)', async () => {
+  await runInDurableObject(object(space()), async (_, state) => {
+    const bound = state.storage.sql.exec("SELECT typeof(?) AS type, ? || '' AS text", 5, 5).toArray();
+    expect(bound).toEqual([{ type: 'real', text: '5.0' }]);
   });
 });

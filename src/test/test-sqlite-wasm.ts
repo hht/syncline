@@ -2,12 +2,11 @@ import type { BindableValue, Database, PreparedStatement, Sqlite3Static, SqlValu
 import type { Storage } from '../common/storage.ts';
 import { cursor, savepoint, statementCache } from './test-driver.ts';
 
-/** Numeric integer values outside JS safe range (e.g. 1e300): oo1 binds as int64 which corrupts large values; bind as double instead. */
-const wide = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value);
-
 /**
  * Executes a prepared statement, resetting statement and clearing bindings on completion.
+ * Binds every number as a double, as Durable Object SQL does; oo1 would bind integral numbers as int64, corrupting those beyond it.
  * Column names are retrieved post-execution to reflect dynamic re-compilation after schema alterations (e.g. added columns).
+ * @see https://github.com/cloudflare/workerd/blob/v1.20261104.1/src/workerd/api/sql.h#L29 (a bound value is bytes, text, or a double)
  * @see https://sqlite.org/c3ref/prepare.html (sqlite3_prepare_v2 re-compilation)
  */
 function run(
@@ -20,8 +19,8 @@ function run(
   const before = changes();
   try {
     if (bindings.length > 0) {
-      statement.bind(bindings.map((value) => (wide(value) ? null : value)) as BindableValue[]);
-      for (const [index, value] of bindings.entries()) if (wide(value)) bindDouble(statement, index + 1, value);
+      statement.bind(bindings.map((value) => (typeof value === 'number' ? null : value)) as BindableValue[]);
+      for (const [index, value] of bindings.entries()) if (typeof value === 'number') bindDouble(statement, index + 1, value);
     }
     const rows: SqlValue[][] = [];
     while (statement.step()) rows.push(rowOf(statement));

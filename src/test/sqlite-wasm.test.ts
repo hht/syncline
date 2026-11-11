@@ -7,6 +7,10 @@ import { sqliteWasmStorage } from './test-sqlite-wasm.ts';
 const sqlite3 = await sqlite3InitModule();
 const opened = () => sqliteWasmStorage(sqlite3, new sqlite3.oo1.DB(':memory:'));
 
+test('every number is bound as a real, as Durable Object SQL binds it (src/cloudflare/values.workerd.test.ts)', () => {
+  expect(opened().sql.exec("SELECT typeof(?) AS type, ? || '' AS text", 5, 5).toArray()).toEqual([{ type: 'real', text: '5.0' }]);
+});
+
 test('integer values exceeding int64 (such as Number.MAX_VALUE) store as real without corruption', () => {
   const storage = opened();
   storage.sql.exec('CREATE TABLE t (n REAL)');
