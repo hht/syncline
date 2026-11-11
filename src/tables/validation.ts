@@ -93,8 +93,36 @@ export function storageTypeOf(table: string, column: SQLiteColumn): 'integer' | 
 }
 
 /**
+ * Throws unless every foreign key column of a table has the storage type of the column it references.
+ * SQLite converts one side of a comparison to the type of the other side's column: the reference check turns a text column's value
+ * into a number to find a number key ('05' finds 5), and the cascade turns that key into text to find the row ('5' misses '05'), which
+ * it leaves behind. Durable Object SQL also binds every number as a real, so the cloud looks for the text key '5.0' where a device
+ * looks for '5'.
+ * @see https://sqlite.org/datatype3.html#type_conversions_prior_to_comparison
+ * @see https://github.com/cloudflare/workerd/blob/v1.20261104.1/src/workerd/api/sql.h#L29
+ */
+function checkReferences(table: SQLiteTable) {
+  const { name, foreignKeys } = getTableConfig(table);
+  for (const foreignKey of foreignKeys) {
+    const { columns, foreignColumns, foreignTable } = foreignKey.reference();
+    const parent = getTableConfig(foreignTable).name;
+    for (const [index, column] of columns.entries()) {
+      const to = foreignColumns[index] as SQLiteColumn;
+      const storage = storageTypeOf(name, column);
+      // A local-only table may reference a table Syncline never stores, whose column can have a type Syncline does not support.
+      const referenced = affinityOf(to.getSQLType()) ?? to.getSQLType();
+      if (storage !== referenced)
+        throw new Error(
+          `Foreign key ${name}.${column.name} (${storage}) references ${parent}.${to.name} (${referenced}); a foreign key column must have the storage type of the column it references`,
+        );
+    }
+  }
+}
+
+/**
  * Validates declared schema tables before database initialization.
- * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, and storage affinities.
+ * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, storage
+ * affinities, and that foreign key columns are stored as the columns they reference.
  * @see https://sqlite.org/json1.html#path_arguments
  * @see https://tc39.es/ecma262/#sec-ordinaryownpropertykeys
  * @see https://sqlite.org/sessionintro.html
@@ -116,6 +144,7 @@ export function checkDeclared(tables: SQLiteTable[]) {
       checkColumnName(name, column.name);
       storageTypeOf(name, column);
     }
+    checkReferences(table);
   }
 }
 

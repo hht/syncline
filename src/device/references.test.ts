@@ -1,9 +1,10 @@
 import { eq } from 'drizzle-orm';
-import { type AnySQLiteColumn, foreignKey, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { type AnySQLiteColumn, blob, foreignKey, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../cloud/space.ts';
 import type { Poke } from '../common/protocol.ts';
 import type { remoteDatabase } from '../expo/remote-database.ts';
+import { defineTables } from '../tables/table-definitions.ts';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, pulled, tables, upload, workout as workoutRow, workouts, write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
@@ -150,6 +151,55 @@ test.for([
   ];
   expect(() => new Space(cloudStorage(...statements), [coded, child])).toThrow(message);
   expect(() => new Device(deviceStorage(...statements), [coded, child])).toThrow(message);
+});
+
+const stored = { integer: () => integer(), real: () => real(), text: () => text() };
+
+test.for([
+  ['integer', 'text'],
+  ['real', 'text'],
+  ['text', 'integer'],
+  ['text', 'real'],
+  ['integer', 'real'],
+  ['real', 'integer'],
+] as const)(
+  'a foreign key column stored as %s referencing a key stored as %s: cloud and device both refuse it before creating any table',
+  ([from, to]) => {
+    const parent = sqliteTable('parent', { id: stored[to]().primaryKey() });
+    const child = (type: keyof typeof stored) =>
+      sqliteTable('child', { id: text().primaryKey(), parent_id: stored[type]().references(() => parent.id) });
+    const message = `child.parent_id (${from}) references parent.id (${to})`;
+    const [device, cloud] = [deviceStorage(), cloudStorage()];
+    expect(() => new Device(device, [parent, child(from)])).toThrow(message);
+    expect(() => defineTables(cloud, [parent, child(from)])).toThrow(message);
+    // A table created with the refused column would refuse the corrected one: a column's storage type cannot change.
+    expect(() => new Device(device, [parent, child(to)])).not.toThrow();
+    expect(() => defineTables(cloud, [parent, child(to)])).not.toThrow();
+  },
+);
+
+test('a composite foreign key whose second column is stored as another type than its key column: refused on synced and local-only tables', () => {
+  const slot = sqliteTable('slot', { day: text().notNull(), hour: integer().notNull() }, (table) => [
+    primaryKey({ columns: [table.day, table.hour] }),
+  ]);
+  const booking = sqliteTable('booking', { id: text().primaryKey(), day: text(), hour: text() }, (table) => [
+    foreignKey({ columns: [table.day, table.hour], foreignColumns: [slot.day, slot.hour] }),
+  ]);
+  const message = 'booking.hour (text) references slot.hour (integer)';
+  expect(() => new Device(deviceStorage(), [slot, booking])).toThrow(message);
+  expect(() => defineTables(cloudStorage(), [slot, booking])).toThrow(message);
+  expect(() => new Device(deviceStorage(), [slot], { localOnly: [booking] })).toThrow(message);
+});
+
+test('foreign key columns are compared by storage type: text(8) referencing a text(20) key is accepted, and a local-only column referencing the BLOB key of a table Syncline does not store is refused', () => {
+  const parent = sqliteTable('parent', { id: text({ length: 20 }).primaryKey() });
+  const child = sqliteTable('child', { id: text().primaryKey(), parent_id: text({ length: 8 }).references(() => parent.id) });
+  expect(() => new Device(deviceStorage(), [parent, child])).not.toThrow();
+  expect(() => defineTables(cloudStorage(), [parent, child])).not.toThrow();
+
+  const file = sqliteTable('file', { id: blob().primaryKey() });
+  const note = sqliteTable('note', { id: text().primaryKey(), file_id: text().references(() => file.id) });
+  expect(() => new Device(deviceStorage(), [parent], { localOnly: [note] })).toThrow('note.file_id (text) references file.id (blob)');
 });
 
 test('composite foreign key modifies only one column (patch carries only changed column): parent checked against resulting row, rejected and held if pair missing', () => {

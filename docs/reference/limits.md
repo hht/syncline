@@ -30,9 +30,12 @@ Breaking a rule throws when the app opens the database, except a table name spel
 
 - Every table needs a primary key, local-only tables included.
 - A foreign key can point only at the primary key of a synced table in the same space.
+- A foreign key column must have the same storage type as the column it points at, local-only tables included.
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
 
 A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` throws.
+
+A foreign key column of another storage type throws when the app opens the database. In the cloud, `SynclineSpace` throws.
 
 A primary key that is too long fails the write with `ValidationError`.
 
