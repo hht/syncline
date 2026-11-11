@@ -1,5 +1,6 @@
-//! How pending mutations are pushed: offline writes are pushed in batches, sending the next batch only after the previous one is confirmed by cloud; when cloud only processes a prefix of a batch,
-//! confirmation covers part of the batch and the rest continues to be pushed; reconnecting resends the batch (cloud deduplicates by sequence number, safe to retry), but the same batch is not resent on the same connection. Confirmations match by sequence number, not count of pending mutations.
+//! How pending mutations are pushed: offline writes are pushed in batches, sending the next batch only after the previous one is confirmed by cloud, each batch on a connection
+//! twice the size of the one before up to a cap, starting over on every new connection; when cloud only processes a prefix of a batch,
+//! confirmation covers part of the batch and the rest continues to be pushed; reconnecting resends the batch (cloud deduplicates by sequence number, safe to retry), but a batch that still leads the pending mutations is not resent on the same connection. Confirmations match by sequence number, not count of pending mutations.
 //! `push` reports bytes sent, `confirm` reports whether pushed mutations on this connection have finished uploading, which the caller conveys to heartbeat.
 //! What it should not know: how connections are opened or closed; does not invoke heartbeat directly, only returns what it needs.
 
@@ -8,13 +9,18 @@ use crate::sync::instructions::{Instruction, Out};
 use crate::upload_queue::Mutation;
 use std::collections::BTreeMap;
 
-/// Target size of one push batch (in JSON bytes of changes): set to half of maximum WebSocket message size, ensuring a batch uploads within heartbeat timeout; confirmation notifications carry full modified rows,
-/// which can be larger—when too large, cloud sends a hint and device pulls via HTTP while connected (final chunk carries confirmation). At least one mutation per batch; single writes may be larger (up to `WRITE_BYTES`),
+/// Target size of the first push batch on a connection (in JSON bytes of changes): an intermittent link that keeps a connection only briefly still
+/// uploads one batch per connection (12 seconds at the slowest rate). At least one mutation per batch; single writes may be larger (up to `WRITE_BYTES`),
 /// and heartbeat delays ping based on its size.
-pub const PUSH_LIMIT: f64 = SOCKET_LIMIT / 2.0;
+const PUSH_START: f64 = SOCKET_LIMIT / 2.0;
+/// Cap on push batch size (a batch takes mutations while the bytes before each stay under it, so its last mutation can go past): each
+/// batch costs about one round trip plus, past `SOCKET_LIMIT`, an HTTP pull (cloud sends a hint for confirmations too large to send), so
+/// larger batches upload a backlog in fewer round trips with diminishing returns, while a connection lost mid-batch resends about this much
+/// plus that last mutation.
+pub const PUSH_MAX: f64 = 128_000.0;
 
 /// A batch sent out: which connection, count of mutations, last mutation's client and id, and earliest id per client in this batch.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct Batch {
     socket: u32,
     count: usize,
@@ -38,6 +44,8 @@ pub struct Pushes {
     last: Option<Batch>,
     /// Socket where catch-up was received (catch-up is the first message carrying confirmation on a connection).
     caught_up_on: Option<u32>,
+    /// Size of the next batch and the socket it applies to.
+    size: Option<(u32, f64)>,
     /// Error reported when cloud does not recognize this batch (device defect): pushes cease.
     refused: Option<crate::sync::error::Failure>,
 }
@@ -57,16 +65,17 @@ impl Pushes {
         self.refused = None;
     }
 
-    /// Pushes first batch of pending mutations on opened socket (`pending` returns first ~`PUSH_LIMIT` bytes of pending mutations); returns bytes sent (`None` if nothing sent):
+    /// Pushes first batch of pending mutations on opened socket (`pending(limit)` returns first ~`limit` bytes of pending mutations); returns bytes sent (`None` if nothing sent):
     /// waits for confirmation if previous batch on this connection is still unconfirmed.
     ///
     /// # Panics
     /// Panics if pending mutations cannot be serialized to JSON (contains only numbers, strings, nulls).
-    pub fn push(&mut self, out: &mut Out, socket: u32, pending: impl FnOnce() -> Vec<Mutation>) -> Option<usize> {
+    pub fn push(&mut self, out: &mut Out, socket: u32, pending: impl FnOnce(f64) -> Vec<Mutation>) -> Option<usize> {
         if self.refused.is_some() || self.in_flight.as_ref().is_some_and(|batch| batch.socket == socket) {
             return None;
         }
-        let pending = pending();
+        let size = self.size.filter(|(on, _)| *on == socket).map_or(PUSH_START, |(_, size)| size);
+        let pending = pending(size);
         let last = pending.last()?;
         let mut firsts = BTreeMap::new();
         for mutation in &pending {
@@ -79,9 +88,15 @@ impl Pushes {
             id: last.id,
             firsts,
         };
-        // Same batch as just pushed on this connection: confirmation arrived but device has not accepted it yet, pending mutations unchanged; do not resend (Push in model/Private.tla: do not resend identical push already in flight).
+        // Batch just pushed on this connection still leads the pending mutations: confirmation arrived but device has not accepted it yet (new
+        // mutations join only at the back, so removing any of the batch would have moved its last one), and writes since queue behind it, which the
+        // larger next batch would include; do not resend (Push in model/Private.tla pushes all pending writes at once and holds back only an
+        // identical push already in flight; holding back here too is safe because every landing confirms again).
         if let Some(last) = &self.last
-            && same_batch(last, &batch)
+            && last.socket == socket
+            && pending
+                .get(last.count - 1)
+                .is_some_and(|mutation| mutation.client == last.client && mutation.id == last.id)
         {
             self.in_flight = Some(last.clone());
             return None;
@@ -92,6 +107,7 @@ impl Pushes {
         self.elsewhere = self.in_flight.take();
         self.in_flight = Some(batch.clone());
         self.last = Some(batch);
+        self.size = Some((socket, (size * 2.0).min(PUSH_MAX)));
         Some(bytes)
     }
 
@@ -125,10 +141,6 @@ impl Pushes {
     }
 }
 
-fn same_batch(a: &Batch, b: &Batch) -> bool {
-    a.socket == b.socket && a.count == b.count && a.client == b.client && a.id == b.id
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,15 +170,48 @@ mod tests {
     fn confirmation_from_elsewhere_does_not_resend_same_batch_until_accepted() {
         let (mut pushes, mut out) = (Pushes::default(), Out::default());
         let lmids = Lmids::from([("shared".to_owned(), 11)]);
-        pushes.push(&mut out, 1, || vec![mutation("shared", 11), mutation("own", 1)]);
+        pushes.push(&mut out, 1, |_| vec![mutation("shared", 11), mutation("own", 1)]);
         // Another device (restored from backup, sharing client) pushed mutation 11 of shared which executed: notification on this connection carries its confirmation; local device is behind and has not accepted, pending mutations unchanged
         // (first confirmation on this connection is catch-up, not considered uploaded).
         assert_eq!(pushes.confirm(1, &lmids), Some(Confirmed::Confirmed));
-        pushes.push(&mut out, 1, || vec![mutation("shared", 11), mutation("own", 1)]);
+        pushes.push(&mut out, 1, |_| vec![mutation("shared", 11), mutation("own", 1)]);
         assert_eq!(sent(&mut out), [2]);
         // Local device caught up: confirmed mutation removed, remaining mutations pushed.
         assert_eq!(pushes.confirm(1, &lmids), Some(Confirmed::Uploaded));
-        pushes.push(&mut out, 1, || vec![mutation("own", 1)]);
+        pushes.push(&mut out, 1, |_| vec![mutation("own", 1)]);
+        assert_eq!(sent(&mut out), [1]);
+    }
+
+    #[test]
+    fn batches_double_up_to_the_cap_and_start_over_on_a_new_connection() {
+        let (mut pushes, mut out) = (Pushes::default(), Out::default());
+        let mut limits = Vec::new();
+        for id in 1..=6 {
+            pushes.push(&mut out, 1, |limit| {
+                limits.push(limit);
+                vec![mutation("own", id)]
+            });
+            assert!(pushes.confirm(1, &Lmids::from([("own".to_owned(), id)])).is_some());
+        }
+        pushes.push(&mut out, 2, |limit| {
+            limits.push(limit);
+            vec![mutation("own", 7)]
+        });
+        assert_eq!(limits, [12_000.0, 24_000.0, 48_000.0, 96_000.0, 128_000.0, 128_000.0, 12_000.0]);
+    }
+
+    #[test]
+    fn confirmed_batch_is_not_resent_while_writes_queue_behind_it() {
+        let (mut pushes, mut out) = (Pushes::default(), Out::default());
+        let lmids = Lmids::from([("own".to_owned(), 2)]);
+        pushes.push(&mut out, 1, |_| vec![mutation("own", 1), mutation("own", 2)]);
+        assert!(pushes.confirm(1, &lmids).is_some());
+        // Confirmation arrived before the device accepted it, and a new write queued meanwhile: the larger next batch would repeat the confirmed ones
+        pushes.push(&mut out, 1, |_| vec![mutation("own", 1), mutation("own", 2), mutation("own", 3)]);
+        assert_eq!(sent(&mut out), [2]);
+        // Landing the confirmation removes the confirmed writes
+        assert!(pushes.confirm(1, &lmids).is_some());
+        pushes.push(&mut out, 1, |_| vec![mutation("own", 3)]);
         assert_eq!(sent(&mut out), [1]);
     }
 }

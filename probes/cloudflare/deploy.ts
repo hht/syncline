@@ -29,6 +29,7 @@ export async function cloudflare(path: string, body?: object) {
     ...(body && { method: 'POST', body: JSON.stringify(body) }),
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   });
+  if (!response.ok) throw new Error(`Cloudflare API ${path} failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
   return (await response.json()) as { result?: unknown; data?: unknown; errors?: unknown };
 }
 

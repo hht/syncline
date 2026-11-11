@@ -16,6 +16,7 @@
     "src",
     "examples/app",
     "probes/cloudflare/push-size.ts",
+    "probes/cloudflare/push-batch.ts",
     "probes/cloudflare/kill.ts",
     "probes/cloudflare/cascade.ts",
     "probes/cloudflare/shared-write.ts"

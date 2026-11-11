@@ -25,7 +25,7 @@ test('heartbeat: suppresses ping during large push batch upload based on slowest
     connection.stop();
   }));
 
-test('bounds push batch size at half of WebSocket message byte limit: splits three ~8 KB mutations into 2 and 1', async () => {
+test('bounds the first push batch on a connection at half of WebSocket message byte limit: sends two of three ~8 KB mutations', async () => {
   const { device, connection, sockets, open } = await heartbeat();
   const third = '€'.repeat(Math.ceil(socketLimit / 9));
   for (const id of ['n1', 'n2', 'n3']) await write(device, (tx) => tx.insert(workout).values({ id, note: third }));

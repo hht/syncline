@@ -1,8 +1,9 @@
 import { encodePosition, encodeScan } from '../cloud/position.ts';
 import { pullBytes, pushBytes } from '../common/limits.ts';
-import { type Op, ping, pong, pushMutations, socketLimit } from '../common/protocol.ts';
+import { type Op, ping, pong, pushMutations } from '../common/protocol.ts';
 import { opChars, utf8Bytes } from '../common/size.ts';
 import { protocolVersion } from '../common/version.ts';
+import { rustLimits } from './test-rust.ts';
 
 // Resource bounds of the deterministic simulations: every URL, request and response body, and WebSocket frame crossing the simulated
 // network must fit Cloudflare's limits and Syncline's documented bounds, scaled to the sizes each simulation configures, none of them
@@ -19,8 +20,8 @@ const urlBytes = 16 * 1024;
  */
 const reasonBytes = 123;
 
-/** Devices batch pending writes until their changes reach half of socketLimit, at least one (the device's PUSH_LIMIT). */
-const pushLimit = socketLimit / 2;
+/** Devices batch pending writes until their changes reach the batch size, at least one; batches on a connection grow up to this size. */
+const pushLimit = rustLimits().pushMax;
 
 /** Largest version or nonce a cookie carries: nonces are 53-bit. */
 const most = Number.MAX_SAFE_INTEGER;
