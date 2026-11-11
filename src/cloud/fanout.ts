@@ -16,9 +16,9 @@ type Host = {
   failed: (shard: string, error: unknown) => void;
   /**
    * Called when all shards have confirmed through `head`: the persisted state is provided back to constructor on next startup.
-   * Runs synchronously with all-shards-confirmed check to avoid race conditions with intervening writes; awaits returned promise.
+   * Runs synchronously with all-shards-confirmed check to avoid race conditions with intervening writes.
    */
-  confirmed: (state: Confirmed) => void | Promise<void>;
+  confirmed: (state: Confirmed) => void;
 };
 
 /**
@@ -58,9 +58,12 @@ export class Fanout {
     return this.#host.shards.every((shard) => sameCookie(this.#ackedBy(shard), head));
   }
 
-  /** Dispatches updates to all shards (each queuing independently) and awaits completion of currently scheduled rounds. */
+  /**
+   * Dispatches updates to all shards (each queuing independently) and awaits completion of currently scheduled rounds.
+   * Returns whether every shard took its round: after false, the caller owes another deliver.
+   */
   async deliver() {
-    await Promise.all(this.#host.shards.map((shard) => this.#deliverTo(shard)));
+    return (await Promise.all(this.#host.shards.map((shard) => this.#deliverTo(shard)))).every(Boolean);
   }
 
   #ackedBy(shard: string) {
@@ -106,7 +109,7 @@ export class Fanout {
       this.#confirmed = head;
       this.#acked.clear();
       this.#rounds = undefined;
-      await this.#host.confirmed({ cookie: head, shards: this.#host.shards });
+      this.#host.confirmed({ cookie: head, shards: this.#host.shards });
     }
     return true;
   }

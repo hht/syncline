@@ -174,7 +174,7 @@ test('bypasses cache when incarnation does not match space incarnation and cache
   expect((await ask(incarnation)).headers.get('Cache-Control')).toBe('public, max-age=5');
 });
 
-test('delivers pending fanout round via alarm after actor reset occurs between commit and broadcast delivery', async () => {
+test('delivers a fanout round cut by an actor reset between commit and broadcast delivery as soon as the object next starts', async () => {
   const { device, shards } = await adminOnline('h1');
   for (const shard of shards) await shard.hangNext(1);
   // Publish awaits shard response; caught here since aborting the actor causes it to fail.
@@ -190,8 +190,8 @@ test('delivers pending fanout round via alarm after actor reset occurs between c
   });
   await expect(runInDurableObject(catalog(), (_, state) => state.abort('Reset'))).rejects.toThrow();
   expect(await publishing).toBeInstanceOf(Error);
-  // Rearmed alarm delivers pending notice following actor restart.
-  await alarmAfter(catalog(), 1000);
+  // No retry was scheduled before delivering: the start itself finds shards behind and makes the delivery due at once.
+  await alarmAfter(catalog(), 0);
   expect(await device.next()).toMatchObject({ patch: [{ op: 'put', table: 'program', row: { id: 'h1', status: 'draft' } }] });
 });
 

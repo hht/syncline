@@ -122,6 +122,17 @@ test('delivery failure reports shard without persistence and retries from last a
   expect(run.saved).toEqual([{ cookie: at(1), shards: ['a', 'b'] }]);
 });
 
+test('deliver tells its caller whether every shard took its round, so the caller knows when a retry is owed', async () => {
+  const run = setup(at(0));
+  run.fail();
+  const failed = run.fanout.deliver();
+  await run.release();
+  expect(await failed).toBe(false);
+  expect(await run.fanout.deliver()).toBe(true);
+  // Nothing left to send.
+  expect(await run.fanout.deliver()).toBe(true);
+});
+
 test('a version persisted while other shards were configured is not trusted: delivery starts with an empty round at head', async () => {
   // A shard added since never acknowledged that version: chaining from it would skip what that shard's connections missed.
   const run = setup(at(0), ['a']);

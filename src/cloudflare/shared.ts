@@ -126,7 +126,7 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
       truncation: this.#space,
     });
     const broadcast = options.broadcast(env);
-    // Dispatches fanout rounds with notifyTimeout per shard; updates KV and arms periodic wakeup when all shards acknowledge.
+    // Dispatches fanout rounds with notifyTimeout per shard; updates KV when all shards acknowledge.
     this.#fanout = new Fanout(
       {
         shards,
@@ -135,18 +135,14 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
         send: (shard, round) =>
           withTimeout(broadcast.getByName(shard).notify(round), notifyTimeout, `Shard timed out after ${notifyTimeout / 1000}s`),
         failed: (shard, error) => this.#events({ type: 'notice.failed', shard, reason: String(error) }),
-        confirmed: async (state) => {
-          ctx.storage.kv.put(fanoutKey, state);
-          this.timetable.at(deliverName, Date.now() + refreshInterval);
-          await this.timetable.arm();
-        },
+        confirmed: (state) => ctx.storage.kv.put(fanoutKey, state),
       },
       ctx.storage.kv.get<Confirmed>(fanoutKey) ?? null,
     );
     // Dispatches immediately if unacknowledged shards or pending rescans exist, else keeps the scheduled time. Replaces the entry outright on
     // every start, clearing the lease and reset count a reset left: rounds are bounded by shard timeouts, so delivery is never the task
-    // whose reset restarted the object, and runs other resets cut must not pause it. Once acknowledged the entry exists (confirming writes it
-    // in the same turn as the acknowledgment, and every delivery run reschedules it), so the fallback time never applies.
+    // whose reset restarted the object, and runs other resets cut must not pause it. Once acknowledged the entry exists (the start that
+    // found shards behind wrote it, and every delivery run reschedules it), so the fallback time never applies.
     const when = this.#fanout.allAcked() ? (this.timetable.when(deliverName) ?? Date.now() + refreshInterval) : Date.now();
     this.timetable.at(deliverName, when);
     // Re-arms the alarm on startup to recover scheduled times if the actor restarted before setting the alarm.
@@ -174,7 +170,9 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
    * Executes a server write: called from integrator methods, commits synchronously, and dispatches the round in parallel to all broadcast shards,
    * awaiting delivery of a round covering this commit; rolls back and rethrows on execution error.
    * Throwing does not guarantee the write was not committed (for example, if the actor is reset after committing while delivering notices), so retries must be idempotent.
-   * Schedules retry in the same turn before delivering so that if the actor resets mid-delivery (deploy or timeout), the alarm resumes from the persisted version on restart.
+   * Schedules a retry only when a shard did not take its round. A delivery cut by a reset of the object (deploy or timeout) resumes from the
+   * persisted version when the object next starts, on any request or at the hourly wakeup at the latest: the commit and the persisted version
+   * already record that it is owed, and arming an alarm before every delivery would bill each write 4 more rows.
    */
   protected readonly mutate = async (write: (tx: Transaction) => void) => {
     // Clients connect to broadcast shards; fanout rounds are delivered separately, so mutate commits directly.
@@ -184,9 +182,8 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
     if (this.#space.head().version === base.version) return;
     // Schedules commit log truncation if limits were exceeded.
     this.#upkeep.written();
-    this.timetable.by(deliverName, Date.now() + retryDelay);
+    if (!(await this.#fanout.deliver())) this.timetable.by(deliverName, Date.now() + retryDelay);
     await this.timetable.arm();
-    await this.#fanout.deliver();
   };
 
   /** Executes due background upkeep chores, fanout redelivery, periodic wakeups, and integrator callbacks. */

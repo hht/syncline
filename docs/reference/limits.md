@@ -201,6 +201,7 @@ Rare situations. Most apps never meet them.
 - Without `reconnect()`, a connection keeps filtering live updates by the old token until the next download.
 - Changing `shards` makes every connected device download once. When lowering it, devices on a removed shard get no live updates until up to a minute after their token expires.
 - After a deploy changes rules, online devices hear about it within 1 hour.
+- A server write cut short by a restart of the shared space (the write throws) may reach connected devices only when the space next handles a request, or at its hourly wake-up, up to 1 hour later. Retrying the write delivers it at once.
 - After a shared space is rebuilt, devices may first get old data from cache. The cloud then makes them download again.
 - One request can await about 78 publishes before reaching Cloudflare's subrequest limit. Shards past the limit get the change about 1 second later.
 - Rows a new rule places in a bucket over 256 bytes stay in the space, but no device can subscribe to that bucket.
