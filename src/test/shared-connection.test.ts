@@ -173,7 +173,7 @@ test('pull landing queued behind an open local write stops when database closes 
   const { first, network, request } = await hinted();
   const { promise: gate, resolve } = Promise.withResolvers<void>();
   const open = write(first.device, () => gate);
-  // Catch-up jitters before pulling: advance time until request is sent.
+  expect(network.pending()).toEqual([]); // A shared space spreads the pulls a hint sets off: none until time advances
   await request();
   network.respond();
   network.arrive();

@@ -154,12 +154,12 @@ impl Connection {
         });
     }
 
-    /// Cloud requested HTTP pull before reconnecting: not counted as failure; waits briefly before pulling and reconnecting (between 0 and max(spread, 1s))
+    /// Cloud requested HTTP pull before reconnecting: not reported as failure; pulls and reconnects on backoff, which keeps growing
+    /// while the cloud keeps asking, as it closes on accept before any catch-up could reset backoff
     pub(in crate::sync) fn repull(&mut self, ctx: &mut Context) {
         self.pull_needed = true;
         self.status.update(ctx.out, self.started, |status| status.connected = false);
-        let delay = self.backoff.of(0, ctx.random);
-        self.retry(ctx, Some(delay));
+        self.retry(ctx);
     }
 
     /// Connection attempt failed: records error, waiting `sync()` calls fail, and reconnects on backoff; stops if cloud protocol is newer, uses retired schema, or account mismatched
@@ -181,13 +181,13 @@ impl Connection {
         if error.is_account() {
             self.stop(ctx);
         } else if !update_needed {
-            self.retry(ctx, None);
+            self.retry(ctx);
         }
     }
 
-    /// Schedules next connection attempt after delay milliseconds (defaults to backoff)
-    fn retry(&mut self, ctx: &mut Context, delay: Option<f64>) {
-        let delay = delay.unwrap_or_else(|| self.backoff.next(ctx.random));
+    /// Schedules next connection attempt on backoff
+    fn retry(&mut self, ctx: &mut Context) {
+        let delay = self.backoff.next(ctx.random);
         self.reconnecting = Some(ctx.out.schedule(
             Timer::Reconnect {
                 channel: self.channel.clone(),

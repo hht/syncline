@@ -25,7 +25,7 @@ test('heartbeat: suppresses ping during large push batch upload based on slowest
     connection.stop();
   }));
 
-test('bounds push batch size at half of WebSocket message byte limit: splits three ~8 KB mutations into 2 and 1', async () => {
+test('bounds the first push batch on a connection at half of WebSocket message byte limit: sends two of three ~8 KB mutations', async () => {
   const { device, connection, sockets, open } = await heartbeat();
   const third = '€'.repeat(Math.ceil(socketLimit / 9));
   for (const id of ['n1', 'n2', 'n3']) await write(device, (tx) => tx.insert(workout).values({ id, note: third }));
@@ -141,6 +141,7 @@ test.each([
   {
     name: 'persistent push rejection (1011): exponential backoff continues across reconnects without resetting on catch-up',
     pending: true,
+    caughtUp: true,
     closes: [
       { code: 1011, wait: 1000 },
       { code: 1011, wait: 2000 },
@@ -152,18 +153,30 @@ test.each([
     // which then does the same.
     name: 'evicted for too many connections (1008) right after catching up: reconnects within the maximum backoff, then the first again once caught up',
     pending: false,
+    caughtUp: true,
     closes: [
       { code: 1008, wait: rustLimits().maxDelay },
       { code: 1006, wait: rustLimits().baseDelay },
     ],
   },
-])('$name', ({ pending, closes }) =>
+  {
+    // The cloud closes on accept, before any catch-up could reset backoff
+    name: 'cloud keeps asking for an HTTP pull first (4000): exponential backoff continues across reconnects',
+    pending: false,
+    caughtUp: false,
+    closes: [
+      { code: 4000, wait: 1000 },
+      { code: 4000, wait: 2000 },
+      { code: 4000, wait: 4000 },
+    ],
+  },
+])('$name', ({ pending, caughtUp, closes }) =>
   withFakeTimers(async () => {
     const { device, connection, sockets, open, catchUp } = await heartbeat({ random: () => 1 });
     if (pending) await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
     for (const { code, wait } of closes) {
       open();
-      catchUp();
+      if (caughtUp) catchUp();
       await flush();
       sockets.at(-1)?.socket.onclose?.(new CloseEvent('close', { code }));
       const count = sockets.length;

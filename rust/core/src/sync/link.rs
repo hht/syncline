@@ -10,7 +10,7 @@ use crate::sync::connection::{Connection, Kind};
 use crate::sync::error::Failure;
 use crate::sync::instructions::{Beat, Instruction, Out, Timer};
 use crate::sync::pull::After;
-use crate::sync::pushes::{Confirmed, PUSH_LIMIT};
+use crate::sync::pushes::Confirmed;
 use crate::sync::{
     Context, INVALID_PUSH, Job, OVER_QUOTA, PONG, PULL_NEEDED, PUSH_FAILED, SCHEMA_MISMATCH, TOO_MANY_CONNECTIONS, VERSION_MISMATCH, wire,
 };
@@ -121,8 +121,8 @@ impl Connection {
         let channel = self.channel.clone();
         let mirror = crate::sync::mirror::Mirror(&channel);
         let device = &*ctx.device;
-        let bytes = self.pushes.push(ctx.out, socket, || {
-            mirror.pending(device, PUSH_LIMIT).unwrap_or_else(|error| {
+        let bytes = self.pushes.push(ctx.out, socket, |limit| {
+            mirror.pending(device, limit).unwrap_or_else(|error| {
                 failed = Some(error);
                 Vec::new()
             })

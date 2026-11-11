@@ -12,7 +12,26 @@ import { join } from 'node:path';
 const here = import.meta.dirname;
 // Runs the bundled wrangler binary directly because tail processes spawned through npx cannot terminate child processes cleanly, hanging the script.
 export const wranglerBin = join(here, '../../node_modules/.bin/wrangler');
-export const wrangler = (...args: string[]) => execFileSync(wranglerBin, args, { cwd: here, encoding: 'utf8' });
+const wrangler = (...args: string[]) => execFileSync(wranglerBin, args, { cwd: here, encoding: 'utf8' });
+
+/** Account of the active wrangler login, which must have exactly one. */
+export function account() {
+  const { accounts } = JSON.parse(wrangler('whoami', '--json')) as { accounts: { id: string }[] };
+  const [only] = accounts;
+  if (!only || accounts.length > 1) throw new Error('wrangler must be logged into exactly one account');
+  return only.id;
+}
+
+/** Calls the Cloudflare API at path with the active wrangler authentication token, returning the JSON body. */
+export async function cloudflare(path: string, body?: object) {
+  const token = wrangler('auth', 'token').trim().split('\n').at(-1);
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    ...(body && { method: 'POST', body: JSON.stringify(body) }),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Cloudflare API ${path} failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
+  return (await response.json()) as { result?: unknown; data?: unknown; errors?: unknown };
+}
 
 /** Deployed Worker handle, with onCleanUp registering teardown steps such as stopping wrangler tail before Worker deletion. */
 type Deployed = { name: string; secret: string; url: string; onCleanUp: (stop: () => void) => void };

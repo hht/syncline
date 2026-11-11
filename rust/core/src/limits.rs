@@ -35,6 +35,7 @@ pub fn documented() -> serde_json::Value {
         "pongWithin": crate::sync::heartbeat::PONG_WITHIN,
         "writeBytes": WRITE_BYTES,
         "pushMutations": PUSH_MUTATIONS,
+        "pushMax": crate::sync::pushes::PUSH_MAX,
         "slowestRate": crate::sync::SLOWEST_RATE,
         "socketLimit": crate::sync::SOCKET_LIMIT,
         "baseDelay": crate::sync::backoff::BASE_DELAY,

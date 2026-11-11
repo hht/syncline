@@ -62,6 +62,7 @@ type Limits = Record<
   | 'pushMutations'
   | 'slowestRate'
   | 'socketLimit'
+  | 'pushMax'
   | 'baseDelay'
   | 'maxDelay'
   | 'rowsPerDay'

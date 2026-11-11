@@ -13,6 +13,7 @@
     "src/**/*.test.ts",
     "probes/cloudflare/worker.ts",
     "probes/cloudflare/push-size.ts",
+    "probes/cloudflare/push-batch.ts",
     "probes/cloudflare/kill.ts",
     "probes/cloudflare/cascade.ts",
     "probes/cloudflare/shared-worker.ts",

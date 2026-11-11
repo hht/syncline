@@ -8,7 +8,7 @@ import { cloudStorage } from './test-storage.ts';
 
 // Slow network: each WebSocket message must transfer within heartbeat deadline. Catch-up and poke messages are capped at socketLimit
 // in UTF-8 bytes; messages exceeding it send only a hint while keeping connection open, falling back to HTTP pull (timed by idle data receipt);
-// push batches are capped at half that limit.
+// push batches on a connection start at half that limit.
 
 const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)';

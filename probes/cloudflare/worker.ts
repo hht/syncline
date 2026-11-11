@@ -22,7 +22,9 @@ const wide = sqliteTable(
   },
   (table) => indexed.map((column) => index(`wide_${column}`).on(table[column as keyof typeof table] as never)),
 );
-const schema = { t, parent, narrow, wide };
+/** Target table for push-batch probes: rows of typical size, a primary key and a text body. */
+const note = sqliteTable('note', { id: text().primaryKey(), body: text() });
+const schema = { t, parent, narrow, wide, note };
 type Child = 'narrow' | 'wide';
 
 /** Spins synchronously during validation when t primary key starts with 'spin' until the platform terminates DO execution with exceededCpu (used by kill.ts; loops by iteration count because Date.now does not advance synchronously in Workers). */
