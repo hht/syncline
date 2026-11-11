@@ -8,8 +8,9 @@ import { pullBytes } from '../common/limits.ts';
 import { type Change, ping, pong, subprotocol } from '../common/protocol.ts';
 import { type PullRequest, parsePullBody, parsePullRequest } from '../common/pull-url.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
+import { cloudTables } from '../tables/cloud-tables.ts';
 import { schemaConflict } from '../tables/declaration.ts';
-import { cloudTables, defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
+import { defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader, spaceHeader } from './forward.ts';
 import { isSocket, schemaFingerprintOf } from './requests.ts';
@@ -19,7 +20,8 @@ import { Upkeep } from './upkeep.ts';
 
 /**
  * SpaceOptions configuration:
- * - cloud: cloud-only schema augmenting synced tables with server-only columns or cloud-only tables;
+ * - cloud: cloud-only tables, and synced tables declared again with cloud-only columns added (keeping every synced column, its storage
+ *   type and default, and the primary key);
  * - retired: permanently removed table and column names ("table.column") excluded from sync;
  * - validation: Standard Schema definitions validating pushed and server writes;
  * - readOnly: server-write-only synced tables; client mutations touching them are held;

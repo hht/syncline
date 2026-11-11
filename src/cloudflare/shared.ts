@@ -12,7 +12,8 @@ import { type Chunk, type Poke, ping, pong, type Reset, socketLimit, subprotocol
 import { type PullRequest, parsePullRequest } from '../common/pull-url.ts';
 import { utf8Bytes } from '../common/size.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
-import { cloudTables, defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
+import { cloudTables } from '../tables/cloud-tables.ts';
+import { defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader } from './forward.ts';
 import { reserved } from './schedule.ts';

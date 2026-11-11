@@ -22,19 +22,14 @@ export type Schema = Record<string, SQLiteTable>;
 /** Returns the table name for a Drizzle SQLite table definition. */
 export const tableName = (table: SQLiteTable) => getTableConfig(table).name;
 
-const byName = (schema: Schema) => Object.values(schema).map((table) => [tableName(table), table] as const);
-
-/** Combines synced tables with cloud overrides and cloud-only tables: a cloud table replaces the synced table of the same name. */
-export const cloudTables = (schema: Schema, cloud: Schema = {}) => [...new Map([...byName(schema), ...byName(cloud)]).values()];
-
 /**
  * SQLite data types permitted in STRICT tables.
  * @see https://sqlite.org/stricttables.html
  */
 const strictTypes = new Set(['int', 'integer', 'real', 'text', 'blob', 'any']);
 
-// Formats a static column default value as a SQL literal; SQL expression defaults throw.
-function defaultOf(column: SQLiteColumn) {
+/** Formats a static column default value as a SQL literal, or undefined without one; SQL expression defaults throw. */
+export function defaultOf(column: SQLiteColumn) {
   if (!column.hasDefault || column.default === undefined) return undefined;
   if (is(column.default, SQL))
     throw new Error(`Default value for column ${column.name} is a SQL expression, which is not supported; use a static literal value`);
