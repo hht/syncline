@@ -46,7 +46,7 @@ iOS and Android only: Syncs once, intended for background tasks (the tens of sec
 | `name` | Database name |
 | `waitForReady(): Promise<void>` | Resolves once the database is open and the private space starts syncing, without waiting for the network; rejects with the reason it cannot (see above) |
 | `db` | Read-only Drizzle database instance |
-| `write(body): Promise<T>` | Executes a local write. `body(tx)` runs in a local transaction, where `tx` is a read-write Drizzle database instance |
+| `write(body): Promise<T>` | Executes a local write. `body(tx)` runs in a local transaction, where `tx` is a read-write Drizzle database instance. Until `body` settles, every other read and write and every change from the cloud waits, so keep it short and await only `tx` inside it: a `body` awaiting a `db` query or another `write` never finishes. Anything that waits 5 seconds behind a write logs a console warning |
 | `onChange(listener): () => void` | Invoked after synced tables or local-only tables change, providing modified table names (`ReadonlySet<string>`) |
 | `tablesOf(sql): Promise<string[]>` | Lists tables read by a query without executing it |
 | `onHeld(listener): () => void` | Invoked when local writes are held by the cloud, providing `{ reason, changes }[]` (`reason` is cut to 1,000 characters) |
