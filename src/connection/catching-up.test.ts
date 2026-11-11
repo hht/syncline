@@ -9,12 +9,16 @@ import { linked, reconnect } from './test-connection.ts';
 
 // Pulling while connected: errors, timeouts, and unusable or stale responses are retried with backoff on the same link.
 
-/** Connected device recording its statuses (`seen`); a cloud write announced by a hint starts a pull, waiting its jitter. */
-async function hinted(options?: Parameters<typeof linked>[0]) {
+/** Connected device recording its statuses (`seen`); a cloud write announced by a hint starts a pull, which `arm` runs just before. */
+async function hinted({
+  arm,
+  ...options
+}: Parameters<typeof linked>[0] & { arm?: (harness: Awaited<ReturnType<typeof linked>>) => void } = {}) {
   const harness = await linked(options);
   const seen: SyncStatus[] = [];
   harness.connection.onStatus((status) => seen.push(status));
   harness.space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
+  arm?.(harness);
   harness.message(JSON.stringify({ hint: harness.space.head() }));
   await flush();
   return { ...harness, seen };
@@ -37,6 +41,15 @@ async function caughtUp({ space, device, connection, sockets }: Awaited<ReturnTy
   connection.stop();
 }
 
+test('a hint on the private space pulls right away: only shared spaces spread their pulls', () =>
+  withFakeTimers(async () => {
+    const harness = await hinted();
+    // No timer advances: a jitter timer would hold the pull back
+    for (let step = 0; step < 10; step += 1) await flush();
+    expect(harness.fetched).toHaveLength(1);
+    await caughtUp(harness);
+  }));
+
 test('a token request for a pull while connected that times out records the error and retries the pull without dropping the link', () =>
   withFakeTimers(async () => {
     const { tokens, token } = hanging();
@@ -51,14 +64,12 @@ test('a token request for a pull while connected that times out records the erro
   }));
 
 test.each([
-  { fault: 'a read as the pull starts', sql: 'SELECT version, nonce FROM _syncline_cookie', fetches: 1 },
+  { fault: 'a read building the pull request', sql: 'SELECT client FROM _syncline_pending', fetches: 1 },
   { fault: 'a write landing the response', sql: 'INSERT INTO _syncline_cookie (version', fetches: 2 },
 ])('an error on $fault while connected is reported and the pull retried with backoff; the link stays up', ({ sql, fetches }) =>
   withFakeTimers(async () => {
     const reported = captureReported();
-    const harness = await hinted();
-    failOnce(harness.storage, sql);
-    vi.advanceTimersByTime(0);
+    const harness = await hinted({ arm: ({ storage }) => failOnce(storage, sql) });
     await vi.waitFor(() => expect(reported).toEqual([expect.stringMatching(injectedError)]));
     expect(harness.seen).toContainEqual(
       expect.objectContaining({ connected: true, downloadError: expect.objectContaining({ message: reported[0] }) }),
@@ -146,10 +157,8 @@ test.for([
       await flush();
       // The cloud executes the push but its confirmation reaches the device only through a pull
       harness.executedElsewhere();
-      message(JSON.stringify({ hint: space.head() }));
-      await flush();
       failOnce(storage, 'SELECT p.client, p.id, p.changes', ...after);
-      vi.advanceTimersByTime(0);
+      message(JSON.stringify({ hint: space.head() }));
       await vi.waitFor(() => expect(sockets[0]?.closed).toBe(true));
       // Every fault fired
       expect(storage.database.inject('[]')).toBe(false);

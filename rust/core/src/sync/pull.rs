@@ -1,6 +1,6 @@
 //! How a device catches up via HTTP pull (shared across private and shared spaces, pre-connection and while connected):
 //! Pulls one chunk at a time into the local database, with only one pull in flight at any given moment (so responses chain onto cookies; notifications arriving while in-flight only record the target version).
-//! Errors before connecting hand control back to connection (disconnects, reconnects with backoff); falling behind while connected does not close the connection, but waits randomly first (preventing thundering herd when many devices receive hints simultaneously),
+//! Errors before connecting hand control back to connection (disconnects, reconnects with backoff); falling behind while connected does not close the connection, but in a shared space waits randomly first (preventing thundering herd when many devices receive hints simultaneously),
 //! retrying on error with backoff, where each error fails any waiting manual sync. If the final chunk landed without advancing (target unreachable), waits with backoff instead of spinning.
 //! When cloud returns its schema (schemaConflict): if judged compatible, retries once with cloud's fingerprint; fails if it still mismatches.
 //! What it should not know: WebSocket connection management, push, and reconnection.
@@ -98,7 +98,9 @@ impl Connection {
         };
         let connected = pull.connected();
         self.pull = Some(pull);
-        if connected {
+        // A hint reaches every connected device of a shared space, so their pulls spread over the cloud's window (at least a second); a private
+        // space has the few devices of one user and gets no window, so waiting would only delay confirming its own pushes
+        if connected && !self.mirror().private() {
             let delay = self.backoff.of(0, ctx.random);
             self.pull_wait(ctx, delay);
         } else {

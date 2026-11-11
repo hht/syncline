@@ -144,10 +144,10 @@ test('private and shared spaces syncing on one device ignore each other’s sock
   for (const connection of connections)
     expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined, pending: 0 });
   // Each space pulled with its own token and reconnected once after the disconnect and once after the resync: no event of one space
-  // disturbed the other
+  // disturbed the other. After the hints the private space pulls at once, while the shared space spreads its pull
   const [privatePull, sharedPull] = ['/space Bearer valid', '/catalog Bearer renewed'];
   const pulls = (count: number) => Array<string>(count).fill(privatePull);
-  expect(recorded.fetched).toEqual([privatePull, sharedPull, privatePull, sharedPull, ...pulls(6), sharedPull, ...pulls(4), sharedPull]);
+  expect(recorded.fetched).toEqual([privatePull, sharedPull, ...pulls(2), sharedPull, ...pulls(5), sharedPull, ...pulls(4), sharedPull]);
   expect(recorded.opened).toEqual(['/catalog', '/space', '/catalog', '/space', '/catalog', '/space']);
   expect(reported).toEqual([]);
   for (const connection of connections) connection.stop();
