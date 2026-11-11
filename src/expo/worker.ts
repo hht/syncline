@@ -115,8 +115,8 @@ async function handle(instance: number, call: HostMessage['call']) {
   // Replies go only to calls with ids (the page sends open and close as calls awaiting replies), so the 0 never goes out
   const reply = (error?: unknown) =>
     post({ instance, received: [{ type: 'reply', id: call.id ?? 0, ...(error !== undefined && { error: failureOf(error) }) }] });
-  if (call.type === 'open' || call.type === 'close') {
-    try {
+  try {
+    if (call.type === 'open' || call.type === 'close') {
       // Replies to open call first, then executes buffered opening instructions (issues and space statuses follow reply).
       const begin =
         call.type === 'open'
@@ -124,14 +124,13 @@ async function handle(instance: number, call: HostMessage['call']) {
           : await closeLibrary(instance, call.name as string, call.remove === true);
       reply();
       begin?.();
-    } catch (error) {
-      if (error instanceof WebAssembly.RuntimeError) throw error;
-      reply(error);
-    }
-    return;
+    } else if (open?.instance === instance) open.shell.send(call);
+    else if (call.id !== undefined) reply(new Error('Local database is closed'));
+  } catch (error) {
+    // The page waits for a reply to every call with an id, and a write waiting on one blocks every later read and write.
+    if (error instanceof WebAssembly.RuntimeError || call.id === undefined) throw error;
+    reply(error);
   }
-  if (open?.instance === instance) return open.shell.send(call);
-  if (call.id !== undefined) reply(new Error('Local database is closed'));
 }
 
 /** Serializes open, close, and core calls sequentially in arrival order; unhandled errors report to the page while processing continues. */

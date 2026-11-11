@@ -120,6 +120,17 @@ test('calls from an instance other than the open one fail with "Local database i
   expect(posted.slice(before)).toEqual([{ instance: 7, received: [{ type: 'reply', id: 2 }] }]);
 });
 
+test('a call with no JSON form (a BigInt parameter) is answered with the error, and one without id is reported to the page', async () => {
+  await call(10, { type: 'open', id: 1, name: 'worker-unserializable', options: {} });
+  const error = expect.objectContaining({ message: 'Do not know how to serialize a BigInt' });
+  expect(await call(10, { type: 'query', id: 2, sql: 'SELECT ?', params: [10n] })).toEqual({
+    instance: 10,
+    received: [{ type: 'reply', id: 2, error }],
+  });
+  expect(await call(10, { type: 'token', request: 1, token: 10n })).toEqual({ type: 'error', error });
+  await call(10, { type: 'close', id: 3, name: 'worker-unserializable', remove: false });
+});
+
 // A trap leaves the Worker broken (the page discards it), so this runs last.
 test('a core panic (WebAssembly trap) marks the Worker broken, whether opening or handling a call', async () => {
   expect(await call(4, { type: 'open', id: 1, name: 'worker-panic', options: { panic: true } })).toEqual({
