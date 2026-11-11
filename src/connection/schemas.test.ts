@@ -6,7 +6,9 @@ import { SchemaMismatch } from '../tables/declaration.ts';
 import { Device } from '../test/test-device.ts';
 import { drain } from '../test/test-drive.ts';
 import { privateCloud } from '../test/test-entry.ts';
+import { captureReported } from '../test/test-errors.ts';
 import { type CloudEnd, connectWithoutJitter, Network } from '../test/test-network.ts';
+import { write } from '../test/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
 
 // Schema incompatibility between device and cloud: stops and reports updateNeeded if using retired tables or columns;
@@ -24,6 +26,7 @@ const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY, stars INTEGER)';
 function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?: string[], create = createNote) {
   const cloud = cloudStorage(createNote);
   let server: Server<CloudEnd>;
+  let space: Space;
   let conflicts = 0;
   let mismatched = false;
   let garbled = false;
@@ -38,9 +41,11 @@ function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?
       },
     }),
   );
-  const deploy = (tables: SQLiteTable[], gone?: string[]) => {
-    network.accepted = new Set();
-    server = new Server(network.sockets(), new Space(cloud, tables, gone ? { retired: gone } : {}));
+  /** `attached` keeps the sockets, as a code update does with hibernated ones: the object next starts with them. */
+  const deploy = (tables: SQLiteTable[], gone?: string[], attached = false) => {
+    if (!attached) network.accepted = new Set();
+    space = new Space(cloud, tables, gone ? { retired: gone } : {});
+    server = new Server(network.sockets(), space);
   };
   deploy(cloudTables, retired);
   const device = new Device(deviceStorage(create), deviceTables);
@@ -53,7 +58,7 @@ function setup(cloudTables: SQLiteTable[], deviceTables: SQLiteTable[], retired?
     garbled = true;
   };
   const run = (advance = true) => drain(network, { advance });
-  return { network, connection, deploy, run, conflicts: () => conflicts, mismatch, garble };
+  return { network, device, connection, deploy, run, conflicts: () => conflicts, mismatch, garble, head: () => space.head() };
 }
 
 test('device includes undeployed columns (app released ahead): HTTP pull rejected, retries with backoff without updateNeeded', async () => {
@@ -141,6 +146,34 @@ test('cloud deploys compatible schema while connected: WebSocket closes with 400
   await run();
   expect(connection.status()).toMatchObject({ connected: true, updateNeeded: false });
   expect(conflicts()).toBe(1);
+  connection.stop();
+});
+
+test('cloud starts with a column entering sync while a device stays connected: the push that woke it uploads after the device downloads and reconnects, reporting nothing', async () => {
+  const reported = captureReported();
+  const { device, connection, deploy, run, head } = setup([note], [note], undefined, createBare);
+  connection.start();
+  await run();
+  await write(device, (tx) => tx.insert(note).values({ id: 'n1' }));
+  deploy([noteWithStars], undefined, true);
+  await run();
+  expect(device.private.pendingCount()).toBe(0);
+  expect(device.private.cookie()).toEqual(head());
+  expect(connection.status()).toMatchObject({ connected: true, updateNeeded: false });
+  expect(connection.status().downloadError).toBeUndefined();
+  expect(reported).toEqual([]);
+  connection.stop();
+});
+
+test('cloud starts with the same schema while a device stays connected: its connection is kept', async () => {
+  const { network, connection, deploy, run } = setup([note], [note], undefined, createBare);
+  connection.start();
+  await run();
+  const [socket] = network.accepted;
+  deploy([note], undefined, true);
+  await run();
+  expect([...network.accepted]).toEqual([socket]);
+  expect(socket?.readyState).toBe(WebSocket.OPEN);
   connection.stop();
 });
 

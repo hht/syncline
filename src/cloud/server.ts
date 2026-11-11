@@ -95,6 +95,7 @@ export class Server<S extends Socket> {
    * limit specifies HTTP pull chunk budget; WebSocket messages are further capped at socketLimit bytes.
    * events receives connection closures and push failures; quota enforces token bucket rate limiting;
    * dailyWrites caps billed SQLite row writes per UTC day; connections caps concurrent open sockets (default 32).
+   * Closes the sockets still attached with pullNeeded when space changed its sync scope on open.
    */
   constructor(
     sockets: Sockets<S>,
@@ -116,6 +117,11 @@ export class Server<S extends Socket> {
     this.#dailyWrites = dailyWrites;
     this.#connections = connections;
     this.#tokens = quota?.burst ?? 0;
+    // A code update keeps hibernated sockets attached, and the next poke would not chain onto their cookie, one commit before the scope
+    // change: closed to pull the new scope and reconnect (Enter and Leave in the TLA+ models drop every connection).
+    if (space.evolvedFrom)
+      for (const socket of sockets.getWebSockets())
+        if (socket.readyState === WebSocket.OPEN) closeSocket(this.#events, socket, pullNeeded, 'scope changed');
   }
 
   /**

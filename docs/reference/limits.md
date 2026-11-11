@@ -102,6 +102,8 @@ The cloud holds a pushed write it cannot run, for example one breaking a rule ab
 
 Adding a table, adding a synced column, or changing a bucket rule makes each device download that table again. Devices keep showing the old rows until the new ones land.
 
+A device that stays connected to a private space through the deploy hears about it when the space next does any work, such as a write or another device connecting. The cloud then closes its connection (4000) and it downloads and reconnects.
+
 ### Data checks
 
 Private spaces check device data against the cloud once a day: when newly installed, after a reset, and a full day after the previous round completed, while no writes are pending. Each device requests at most 1,000,000 rows per day (`checksumRowsPerDay`). Large spaces take several days per round.
