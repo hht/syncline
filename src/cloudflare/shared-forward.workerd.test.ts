@@ -112,7 +112,7 @@ test('returns 400 without forwarding to broadcast shards on unrecognized WebSock
   expect(shards).toEqual([]);
 });
 
-test("routes each WebSocket to a random one of the definition's broadcast shards, 128 unless the definition sets shards", async () => {
+test("routes each WebSocket to a random one of the definition's broadcast shards, 16 unless the definition sets shards", async () => {
   const shards: string[] = [];
   const route = (shardsSet?: number) => ({
     entry: () => ({ fetch: async () => new Response('{}') }),
@@ -136,7 +136,7 @@ test("routes each WebSocket to a random one of the definition's broadcast shards
   } finally {
     random.mockRestore();
   }
-  expect(shards).toEqual(['catalog#0', 'catalog#127', 'catalog#1']);
+  expect(shards).toEqual(['catalog#0', 'catalog#15', 'catalog#1']);
 });
 
 test('a cached entrypoint called without props fails instead of serving a pull to an unknown subscription', async () => {

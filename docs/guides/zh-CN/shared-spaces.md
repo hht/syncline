@@ -15,7 +15,7 @@
 | 部分 | 作用 |
 |---|---|
 | `SynclineSharedSpace` | 存放数据的 Durable Object。服务端写入都写到这里。 |
-| `SynclineBroadcast` | 承载设备实时连接的 Durable Object。共享空间默认把连接分散到 128 个这样的对象上（`shards`）。 |
+| `SynclineBroadcast` | 承载设备实时连接的 Durable Object。共享空间默认把连接分散到 16 个这样的对象上（`shards`）。 |
 | `SynclineSharedEntry` | 响应下载请求的 Worker 入口。Workers Cache 位于它前面。 |
 | `forwardShared` | 在 Worker 的 `fetch` 里调用。先检查 token，再把实时连接转给广播对象、把下载转给入口。 |
 
@@ -131,7 +131,7 @@ export default {
 - **`space`**：共享空间 Durable Object 的名字。使用固定的名字。服务端写入必须到达同一个名字：`env.SHARED_SPACE.getByName('shared')`。名字不同就是不同的空间。
 - **`definition`**：构建共享空间时用的同一个对象。
 
-空间名加上 `#127`（默认分片数时）必须在 1,024 字节以内。只能按名字访问空间（`getByName` 或 `idFromName`）。用 `newUniqueId` 或 `idFromString` 得到的 ID 会让它抛错。
+空间名加上 `#15`（默认分片数时）必须在 1,024 字节以内。只能按名字访问空间（`getByName` 或 `idFromName`）。用 `newUniqueId` 或 `idFromString` 得到的 ID 会让它抛错。
 
 私有空间和共享空间共用一个 Worker，按路径路由，如上所示。
 

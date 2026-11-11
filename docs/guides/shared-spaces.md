@@ -13,7 +13,7 @@ A shared space needs four parts in your Worker:
 | Part | What it does |
 |---|---|
 | `SynclineSharedSpace` | Durable Object holding the data. Your server writes go here. |
-| `SynclineBroadcast` | Durable Objects that hold devices' live connections. The shared space spreads them over 128 of these by default (`shards`). |
+| `SynclineBroadcast` | Durable Objects that hold devices' live connections. The shared space spreads them over 16 of these by default (`shards`). |
 | `SynclineSharedEntry` | Worker entrypoint that answers downloads. Workers Cache sits in front of it. |
 | `forwardShared` | Called from your Worker's `fetch`. Checks the token, then sends live connections to a broadcast object and downloads to the entry. |
 
@@ -129,7 +129,7 @@ The `route` fields:
 - **`space`**: the name of the shared space Durable Object. Use a fixed name. Your server writes must reach the same name: `env.SHARED_SPACE.getByName('shared')`. Different names are separate spaces.
 - **`definition`**: the same object the space was built with.
 
-The space name, plus `#127` with the default shards, must fit in 1,024 bytes. Reach the space only by name (`getByName` or `idFromName`). An ID from `newUniqueId` or `idFromString` makes it throw.
+The space name, plus `#15` with the default shards, must fit in 1,024 bytes. Reach the space only by name (`getByName` or `idFromName`). An ID from `newUniqueId` or `idFromString` makes it throw.
 
 Private and shared spaces share one Worker. Route by path, as above.
 

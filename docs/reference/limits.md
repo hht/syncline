@@ -120,7 +120,9 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 ## Shared spaces
 
 - A device's subscription takes at most 8,192 bytes encoded as JSON, sorted bucket names included, and at most 256 bytes per bucket. That is about 170 buckets when rules have one UUID parameter.
-- The space name, with the suffix of its last shard (`#127` with the default 128 shards), fits in 1,024 bytes (UTF-8).
+- The space name, with the suffix of its last shard (`#15` with the default 16 shards), fits in 1,024 bytes (UTF-8).
+- Live connections are spread over 16 broadcast shards by default (`shards`). Every server write sends one billed request to each shard and waits for all of them.
+- Plan for about 1,000 devices online at once per shard, and raise `shards` beyond that. Measured on Cloudflare, a change reaching all 1,000 devices on one shard added about 70 ms to the server write.
 - Each rule with a filter or bucket columns adds 1 billed row write per insert, and per update of the columns it uses.
 - A table can belong to at most 4,064 rules.
 - New devices start from the nearest saved point, recorded every 1,000 modified rows by default (`chunkRows`).
@@ -203,7 +205,7 @@ Rare situations. Most apps never meet them.
 - After a deploy changes rules, online devices hear about it within 1 hour.
 - A server write cut short by a restart of the shared space (the write throws) may reach connected devices only when the space next handles a request, or at its hourly wake-up, up to 1 hour later. Retrying the write delivers it at once.
 - After a shared space is rebuilt, devices may first get old data from cache. The cloud then makes them download again.
-- One request can await about 78 publishes before reaching Cloudflare's subrequest limit. Shards past the limit get the change about 1 second later.
+- One request can await about 625 publishes before reaching Cloudflare's subrequest limit. Shards past the limit get the change about 1 second later.
 - Rows a new rule places in a bucket over 256 bytes stay in the space, but no device can subscribe to that bucket.
 - Rarely, a connecting device can stay behind the latest change until the next change reaches it or its token expires and it reconnects. It takes, in order: a live update the cloud gave up on (it timed out, or the shared space restarted) reaching a shard after that shard restarted, then the shard failing to look up the latest change as the device connects.
 

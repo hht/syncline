@@ -56,6 +56,10 @@ test.each([
   `takes at most ${count(subscriptionBytes)} bytes encoded as JSON`,
   `at most ${count(bucketBytes)} bytes per bucket`,
   `(\`#${defaultShards - 1}\` with the default ${count(defaultShards)} shards), fits in ${count(nameBytes)} bytes (UTF-8)`,
+  `spread over ${count(defaultShards)} broadcast shards by default (\`shards\`)`,
+  // Cloudflare allows 10,000 subrequests per invocation by default, and a publish calls every shard.
+  // @see https://developers.cloudflare.com/workers/platform/limits/#subrequests
+  `One request can await about ${count(Math.floor(10_000 / defaultShards))} publishes`,
   `recorded every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
   `in steps of up to ${count(readRows)} rows`,
   // Timing
