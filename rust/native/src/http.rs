@@ -31,7 +31,12 @@ pub struct Request {
 
 pub fn agent() -> ureq::Agent {
     // Failure deadline when no data arrives, matching message receive and token request timeouts.
-    let stall = Some(Duration::from_secs_f64(syncline::limits::RECEIVE_TIMEOUT / 1000.0));
+    failing_after(Duration::from_secs_f64(syncline::limits::RECEIVE_TIMEOUT / 1000.0))
+}
+
+/// An agent whose requests fail once resolving, connecting, or a single read or write takes longer than `stall`.
+fn failing_after(stall: Duration) -> ureq::Agent {
+    let stall = Some(stall);
     #[cfg(target_vendor = "apple")]
     let roots = ureq::tls::RootCerts::PlatformVerifier;
     #[cfg(not(target_vendor = "apple"))]
@@ -106,15 +111,19 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    /// Starts an ephemeral local HTTP server: receives one request, replies with response bytes, returns GET result and lowercase headers.
-    fn fetched(response: Vec<u8>) -> (Result<(u16, String), ureq::Error>, String) {
+    /// Starts an ephemeral local HTTP server: receives one request and lets `respond` answer it; returns `agent`'s GET result and
+    /// the request's lowercase headers.
+    fn served(
+        agent: &ureq::Agent,
+        respond: impl FnOnce(&mut std::net::TcpStream) + Send + 'static,
+    ) -> (Result<(u16, String), ureq::Error>, String) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0; 1024];
             let read = stream.read(&mut request).unwrap();
-            stream.write_all(&response).unwrap();
+            respond(&mut stream);
             String::from_utf8_lossy(&request[..read]).to_lowercase()
         });
         let request = Request {
@@ -124,13 +133,36 @@ mod tests {
             headers: HashMap::new(),
             body: None,
         };
-        let result = send(&agent(), request);
+        let result = send(agent, request);
         (result, server.join().unwrap())
+    }
+
+    /// The device's GET result for a server replying with `response`, and the request's lowercase headers.
+    fn fetched(response: Vec<u8>) -> (Result<(u16, String), ureq::Error>, String) {
+        served(&agent(), move |stream| stream.write_all(&response).unwrap())
     }
 
     #[test]
     fn address_resolution_fails_after_the_receive_timeout() {
         assert_eq!(agent().config().timeouts().resolve, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn a_response_that_stops_arriving_mid_body_fails_once_a_read_waits_longer_than_the_stall_time() {
+        let stall = Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        let (result, _) = served(&failing_after(stall), |stream| {
+            // Under load the device may have given up before this is written.
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhalf");
+            // Keeps the connection open, sending nothing more, until the device gives up and closes it; closing it after 5 s
+            // fails a device still waiting instead of hanging the test.
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let _ = stream.read(&mut [0; 64]);
+        });
+        assert!(matches!(result, Err(ureq::Error::Timeout(ureq::Timeout::PerRead))), "{result:?}");
+        let elapsed = started.elapsed();
+        assert!(elapsed >= stall && elapsed < Duration::from_secs(10), "{elapsed:?}");
+        assert_eq!(agent().config().timeout_per_read(), Some(Duration::from_secs(30)));
     }
 
     #[test]

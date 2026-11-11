@@ -1,4 +1,4 @@
-//! Establishes a WebSocket connection: resolves addresses, races IPv6 and IPv4 TCP connections, performs the TLS handshake (rustls with ring) and WebSocket handshake synchronously with a per-step `CONNECT_TIMEOUT`, then switches the stream to non-blocking for the I/O loop.
+//! Establishes a WebSocket connection: resolves addresses, races IPv6 and IPv4 TCP connections, performs the TLS handshake (rustls with ring) and WebSocket handshake synchronously with a per-step timeout (`CONNECT_TIMEOUT` on devices), then switches the stream to non-blocking for the I/O loop.
 //! What it should not know: how frames are sent and received after connecting.
 
 use rustls::pki_types::ServerName;
@@ -18,7 +18,7 @@ pub(in crate::socket) enum Unconnected {
 }
 
 /// Maximum duration for each of TCP connect, TLS handshake, and WebSocket handshake: the core schedules a deadline for the first incoming message as soon as it requests a connection, so this timeout prevents a blocked connect thread from hanging indefinitely
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Parsed connection target: handshake request, host, port, and whether TLS is used
 struct Target {
@@ -56,8 +56,13 @@ fn target(url: &str, protocols: &[String]) -> Result<Target, String> {
     })
 }
 
-/// Connects and completes the handshake (blocking, up to `CONNECT_TIMEOUT` per step), then switches the socket to non-blocking mode
-pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) -> Result<WebSocket<Stream>, Unconnected> {
+/// Connects and completes the handshake (blocking, up to `timeout` per step), then switches the socket to non-blocking mode
+pub(super) fn connect(
+    url: &str,
+    protocols: &[String],
+    tls: &Arc<ClientConfig>,
+    timeout: Duration,
+) -> Result<WebSocket<Stream>, Unconnected> {
     let Target {
         request,
         host,
@@ -69,15 +74,14 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
         let tls = ClientConnection::new(tls.clone(), name).map_err(|error| Unconnected::Invalid(error.to_string()))?;
         Stream::Tls(Box::new(StreamOwned::new(
             tls,
-            self::tcp(&host, port).map_err(Unconnected::Unreachable)?,
+            self::tcp(&host, port, timeout).map_err(Unconnected::Unreachable)?,
         )))
     } else {
-        Stream::Plain(self::tcp(&host, port).map_err(Unconnected::Unreachable)?)
+        Stream::Plain(self::tcp(&host, port, timeout).map_err(Unconnected::Unreachable)?)
     };
     let (ws, _) = tungstenite::client(request, stream).map_err(|error| {
         Unconnected::Unreachable(match error {
-            // Untested: reaching it takes a server silent during the handshake for `CONNECT_TIMEOUT`.
-            HandshakeError::Interrupted(_) => format!("handshake timed out ({}s)", CONNECT_TIMEOUT.as_secs()),
+            HandshakeError::Interrupted(_) => format!("handshake timed out ({timeout:?})"),
             HandshakeError::Failure(error) => error.to_string(),
         })
     })?;
@@ -89,15 +93,16 @@ pub(super) fn connect(url: &str, protocols: &[String], tls: &Arc<ClientConfig>) 
     Ok(ws)
 }
 
-/// Connects to one of the resolved addresses (racing address families; see [`race`]) and configures read/write timeouts
-fn tcp(host: &str, port: u16) -> Result<TcpStream, String> {
+/// Connects to one of the resolved addresses within `timeout` (racing address families; see [`race`]) and gives each read and write
+/// of the handshakes that follow the same `timeout`
+fn tcp(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
     let addresses: Vec<SocketAddr> = (host, port).to_socket_addrs().map_err(|error| error.to_string())?.collect();
-    let tcp = race(addresses, Instant::now() + CONNECT_TIMEOUT, |address, timeout| {
-        TcpStream::connect_timeout(&address, timeout)
+    let tcp = race(addresses, Instant::now() + timeout, |address, share| {
+        TcpStream::connect_timeout(&address, share)
     })?;
     tcp.set_nodelay(true)
-        .and_then(|()| tcp.set_read_timeout(Some(CONNECT_TIMEOUT)))
-        .and_then(|()| tcp.set_write_timeout(Some(CONNECT_TIMEOUT)))
+        .and_then(|()| tcp.set_read_timeout(Some(timeout)))
+        .and_then(|()| tcp.set_write_timeout(Some(timeout)))
         .map_err(|error| error.to_string())?;
     Ok(tcp)
 }
@@ -162,8 +167,8 @@ fn serial<T>(
     let mut first = None;
     for (index, address) in addresses.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
+        // Only addresses after the first run out of time, except a fallback family started as the deadline passes, whose error `race` drops.
         if remaining.is_zero() {
-            first.get_or_insert_with(|| format!("connect to {address} timed out ({}s)", CONNECT_TIMEOUT.as_secs()));
             break;
         }
         let share = remaining / u32::try_from(addresses.len() - index).unwrap_or(u32::MAX);
@@ -233,6 +238,38 @@ mod tests {
             return Err(std::io::ErrorKind::TimedOut.into());
         }
         Ok(address)
+    }
+
+    /// Starts a server that accepts one connection and never answers, keeping it open until the device closes it (closing it
+    /// after 5 s fails a device still waiting instead of hanging the test); returns its port.
+    fn silent() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut heard = [0; 1024];
+            while matches!(stream.read(&mut heard), Ok(read) if read > 0) {}
+        });
+        port
+    }
+
+    #[test]
+    fn a_server_silent_during_the_tls_or_websocket_handshake_fails_the_connection_once_the_timeout_passes() {
+        let network = crate::socket::Network::new();
+        let timeout = Duration::from_millis(300);
+        for scheme in ["ws", "wss"] {
+            let started = Instant::now();
+            let Err(Unconnected::Unreachable(reason)) =
+                connect(&format!("{scheme}://127.0.0.1:{}/sync", silent()), &[], &network.tls, timeout)
+            else {
+                panic!("{scheme}: expected the server to be unreachable")
+            };
+            assert_eq!(reason, "handshake timed out (300ms)", "{scheme}");
+            let elapsed = started.elapsed();
+            assert!(elapsed >= timeout && elapsed < Duration::from_secs(10), "{scheme}: {elapsed:?}");
+        }
+        assert_eq!(format!("{CONNECT_TIMEOUT:?}"), "30s");
     }
 
     #[test]
