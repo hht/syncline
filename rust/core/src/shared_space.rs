@@ -116,7 +116,7 @@ impl SharedSpace {
                 owner::record(db, &self.name, &owner)?;
             }
         }
-        tables::define(db, &self.tables)?;
+        tables::define(db, &self.tables, &[])?;
         let synced = SyncedTables::new(db, &self.tables, &self.name, retired)?;
         let names: Vec<String> = synced.declaration().keys().cloned().collect();
         self.synced = Some(synced);

@@ -119,15 +119,25 @@ function checkReferences(table: SQLiteTable) {
   }
 }
 
+// Throws for a key SQLite counts up, which each device does on its own.
+// @see https://sqlite.org/autoinc.html
+function checkCounted(table: string, column: SQLiteColumn) {
+  if ('autoIncrement' in column && column.autoIncrement === true)
+    throw new Error(
+      `Column ${table}.${column.name} is autoIncrement: devices would give different rows the same key; give each row a key no other device produces, such as a UUID`,
+    );
+}
+
 /**
  * Validates declared schema tables before database initialization.
  * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, storage
  * affinities, and that foreign key columns are stored as the columns they reference.
+ * Tables are synced tables, which must not use autoIncrement, unless `localOnly` says they stay on the device.
  * @see https://sqlite.org/json1.html#path_arguments
  * @see https://tc39.es/ecma262/#sec-ordinaryownpropertykeys
  * @see https://sqlite.org/sessionintro.html
  */
-export function checkDeclared(tables: SQLiteTable[]) {
+export function checkDeclared(tables: SQLiteTable[], { localOnly = false } = {}) {
   const seen = new Map<string, string>();
   for (const table of tables) {
     const { name, columns } = getTableConfig(table);
@@ -143,6 +153,7 @@ export function checkDeclared(tables: SQLiteTable[]) {
     for (const column of columns) {
       checkColumnName(name, column.name);
       storageTypeOf(name, column);
+      if (!localOnly) checkCounted(name, column);
     }
     checkReferences(table);
   }

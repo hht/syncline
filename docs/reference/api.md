@@ -14,7 +14,7 @@ Opens (or creates) a local database, creates tables and adds columns according t
 
 Opening fails in one of two ways:
 
-- `openSyncline` throws for problems it sees without the database: a missing `userID`, a database already open on mobile, and the declaration rules checked in JavaScript (names, primary keys, column types, foreign key column types, defaults, indexes, `readOnly`).
+- `openSyncline` throws for problems it sees without the database: a missing `userID`, a database already open on mobile, and the declaration rules checked in JavaScript (names, primary keys, `autoIncrement`, column types, foreign key column types, defaults, indexes, `readOnly`).
 - Everything else rejects `waitForReady()`, shows as `downloadError`, and makes `sync()` reject. This covers rules checked while opening the database (a changed column type, a new non-null column without a default, table name case, what a foreign key points at), `PendingWritesError`, an invalid `url`, and the database open in another tab.
 
 Await `waitForReady()` before relying on the database. On mobile, if opening the private space fails (such as `PendingWritesError` or a changed column type), the database is closed, so the name can be opened again. After an invalid `url` it stays open: call `close()` before opening it again.

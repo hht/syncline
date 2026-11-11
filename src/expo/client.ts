@@ -53,7 +53,7 @@ function opening<S extends Schema>(options: OpenOptions<S>) {
   return {
     config: {
       synced: deviceDefinitions(tables),
-      localOnly: deviceDefinitions(localTables),
+      localOnly: deviceDefinitions(localTables, { localOnly: true }),
       readOnly: [...readOnlyOf(tables, readOnly)],
       retired,
       schemas: [...tables, ...localTables].filter((table) => validation?.has(table)).map(tableName),

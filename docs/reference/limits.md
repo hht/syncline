@@ -29,9 +29,12 @@ Breaking a rule throws when the app opens the database, except a table name spel
 ### Keys
 
 - Every table needs a primary key, local-only tables included.
+- Give every row of a synced table a primary key no other device will produce, such as a UUID. SQLite fills in a missing integer key only in local-only tables, and `autoIncrement` is allowed only there.
 - A foreign key can point only at the primary key of a synced table in the same space.
 - A foreign key column must have the same storage type as the column it points at, local-only tables included.
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
+
+An insert that leaves out a primary key column of a synced table fails, unless the column has a default. `autoIncrement` on a synced table throws when the app opens the database. In the cloud, `SynclineSpace` throws.
 
 A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` throws.
 
@@ -190,6 +193,7 @@ Rare situations. Most apps never meet them.
 - A table removed from `localOnly` that was never synced is left alone. So are the tables of a shared space the app no longer opens.
 - A table returning to sync, moving to another space, or already holding rows when a space first declares it is wiped before any read and downloaded again. Pending writes are kept.
 - Renaming a synced table onto the name of another declared table goes undetected. The space keeps its rows as the other table's.
+- A table moving between synced and local-only keeps the key behavior it was created with. One created local-only still fills in a missing integer key after it becomes synced, the same key on every device, so give every insert its key. One created synced still refuses a missing key after it becomes local-only.
 
 ### Devices
 

@@ -213,9 +213,9 @@ export type TableDefinition = {
   foreignKeys: ReturnType<typeof foreignKeysOf>;
 };
 
-/** Builds table definitions passed to the Rust device core for local SQLite initialization. */
-export function deviceDefinitions(tables: SQLiteTable[]): TableDefinition[] {
-  checkDeclared(tables);
+/** Builds table definitions passed to the Rust device core for local SQLite initialization, checked as {@link checkDeclared} checks them. */
+export function deviceDefinitions(tables: SQLiteTable[], kind: { localOnly?: boolean } = {}): TableDefinition[] {
+  checkDeclared(tables, kind);
   return tables.map((table) => {
     const { name } = getTableConfig(table);
     return {

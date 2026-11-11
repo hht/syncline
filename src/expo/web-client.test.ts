@@ -1,4 +1,4 @@
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { flush } from '../test/test-drive.ts';
 import { closed, worker } from '../test/test-web.ts';
@@ -52,6 +52,16 @@ test('open carries the user ID, discardPending, and checksum budget given to ope
     expect(() =>
       openSyncline({ name: 'web-test', schema: {}, url: 'https://sync.test/space', token: async () => 'valid', userID: userID as string }),
     ).toThrow('userID must be a non-empty string');
+});
+
+test('openSyncline refuses autoIncrement on a synced table and on a shared space table, and carries a local-only table using it', async () => {
+  const counted = sqliteTable('counted', { id: integer().primaryKey({ autoIncrement: true }) });
+  await expect(openedWith({ schema: { counted } })).rejects.toThrow('Column counted.id is autoIncrement');
+  const { space, open } = await openedWith({ localOnly: { counted } });
+  expect(open.options).toMatchObject({ config: { localOnly: [{ name: 'counted', key: ['id'] }] } });
+  expect(() => space.openShared('catalog', { schema: { counted }, url: 'https://sync.test/catalog' })).toThrow(
+    'Column counted.id is autoIncrement',
+  );
 });
 
 test('a write begins, executes, and commits under one write id, and a body that throws ends it without committing', async () => {

@@ -158,13 +158,13 @@ impl Database {
         Ok(json!({ "columns": columns, "rows": rows, "written": written }).to_string())
     }
 
-    /// Defines tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
+    /// Defines tables as synced tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
     ///
     /// # Errors
     /// Returns an error if the declaration is invalid JSON, conflicts with existing tables, or fails execution.
     pub fn define(&self, tables: &str) -> Result<(), JsError> {
         let tables: Vec<Table> = parsed(tables).map_err(failure)?;
-        tables::define(self.store().connection(), &tables).map_err(failure)
+        tables::define(self.store().connection(), &tables, &[]).map_err(failure)
     }
 
     #[wasm_bindgen(js_name = inTransaction)]

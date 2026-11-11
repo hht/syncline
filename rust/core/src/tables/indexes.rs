@@ -35,7 +35,7 @@ pub fn indexes_on(db: &Connection, table: &str) -> rusqlite::Result<Vec<Index>> 
     Ok(indexes)
 }
 
-/// Missing indexes for a table: declared indexes, plus leading column of each foreign key (omitted if already leading column of an index or primary key: rowid tables have automatic primary key indexes; integer primary keys are rowid);
+/// Missing indexes for a table: declared indexes, plus leading column of each foreign key (omitted if already leading column of an index or primary key: rowid tables have automatic primary key indexes; a sole INTEGER key is the rowid);
 /// indexes with identical columns already in database are omitted.
 pub(super) fn missing_indexes(db: &Connection, table: &Table) -> rusqlite::Result<Vec<Index>> {
     let leading: Vec<&String> = table

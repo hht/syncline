@@ -81,7 +81,7 @@ export class Device {
     this.#validator = new Validator(tables, validation, localOnly);
     const config = {
       synced: deviceDefinitions(tables),
-      localOnly: deviceDefinitions(localOnly),
+      localOnly: deviceDefinitions(localOnly, { localOnly: true }),
       readOnly: [...readOnlyOf(tables, readOnly)],
       retired,
       schemas: [...tables, ...localOnly].filter((table) => validation?.has(table)).map(tableName),
