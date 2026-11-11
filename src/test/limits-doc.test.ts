@@ -62,6 +62,8 @@ test.each([
   `One request can await about ${count(Math.floor(10_000 / defaultShards))} publishes`,
   `recorded every ${count(defaultRows)} modified rows by default (\`chunkRows\`)`,
   `in steps of up to ${count(readRows)} rows`,
+  // A pushed write bills its rows plus its commit row and its client row.
+  'An uploaded write is billed 2 row writes besides the rows it changes',
   // Timing
   `when a message fits in ${count(socketLimit)} bytes (UTF-8)`,
   `If no data is received for ${seconds(receiveTimeout)}`,

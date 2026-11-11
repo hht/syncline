@@ -224,6 +224,15 @@ test('write quota: batch exceeding available tokens closes connection with 1013 
   }
 });
 
+test('a pushed write bills 2 rows besides the rows it changes, as limits.md tells integrators: grouping rows in one write saves them', () => {
+  const space = new Space(cloudStorage(createNote), [note]);
+  const rows = (ids: string[]) => ids.map((id) => ({ op: 'put' as const, table: 'note', row: { id } }));
+  space.push([{ client: 'c1', id: 1, changes: rows(['a', 'b', 'c']) }]);
+  expect(space.pushedToday()).toBe(3 + 2);
+  space.push([put('c1', 2), put('c1', 3), put('c1', 4)]);
+  expect(space.pushedToday()).toBe(5 + 3 * (1 + 2));
+});
+
 test('device push billed row writes today (UTC): server writes and duplicates excluded; resumes from commit log across object restart, resets to 0 next day', () => {
   vi.useFakeTimers({ now: Date.UTC(2026, 9, 22, 23) });
   try {
