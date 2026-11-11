@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sharedWriteRows } from '../../src/common/limits.ts';
-import { untilJson, withWorker, wrangler } from './deploy.ts';
+import { account, cloudflare, untilJson, withWorker } from './deploy.ts';
 
 /**
  * Probes the CPU consumption of shared space server writes on live Cloudflare: each modified bucket records 1 to 2 row count updates, peaking when changes distribute across distinct buckets;
@@ -29,23 +29,15 @@ type Invocation = {
  * Avoids filtering by Worker name because analytics records scriptName as __unknown__ for these calls.
  */
 async function invocations(account: string, since: string) {
-  const token = wrangler('auth', 'token').trim().split('\n').at(-1);
-  const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query: `query($a: String!, $since: Time!) { viewer { accounts(filter: { accountTag: $a }) {
-        durableObjectsInvocationsAdaptiveGroups(limit: 5000, filter: { datetime_geq: $since }, orderBy: [datetime_ASC]) {
-          sum { requests } dimensions { datetime namespaceId objectId type } quantiles { cpuTimeP999 wallTimeP50 } } } } }`,
-      variables: { a: account, since },
-    }),
+  const body = await cloudflare('/graphql', {
+    query: `query($a: String!, $since: Time!) { viewer { accounts(filter: { accountTag: $a }) {
+      durableObjectsInvocationsAdaptiveGroups(limit: 5000, filter: { datetime_geq: $since }, orderBy: [datetime_ASC]) {
+        sum { requests } dimensions { datetime namespaceId objectId type } quantiles { cpuTimeP999 wallTimeP50 } } } } }`,
+    variables: { a: account, since },
   });
-  const body = (await response.json()) as {
-    data?: { viewer: { accounts: { durableObjectsInvocationsAdaptiveGroups: Invocation[] }[] } };
-    errors?: unknown;
-  };
-  if (!body.data) throw new Error(`GraphQL analytics error: ${JSON.stringify(body.errors)}`);
-  return body.data.viewer.accounts[0]?.durableObjectsInvocationsAdaptiveGroups ?? [];
+  const data = body.data as { viewer: { accounts: { durableObjectsInvocationsAdaptiveGroups: Invocation[] }[] } } | undefined;
+  if (!data) throw new Error(`GraphQL analytics error: ${JSON.stringify(body.errors)}`);
+  return data.viewer.accounts[0]?.durableObjectsInvocationsAdaptiveGroups ?? [];
 }
 
 /** Matches invocations with at least 100 ms of CPU time. */
@@ -75,9 +67,7 @@ function report(groups: Invocation[]) {
   console.log(`Total DO invocations: ${groups.reduce((sum, group) => sum + group.sum.requests, 0)}`);
 }
 
-const accounts = JSON.parse(wrangler('whoami', '--json')) as { accounts: { id: string }[] };
-const [account] = accounts.accounts;
-if (!account || accounts.accounts.length > 1) throw new Error('wrangler must be logged into exactly one account');
+const accountId = account();
 const since = new Date().toISOString();
 await withWorker('shared-wrangler.jsonc', async ({ secret, url }) => {
   const target = (path: string, query: Record<string, string> = {}) => `${url}${path}?${new URLSearchParams({ space, secret, ...query })}`;
@@ -98,5 +88,5 @@ await withWorker('shared-wrangler.jsonc', async ({ secret, url }) => {
     // Spaces writes apart so timestamps remain distinct in analytics.
     await sleep(10_000);
   }
-  report(await settled(account.id, since));
+  report(await settled(accountId, since));
 });
