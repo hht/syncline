@@ -110,6 +110,8 @@ Private spaces check device data against the cloud once a day: when newly instal
 
 A mismatched section is downloaded again. Pending writes are kept.
 
+Shared spaces are not checked. To download one again, call its `resync()`.
+
 ## Cloud storage
 
 - One space holds at most 10 GB. Past that, writes fail and uploads keep failing (`push.failed`).
