@@ -10,7 +10,7 @@ iOS, Android, and web share the same entrypoint and options: bundles on mobile r
 
 ### `openSyncline(options): Syncline`
 
-Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open, it closes that instance first, then opens with the current options.
+Opens (or creates) a local database, creates tables and adds columns according to `schema`, and starts syncing the private space. On mobile, a process can open a given database only once; opening it again throws an error (call `close` first). If a background task's `syncOnce` currently has the database open, it closes that instance first, then opens with the current options. On web, opening a database closes the one already open, whatever its name: later queries, writes, and `sync()` calls on that instance fail with `Local database is closed`.
 
 Opening fails in one of two ways:
 
