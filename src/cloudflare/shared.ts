@@ -210,7 +210,7 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
 /** Broadcast shard Durable Object: bridges hibernatable WebSockets to {@link Broadcast} in memory. */
 export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
   readonly #broadcast: Broadcast<WebSocket>;
-  /** Scheduled alarm epoch ms, or null if no alarm is scheduled. */
+  /** Scheduled alarm epoch ms, null if no alarm is scheduled, undefined until read from storage. */
   #alarm: number | null | undefined;
 
   constructor(ctx: DurableObjectState, env: Env, shared: DurableObjectNamespace<SynclineSharedSpace>, onEvent?: Events) {
@@ -258,7 +258,11 @@ export class SynclineBroadcast<Env = unknown> extends DurableObject<Env> {
    */
   async #wakeBy(at: number) {
     const minute = Math.ceil(Math.min(at, Date.now() + 86_400_000) / 60_000) * 60_000;
-    if (this.#alarm === undefined) this.#alarm = await this.ctx.storage.getAlarm();
+    if (this.#alarm === undefined) {
+      const stored = await this.ctx.storage.getAlarm();
+      // Connections accepted at once all read here: only the first to return records the stored alarm, the others keep what was set since.
+      if (this.#alarm === undefined) this.#alarm = stored;
+    }
     if (this.#alarm !== null && this.#alarm <= minute) return;
     this.#alarm = minute;
     await this.ctx.storage.setAlarm(minute);

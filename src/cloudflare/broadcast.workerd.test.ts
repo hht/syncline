@@ -99,3 +99,10 @@ test('closes expired connections via alarm with 4001 without active writes and r
   expect(open).toHaveLength(1);
   expect(await runInDurableObject(shard, (_, state) => state.storage.getAlarm())).toBe(Math.ceil(later / 60_000) * 60_000);
 });
+
+test('connections accepted at once by a shard that has not read its alarm yet leave the alarm at the earliest expiry minute', async () => {
+  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const soon = Date.now() + 120_000;
+  await Promise.all([connect(shard, soon), connect(shard, soon + 480_000)]);
+  expect(await runInDurableObject(shard, (_, state) => state.storage.getAlarm())).toBe(Math.ceil(soon / 60_000) * 60_000);
+});
