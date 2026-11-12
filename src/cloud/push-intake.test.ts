@@ -2,7 +2,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { pushBytes, writeBytes } from '../common/limits.ts';
 import { parseMutations } from '../common/parse.ts';
-import type { Mutation } from '../common/protocol.ts';
+import { type Mutation, pullNeeded } from '../common/protocol.ts';
 import { utf8Bytes } from '../common/size.ts';
 import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage } from '../test/test-storage.ts';
@@ -149,4 +149,13 @@ test('a server write touching no synced row makes no version and sends connectio
   expect(phone.sent).toEqual([]);
   server.mutate((tx) => tx.insert(note, { id: 's1' }));
   expect(phone.sent).toHaveLength(1);
+});
+
+test('a push arriving on a socket the cloud closed on accept is not executed: a device pushes as soon as its socket opens, before it hears the close', () => {
+  const { cloud, phone, server } = serving();
+  // A cookie off the cloud's history
+  server.accept(phone, { version: 7, nonce: 1 }, Number.POSITIVE_INFINITY);
+  expect(phone.closed).toEqual([pullNeeded]);
+  server.receive(phone, JSON.stringify([put(1)]));
+  expect(rows(cloud)).toEqual([]);
 });

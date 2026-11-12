@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 import { pullNeeded } from '../common/protocol.ts';
 import { flush, withFakeTimers } from '../test/test-drive.ts';
 import { captureReported } from '../test/test-errors.ts';
-import { workout, write } from '../test/test-schema.ts';
+import { workout, workouts, write } from '../test/test-schema.ts';
 import { failOnce, faultable, injectedError, isInjected } from '../test/test-storage.ts';
 import { heartbeat, linked, reconnect } from './test-connection.ts';
 
@@ -167,3 +167,23 @@ test('start() while started, reconnect() while stopped or resyncing, and a resyn
   expect(tokens).toBe(3);
   connection.stop();
 });
+
+test('a poke queued behind an open local write is dropped when its connection closes before the write ends: the reconnect catches up', () =>
+  withFakeTimers(async () => {
+    const harness = await linked();
+    const { space, storage, device, connection, sockets, message } = harness;
+    const { promise: gate, resolve } = Promise.withResolvers<void>();
+    const open = write(device, () => gate);
+    await flush();
+    const before = space.head();
+    message(JSON.stringify(space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }))));
+    await flush();
+    sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: 1006 }));
+    resolve();
+    await open;
+    await flush();
+    expect(device.private.cookie()).toEqual(before);
+    await reconnect(harness);
+    expect(workouts(storage)).toContainEqual({ id: 'w2', note: 'bench' });
+    connection.stop();
+  }));

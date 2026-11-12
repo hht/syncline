@@ -3,7 +3,7 @@ import type { Chunk } from '../common/protocol.ts';
 import { day, program, rules, schema } from '../test/test-catalog.ts';
 import { Device } from '../test/test-device.ts';
 import { createWorkout, install, pulled, tables, upload, workout, workouts, write } from '../test/test-schema.ts';
-import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+import { cloudStorage, deviceStorage, restoredStorage } from '../test/test-storage.ts';
 import { Commits, rowOverhead } from './commits.ts';
 import { Space } from './space.ts';
 
@@ -95,6 +95,37 @@ test('reopening object: floor is preserved and earlier cookies remain off histor
   expect(reopened.onHistory(early)).toBe(false);
   const device = new Device(deviceStorage(createWorkout), tables);
   expect(pulled(reopened, device).patch).toHaveLength(21);
+});
+
+test('cookie at the floor version of a history that point-in-time recovery abandoned: the floor matches by nonce too, so the device pulls from scratch and loses the row only that history had', async () => {
+  const { cloud, space } = written(10);
+  const recoveredCloud = restoredStorage(cloud.image());
+  const recovered = new Space(recoveredCloud, tables, { commitFloor });
+  rewrite(recovered, 10, 3000);
+  truncateAll(recovered);
+  const [low] = query(recoveredCloud, 'SELECT version, nonce FROM _syncline_low');
+  // The abandoned history goes on to the version the recovered one later truncates to.
+  space.mutate((tx) => tx.insert(workout, { id: 'abandoned', note: 'squat' }));
+  rewrite(space, 11, Number(low?.version));
+  const { device, storage } = await install(space);
+  expect(device.private.cookie()?.version).toBe(Number(low?.version));
+
+  const behind = pulled(recovered, device);
+  expect(behind.patch[0]).toEqual({ op: 'clear' });
+  await device.private.receive(behind);
+  expect(workouts(storage)).toEqual(workouts(recoveredCloud));
+});
+
+test('a write pushed again after its commit was truncated is not executed twice: the mutation ID a client reached outlives the log', () => {
+  const { cloud, space } = written(0);
+  const retried = [{ client: 'c1', id: 1, changes: [{ op: 'put' as const, table: 'workout', row: { id: 'mine', note: 'first' } }] }];
+  expect(space.push(retried)?.lmids).toEqual({ c1: 1 });
+  rewrite(space, 0, 3000);
+  space.mutate((tx) => tx.update(workout, { id: 'mine', note: 'changed by the server' }));
+  truncateAll(space);
+  expect(range(cloud).first).toBeGreaterThan(1);
+  expect(space.push(retried)).toBeUndefined();
+  expect(workouts(cloud).find(({ id }) => id === 'mine')?.note).toBe('changed by the server');
 });
 
 test('truncation step cuts at exact version reaching target without exceeding it, deleting all earlier commits; trims from version 0 when un-truncated; skips head', () => {

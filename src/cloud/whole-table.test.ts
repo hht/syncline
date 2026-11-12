@@ -2,7 +2,9 @@ import { expect, test } from 'vitest';
 import type { Chunk } from '../common/protocol.ts';
 import { Device } from '../test/test-device.ts';
 import { workout } from '../test/test-schema.ts';
+import { RecordingSocket } from '../test/test-sockets.ts';
 import { cloudStorage, deviceStorage } from '../test/test-storage.ts';
+import { Server } from './server.ts';
 import { Space } from './space.ts';
 import { catchUp, createTag, createWorkout, rows, tag, workoutWithReps } from './test-evolution.ts';
 
@@ -75,5 +77,39 @@ test('a column leaving sync mid incremental pull sends rows of its table sent be
     put,
     { op: 'drop', table: 'workout', columns: ['reps'] },
     put,
+  ]);
+});
+
+test('a table leaving sync and returning within one incremental pull: the drop recorded when it left is not sent after its rows', () => {
+  const cloud = cloudStorage(createWorkout, createTag);
+  const both = new Space(cloud, [workout, tag]);
+  both.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Legs' }));
+  const base = both.head();
+  // A release rolled back and deployed again while the device was away
+  new Space(cloud, [workout]);
+  const space = new Space(cloud, [workout, tag]);
+  expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
+    { op: 'drop', table: 'tag' },
+    { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Legs' } },
+  ]);
+});
+
+test('a device connecting with a cookie from before a table entered sync receives the table in the catch-up of its connection', () => {
+  const cloud = cloudStorage(createWorkout, createTag);
+  cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', 't1', 'Legs');
+  const base = new Space(cloud, [workout]).head();
+  const space = new Space(cloud, [workout, tag]);
+  const server = new Server({ acceptWebSocket: () => undefined, getWebSockets: (): RecordingSocket[] => [] }, space);
+  const end = new RecordingSocket();
+  server.accept(end, base, Number.POSITIVE_INFINITY);
+  expect(end.sent.map((message) => JSON.parse(message) as unknown)).toEqual([
+    expect.objectContaining({
+      base,
+      cookie: space.head(),
+      patch: [
+        { op: 'drop', table: 'tag' },
+        { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Legs' } },
+      ],
+    }),
   ]);
 });
