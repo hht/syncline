@@ -28,7 +28,7 @@ ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations
 probes/         Probes run against live Cloudflare
 docs/           guides/ and reference/ are integrator documentation; internals/ is architecture decisions and model notes
-examples/       Example Worker and app code the guides quote, type-checked and tested by the gates
+examples/       Example Worker and app code the guides and the API reference quote, type-checked by the gates (the Worker also tested)
 tools/          Gates (check/) and model runner (dev/)
 ```
 

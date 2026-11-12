@@ -6,7 +6,7 @@ import { clangFirst, wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs'
 import { changedFiles } from './changed-files.ts';
 import { checkCommentRules } from './comment-rules.ts';
 import { coverage } from './coverage.ts';
-import { checkCommands, checkGateClaims, checkGuideCode, checkPackagePaths, checkPaths } from './docs.ts';
+import { checkCommands, checkExcerpts, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
 import { checkEnglish } from './english.ts';
 import { checkForbiddenWords } from './forbidden-words.ts';
 import { biome, deadCode, duplicates, layers, runTool, tests, together, typecheck } from './gates.ts';
@@ -71,7 +71,7 @@ const gates: Gate[] = [
   { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools', 'examples']) },
   { name: 'knip', icon: '🧹', run: deadCode(root) },
   // Report from 30 tokens: shared logic across modules should be extracted to one place; gates, dev scripts, and AGENTS.md follow .jscpd.json at 50.
-  // Guides are skipped: their code blocks are excerpts of examples/ by design (gate docs), and their translations repeat them.
+  // Guides and the API reference are skipped: their code blocks are excerpts of examples/ by design (gate docs), and their translations repeat them.
   // Rust starts from 40: declarations carry serde attributes; a single optional field (TS after?: Row is ~5 tokens) with skip_serializing_if is around twenty tokens;
   // sharing two or three fields across message types quickly exceeds 30 tokens.
   {
@@ -84,7 +84,7 @@ const gates: Gate[] = [
         {
           path: '.',
           minTokens: 30,
-          ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md,README.zh-CN.md,docs/reference/zh-CN/**,docs/guides/**',
+          ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md,README.zh-CN.md,docs/reference/zh-CN/**,docs/reference/api.md,docs/guides/**',
         },
         { path: 'rust', minTokens: 40 },
       ],
@@ -138,7 +138,7 @@ function checkDocs() {
     ...checkCommands(agents, Object.keys(scripts.scripts)),
     ...checkPackagePaths(docs, workspaceFiles()),
     ...checkGateClaims(docs, [...gates.map((gate) => gate.name), 'commit-message']),
-    ...checkGuideCode(docs, workspaceFiles('examples').map(read)),
+    ...checkExcerpts(docs, workspaceFiles('examples').map(read)),
   ];
 }
 

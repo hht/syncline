@@ -190,6 +190,7 @@ Reference:
 - [Errors](docs/reference/errors.md): what each error means and how to handle it.
 - [FAQ](docs/reference/faq.md): common questions.
 - [API](docs/reference/api.md): every export and option.
+- [Edge cases](docs/reference/edge-cases.md): rare situations most apps never meet.
 
 ## License
 

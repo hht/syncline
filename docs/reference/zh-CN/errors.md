@@ -56,7 +56,7 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 
 ### `waitForReady()` 被拒绝
 
-数据库无法打开。`downloadError` 显示同一个错误，`sync()` 也以它被拒绝。原因：
+数据库无法打开。`downloadError` 显示同一个错误，`sync()` 和 `resync()` 也以它被拒绝。原因：
 
 - 声明与已存储的数据库不一致，比如修改了列类型。见[表结构](limits.md#表结构)。
 - `PendingWritesError` 或另一个标签页，见下文。

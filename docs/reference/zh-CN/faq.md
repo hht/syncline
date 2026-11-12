@@ -43,7 +43,7 @@
 
 ### 怎么在用户之间共享数据？
 
-使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见[共享空间指南](../../guides/zh-CN/shared-spaces.md)，以及 [API](../api.md)（英文）中的 `openShared()`。
+使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见[共享空间指南](../../guides/zh-CN/shared-spaces.md)，以及 [API](api.md#opensharedname-options) 中的 `openShared()`。
 
 ### 应用能在后台同步吗？
 

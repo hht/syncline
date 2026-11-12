@@ -54,7 +54,7 @@ Listen with `onHeld` to show the user what failed. It reports each held write at
 
 ### `waitForReady()` rejects
 
-The database could not open. `downloadError` shows the same error, and `sync()` rejects with it. Causes:
+The database could not open. `downloadError` shows the same error, and `sync()` and `resync()` reject with it. Causes:
 
 - A declaration that does not match the stored database, such as a changed column type. See [Schema](limits.md#schema).
 - `PendingWritesError` or another tab, below.

@@ -195,7 +195,7 @@ Rare situations. Most apps never meet them.
 ### Tables entering and leaving sync
 
 - A table that leaves the private space without being retired keeps its rows until it returns or the signed-in user changes.
-- Retiring a table drops it only if some space declared it when that space last opened.
+- Retiring a table drops it only if some space declared it when that space last opened. Pending writes do not stop it.
 - A table a shared space stops declaring is wiped when that space opens. So is a table that turns local-only from a shared space.
 - A table removed from `localOnly` that was never synced is left alone. So are the tables of a shared space the app no longer opens.
 - A table returning to sync, moving to another space, or already holding rows when a space first declares it is wiped before any read and downloaded again. Pending writes are kept.

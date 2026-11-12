@@ -75,7 +75,7 @@ export class SharedSpace extends SynclineSharedSpace<Env> {
 `SynclineSharedSpace` 接收定义，外加：
 
 - `broadcast`：一个从 `env` 返回广播命名空间的函数。共享空间通过它把每次改动发给所有广播对象。
-- `cloud`、`validation`、`retired`、`onEvent`：可选，与 `SynclineSpace` 相同。见 [API](../../reference/api.md#shared-spaces)（英文）。
+- `cloud`、`validation`、`retired`、`onEvent`：可选，与 `SynclineSpace` 相同。见 [API](../../reference/zh-CN/api.md#共享空间)。
 
 再添加你自己的方法，在其中调用 `this.mutate`。这是写入的唯一途径。
 
