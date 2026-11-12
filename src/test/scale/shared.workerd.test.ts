@@ -7,7 +7,8 @@ import { expectBounded, fillRows, measured, scale } from '../../cloudflare/test-
 import type { Cursor } from '../../common/storage.ts';
 import { defineTables } from '../../tables/table-definitions.ts';
 
-// Shared space scaling in real Durable Objects: chunk rowsRead does not grow with table size (even with selective filters), writes succeed with many rules.
+// Shared space scaling in real Durable Objects: chunk rowsRead does not grow with table size (even with selective filters) or with the
+// writes since a chunk boundary, writes succeed with many rules.
 
 const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
 
@@ -41,6 +42,25 @@ test('selective bucket filter (only final row matches): chunk rowsRead has upper
     expect(given).toEqual([`p${String(scale).padStart(6, '0')}`]);
   }));
 
+test('first chunk of a full pull subscribed to 150 buckets over 20 tables: the lookups totalling its rows count toward the rowsRead bound', () =>
+  measured(env.SPACE.getByName(crypto.randomUUID()), ({ raw, storage, reads }) => {
+    const names = Array.from({ length: 20 }, (_, index) => `t${String(index).padStart(2, '0')}`);
+    const tables = names.map((name) => sqliteTable(name, { id: text().primaryKey(), team: text() }));
+    for (const name of names) raw.sql.exec(`CREATE TABLE ${name} (id TEXT PRIMARY KEY, team TEXT)`);
+    const buckets = { team: Object.fromEntries(names.map((name) => [name, { by: ['team'] }])) } satisfies BucketRules;
+    // A chunk boundary at every write: the full pull starts at the write below, after the tables entered sync.
+    const space = new Space(storage, tables, { shared: { buckets, chunkRows: 1 } });
+    fillRows(raw, 't00', scale, "'r' || i, 'b000'");
+    space.mutate((tx) => tx.insert(tables[19] as (typeof tables)[number], { id: 'last', team: 'b149' }), 0);
+    while (space.bucketRows?.step());
+    // One lookup per table and bucket: 3,000, more than the headroom the bound leaves over the chunk's row budget.
+    const subscription = Array.from({ length: 150 }, (_, index) => JSON.stringify(['team', `b${String(index).padStart(3, '0')}`]));
+    reads.reset();
+    const chunk = space.pullShared({ cookie: null }, { subscription, sub: 'many' });
+    expect(chunk).toMatchObject({ next: expect.any(String), progress: { total: scale + 1 } });
+    expectBounded(reads.total, `${scale} rows in one bucket, 3,000 lookups for the total`);
+  }));
+
 /** count rules where rule i matches rows where status equals rule name. */
 const rules = (count: number) =>
   Object.fromEntries(Array.from({ length: count }, (_, i) => [`v${i}`, { program: { where: `status = 'v${i}'` } }]));
@@ -65,6 +85,21 @@ test('single row matching 300 rules: round payload sizes by touched rows capped 
   }));
 
 const task = sqliteTable('task', { id: text().primaryKey(), team: text(), title: text() });
+
+test('a server write reads as many rows 900 writes after a chunk boundary as the second write after it', () =>
+  measured(env.SPACE.getByName(crypto.randomUUID()), ({ raw, storage, reads }) => {
+    raw.sql.exec('CREATE TABLE task (id TEXT PRIMARY KEY, team TEXT, title TEXT)');
+    const space = new Space(storage, [task], { shared: { buckets: { all: { task: {} } } } });
+    const write = (index: number) => {
+      reads.reset();
+      space.mutate((tx) => tx.insert(task, { id: `t${index}` }), 0);
+      return reads.total;
+    };
+    write(0);
+    const second = write(1);
+    for (let index = 2; index < 900; index += 1) write(index);
+    expect(write(900)).toBe(second);
+  }));
 
 test.for(['update', 'upsert'] as const)(
   'a server %s changing only an unindexed column writes one row (the bucket index is left alone)',

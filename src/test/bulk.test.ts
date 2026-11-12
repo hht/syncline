@@ -66,6 +66,13 @@ function setup() {
   const space = new Space(cloud, tables);
   const events: SynclineEvent[] = [];
   const { network, server } = serving(space, undefined, (event) => events.push(event));
+  /** Every push batch the cloud received. */
+  const pushes: string[] = [];
+  const receive = server.receive.bind(server);
+  server.receive = (socket, message) => {
+    pushes.push(message);
+    receive(socket, message);
+  };
   const devices = [0, 1].map((index) => {
     // Switch to incremental auto_vacuum before creating tables (as openSyncline does); reclaimed only after stage tables clear.
     const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...schema);
@@ -92,7 +99,7 @@ function setup() {
     expect(phone.counts()).toEqual([0, 0, 0]);
     expect(tablet.counts()).toEqual([0, 0, 0]);
   };
-  return { phone, tablet, devices, run, server, cloud, online, deleteAll, events };
+  return { phone, tablet, devices, run, pushes, cloud, online, deleteAll, events };
 }
 
 type Side = ReturnType<typeof setup>['phone'];
@@ -153,13 +160,7 @@ test('single write creates full workout plan (~5k rows): pushes once, online dev
 
 test('offline writes (~3 MB total, ~100 KB each) push in batches; large poke notification sends hint, device pulls over HTTP without disconnect', async () => {
   const sides = setup();
-  const { phone, server } = sides;
-  const sizes: number[] = [];
-  const receive = server.receive.bind(server);
-  server.receive = (socket, message) => {
-    sizes.push(message.length);
-    receive(socket, message);
-  };
+  const { phone, pushes } = sides;
   const note = 'x'.repeat(1000);
   for (let w = 0; w < 30; w += 1)
     await write(phone.device, (tx) =>
@@ -170,7 +171,7 @@ test('offline writes (~3 MB total, ~100 KB each) push in batches; large poke not
   expect(JSON.stringify(phone.device.private.pending()).length).toBeGreaterThan(3_000_000);
 
   await pushOffline(sides, 3000);
-  expect(sizes.length).toBeGreaterThan(2);
+  expect(pushes.length).toBeGreaterThan(2);
 });
 
 test('small offline writes (~1 KB each, ~300 KB total) push in batches and confirm inline via poke without falling back to HTTP', async () => {
@@ -180,6 +181,14 @@ test('small offline writes (~1 KB each, ~300 KB total) push in batches and confi
     await write(sides.phone.device, (tx) => tx.insert(exercise).values({ id: `e${e}`, sort: e, name: 'exercise', extra: { note } }));
 
   await pushOffline(sides, 300);
+});
+
+test('thousands of offline writes of a few dozen bytes each push in batches of at most 1,000 writes, which the cloud accepts', async () => {
+  const sides = setup();
+  for (let e = 0; e < 3000; e += 1) await write(sides.phone.device, (tx) => tx.insert(exercise).values({ id: `${e}`, sort: e, name: '' }));
+  await pushOffline(sides, 3000);
+  // Batches grow by bytes: only writes this small put 1,000 into one.
+  expect(Math.max(...sides.pushes.map((push) => (JSON.parse(push) as unknown[]).length))).toBe(1000);
 });
 
 test('single local write exceeding 8 MiB throws and rolls back completely without queueing in pending writes', async () => {

@@ -26,7 +26,7 @@ test('executes scheduled callback when due, multiplexes with exports, skips canc
   expect(await object(name).alarmAt()).toBeNull();
 });
 
-test('rescheduling an entry outright writes no billed row when nothing changes, and one row when its time or backoff does', () =>
+test('scheduling an entry writes no billed row when nothing changes (outright for the time it holds, or for no earlier a time), and one row when its time or backoff does', () =>
   runInDurableObject(object(space()), (_, { storage }) => {
     const cursors: { toArray(): unknown[]; rowsWritten: number }[] = [];
     const schedule = new Schedule({
@@ -59,6 +59,13 @@ test('rescheduling an entry outright writes no billed row when nothing changes, 
     // A backoff and a count of cut runs are cleared as before.
     storage.sql.exec('UPDATE _syncline_schedule SET failures = 3, resets = 2 WHERE name = ?', name);
     expect(rescheduled(2000)).toEqual({ rows: 1, at: 2000, failures: 0, resets: 0 });
+    // Every start that finds a retired table waiting for its drop date calls ensure with that same date.
+    schedule.by(name, 2000);
+    schedule.ensure(name, 2000);
+    schedule.by(name, 3000);
+    expect(written()).toBe(0);
+    schedule.ensure(name, 1000);
+    expect(written()).toBe(1);
     schedule.cancel(name);
   }));
 

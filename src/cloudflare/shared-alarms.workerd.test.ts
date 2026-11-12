@@ -5,6 +5,7 @@ import { fannedOut } from './test-shared.ts';
 import { alarmAfter } from './test-space.ts';
 
 // Shared space schedule left alone: a server write changing no rows schedules no delivery, and a reserved chore an earlier deploy left is dropped.
+// Last, a server write that a shard never answers.
 
 afterAll(() => fannedOut('quiet'));
 
@@ -49,4 +50,18 @@ test('a reserved chore this version no longer knows (left by an earlier deploy) 
     state.storage.sql.exec("SELECT name FROM _syncline_schedule WHERE name = 'syncline:retired'").toArray(),
   );
   expect(left).toEqual([]);
+});
+
+test('a server write returns once a shard has not answered for 10 s', async () => {
+  await env.CATALOG_BROADCAST.getByName('quiet#0').hangNext(1);
+  const started = Date.now();
+  const outcome = await Promise.race([
+    quiet()
+      .publish('z4')
+      .then(() => 'returned'),
+    new Promise((resolve) => setTimeout(() => resolve('still waiting'), 50_000)),
+  ]);
+  expect([outcome, Date.now() - started >= 9_900]).toEqual(['returned', true]);
+  // Resets the object to drop the call still waiting on the shard; the start finds the round owed and afterAll waits for its delivery.
+  await expect(runInDurableObject(quiet(), (_, state) => state.abort('Reset'))).rejects.toThrow();
 });

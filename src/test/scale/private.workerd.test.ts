@@ -52,15 +52,18 @@ for (const [label, keys] of [
       expectBounded(most.reads, `${scale} commits after cookie across ${most.requests} requests`);
     }));
 
-test('full pull first chunk: rowsRead has upper bound independent of table row count', () =>
-  inSpace(({ raw, storage, reads }) => {
-    const space = new Space(storage, tables);
-    fillRows(raw, 'note', scale, `'n' || i, hex(randomblob(50))`);
-    reads.reset();
-    // One chunk is roughly 100 rows.
-    expect(space.pull({ cookie: null }, 10_000)).toHaveProperty('next');
-    expectBounded(reads.total, `table has ${scale} rows`);
-  }));
+for (const [label, text, limit] of [
+  ['about 100 rows fill its characters', 'hex(randomblob(50))', 10_000],
+  ['small rows reach its row budget before its characters run out', "''", chunkLimit],
+] as const)
+  test(`full pull first chunk (${label}): rowsRead has upper bound independent of table row count`, () =>
+    inSpace(({ raw, storage, reads }) => {
+      const space = new Space(storage, tables);
+      fillRows(raw, 'note', scale, `'n' || i, ${text}`);
+      reads.reset();
+      expect(space.pull({ cookie: null }, limit)).toHaveProperty('next');
+      expectBounded(reads.total, `table has ${scale} rows`);
+    }));
 
 test('incremental pull first chunk: rowsRead has upper bound with H commits after cookie', () =>
   inSpace(({ raw, storage, reads }) => {

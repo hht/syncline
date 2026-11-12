@@ -26,6 +26,18 @@ test('rejects rules without a name or tables, with bucket columns differing acro
   expect(() => new Buckets([program], rules(4065))).toThrow('Table program belongs to 4065 bucket rules, exceeding the limit of 4064.');
 });
 
+// An index for a rule covering a whole table would repeat the primary key and bill one more row per insert.
+test('a rule gets an index only when it has a filter or bucket columns: its bucket columns, then the primary key, partial on its filter', () => {
+  const buckets = new Buckets([program, day], {
+    all: { program: {} },
+    public: { program: { where: "status = 'published'" } },
+    org: { day: { by: ['program_id'] } },
+  });
+  const indexed = (table: string) => buckets.indexes(table).map(({ columns, where }) => [columns, where]);
+  expect(indexed('program')).toEqual([[['id'], "status = 'published'"]]);
+  expect(indexed('day')).toEqual([[['program_id', 'id'], undefined]]);
+});
+
 test('rejects subscriptions violating rules (a bucket that is not [rule, ...params], unknown rule, mismatched parameter count/type, a bucket or the JSON exceeding its size limit); sorts and deduplicates valid buckets', () => {
   const buckets = new Buckets([program, day], { org: { day: { by: ['program_id'] } } });
   for (const bucket of ['org', [], [7, 'a']])

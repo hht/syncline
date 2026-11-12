@@ -19,8 +19,10 @@ async function exportedOnce(name: string, received = () => object(name).exported
   expect(await alarmAfter(object(name), maxExportDelay)).toBe(false);
 }
 
-test('export: schedules an alarm after writes; exporter in alarm receives full snapshot (starting with clear) followed by mutated rows; stops scheduling alarms when no new writes exist', async () => {
+test('export: schedules an alarm after writes; exporter in alarm receives full snapshot (starting with clear) followed by mutated rows; stops scheduling alarms when no new writes exist; a server write that commits nothing schedules none', async () => {
   const { name, phone: device } = await online(1);
+  await object(name).importNotes([]);
+  expect(await object(name).alarmAt()).toBeNull();
   device.push(squat);
   await device.next();
   await exportedOnce(name);

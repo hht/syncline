@@ -151,6 +151,24 @@ test('truncation step cuts at exact version reaching target without exceeding it
   expect(commits.truncate(0, 0)).toBe(false);
 });
 
+// In the tests above a quarter of the data always exceeds the reduced floor, so the floor never decides the cap.
+test('a log up to its floor is within the limit however small the data, and one past it is trimmed to three quarters of the floor', () => {
+  const { cloud } = written(300);
+  const sql = (text: string, ...bindings: unknown[]) => cloud.sql.exec(text, ...bindings).toArray();
+  const size = new Commits(sql).bytes();
+  const floor = 10_000;
+  expect(size).toBeGreaterThan(2 * floor);
+  // No data beside the log (database size 0): only the floor holds the log.
+  expect(new Commits(sql, { commitFloor: size }).overLimit(0)).toBe(false);
+  const tight = new Commits(sql, { commitFloor: floor });
+  expect(tight.overLimit(0)).toBe(true);
+  while (tight.truncate(0));
+  // A step cuts at the first commit that brings the log to the target: within one commit of it.
+  const [largest] = sql('SELECT max(octet_length(keys)) AS bytes FROM _syncline_commit');
+  expect(tight.bytes()).toBeLessThanOrEqual(floor * 0.75);
+  expect(tight.bytes()).toBeGreaterThan(floor * 0.75 - Number(largest?.bytes) - rowOverhead);
+});
+
 test('a shared write split across commits records the byte size of each segment as stored, after buckets are added to its keys', () => {
   const cloud = cloudStorage(...schema);
   const space = new Space(cloud, [program, day], { shared: { buckets: rules } });

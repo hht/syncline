@@ -34,10 +34,10 @@ function serving(options?: { dailyWrites: number }) {
   return { cloud, phone, events, open, ...open() };
 }
 
-test('daily write limit: push writes reaching UTC daily quota stop parsing and executing, closing connection with 1013 (client retries with backoff), resuming next day; server writes unconstrained', () => {
+test('daily write limit: push writes reaching UTC daily quota stop parsing and executing, closing connection with 1013 (client retries with backoff), resuming next day until billed exactly the quota; server writes unconstrained', () => {
   vi.useFakeTimers({ now: Date.UTC(2026, 9, 22, 12) });
   try {
-    const { cloud, phone, events, open, server } = serving({ dailyWrites: 4 });
+    const { cloud, phone, events, open, server } = serving({ dailyWrites: 6 });
     const ids = () => rows(cloud).map(({ id }) => id);
     server.mutate((tx) => {
       for (const id of ['s1', 's2', 's3', 's4', 's5']) tx.insert(note, { id });
@@ -65,6 +65,10 @@ test('daily write limit: push writes reaching UTC daily quota stop parsing and e
     restarted.receive(phone, JSON.stringify([put(4)]));
     expect(ids()).toContain('n4');
     expect(phone.closed).toEqual([1013, 1013, 1013]);
+    // Each write bills 3 rows (the row, its commit, its client): the second brings the day to exactly the quota.
+    restarted.receive(phone, JSON.stringify([put(5)]));
+    restarted.receive(phone, JSON.stringify([put(6)]));
+    expect([ids().includes('n5'), ids().includes('n6'), phone.closed.length]).toEqual([true, false, 4]);
   } finally {
     vi.useRealTimers();
   }

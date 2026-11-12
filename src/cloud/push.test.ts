@@ -200,13 +200,14 @@ test('pushed primary key differs in formatting from stored value (integer primar
   expect(poke?.patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, n: 2 } }]);
 });
 
-test('write quota: batch exceeding available tokens closes connection with 1013 without executing (client retries with backoff), succeeds after refill; batch exceeding burst succeeds once full', () => {
+test('write quota: batch exceeding available tokens (burst at most, however long the space was idle) closes connection with 1013 without executing (client retries with backoff), succeeds after refill; batch exceeding burst succeeds once full', () => {
   vi.useFakeTimers();
   try {
     const cloud = cloudStorage(createNote);
     const phone = new RecordingSocket();
     const sockets = { acceptWebSocket: () => undefined, getWebSockets: () => [phone] };
     const server = new Server(sockets, new Space(cloud, [note]), undefined, undefined, { quota: { rate: 1, burst: 2 } });
+    vi.advanceTimersByTime(60_000);
     server.receive(phone, JSON.stringify([put('c1', 1), put('c1', 2)]));
     server.receive(phone, JSON.stringify([put('c1', 3)]));
     expect(phone.closed).toEqual([1013]);

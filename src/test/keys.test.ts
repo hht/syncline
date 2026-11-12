@@ -131,6 +131,21 @@ test('primary keys near 512 bytes: the device refuses exactly the keys the cloud
   );
 });
 
+test('a primary key of exactly 512 bytes is accepted by the device and the cloud, and one of 513 is refused by both', async () => {
+  const { space, devices } = await synced(1);
+  const [phone] = devices;
+  if (!phone) throw new Error('one device');
+  // {"id":"…"} adds 9 bytes to the text.
+  const [fits, over] = ['k'.repeat(503), 'k'.repeat(504)];
+  await write(phone.device, (tx) => tx.insert(item).values({ id: fits }));
+  await upload(space, phone.device, [phone.device]);
+  expect(space.held()).toEqual([]);
+  expect(await failure(() => write(phone.device, (tx) => tx.insert(item).values({ id: over })))).toEqual(
+    expect.stringContaining('is 513 bytes'),
+  );
+  expect(() => space.mutate((tx) => tx.insert(item, { id: over }))).toThrow('to 513 bytes');
+});
+
 test('a new install pulling in small chunks receives every row exactly once, whatever its key', async () => {
   await fc.assert(
     fc.asyncProperty(

@@ -166,8 +166,9 @@ mod tests {
     }
 
     #[test]
-    fn chunk_body_exceeding_10_mb_reads_completely() {
-        let body = "x".repeat(11 << 20);
+    fn body_above_the_largest_chunk_reads_completely() {
+        // The largest chunk is about 15 MB.
+        let body = "x".repeat(16 << 20);
         let (result, _) = fetched(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes());
         let (status, read) = result.unwrap();
         assert_eq!((status, read.len()), (200, body.len()));

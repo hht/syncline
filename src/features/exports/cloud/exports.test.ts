@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import type { Events, SynclineEvent } from '../../../cloud/events.ts';
 import { Space } from '../../../cloud/space.ts';
 import type { Op } from '../../../common/protocol.ts';
@@ -162,4 +162,74 @@ test('an integrator task is no export task, even when its name past the length o
   const exports = new Exports({ reserved: 'syncline:' } as never, { exporters: { stats: exporter } });
   expect(exports.chore(`${'x'.repeat('syncline:export:'.length)}stats`, Date.now())).toBeUndefined();
   expect(exports.chore('syncline:export:stats', Date.now())).toBeDefined();
+});
+
+/** Context of an Exports over a log with nothing to export, caught up once `done` says so; `by` receives the tasks it schedules. */
+const idle = (done = () => true, by: (name: string) => void = () => undefined) => ({
+  poll: () => ({ ops: [], next: 'next', done: done() }),
+  by,
+  reserved: 'syncline:',
+  events: () => undefined,
+});
+
+test('an export still catching up when its time budget ends stops there and asks to run again', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    let written = 0;
+    // Ten chunks until caught up; each write takes 400 ms of a 1,000 ms budget.
+    const slow = {
+      position: async () => undefined,
+      write: async () => {
+        written += 1;
+        vi.setSystemTime(Date.now() + 400);
+      },
+    };
+    const exports = new Exports(
+      idle(() => written >= 9),
+      { exporters: { slow }, exportBudget: 1000 },
+    );
+    expect([await exports.chore('syncline:export:slow', Date.now())?.run(), written]).toEqual([true, 3]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('an exporter whose position never answers fails its run at the end of the time budget', async () => {
+  const stalled = { position: () => new Promise<undefined>(() => undefined), write: async () => undefined };
+  const exports = new Exports(idle(), { exporters: { stalled }, exportBudget: 50 });
+  const outcome = await Promise.race([
+    exports
+      .chore('syncline:export:stalled', Date.now())
+      ?.run()
+      .then(
+        () => 'finished',
+        (error: Error) => error.message,
+      ),
+    new Promise((resolve) => setTimeout(() => resolve('still waiting'), 2000)),
+  ]);
+  expect(outcome).toBe('Export timed out: Destination did not respond in time');
+});
+
+test('a start stores the exporter names only when they changed, and schedules an exporter that was removed and added again', () => {
+  const stored = new Map<string, unknown>();
+  let puts = 0;
+  const kv = {
+    get: <T>(key: string) => stored.get(key) as T | undefined,
+    put: (key: string, value: unknown) => {
+      puts += 1;
+      stored.set(key, value);
+    },
+  };
+  const exporter = { position: async () => undefined, write: async () => undefined };
+  /** Starts a space that already holds commits with these exporters: the tasks it schedules, and the times the names were stored so far. */
+  const start = (...names: string[]) => {
+    const scheduled: string[] = [];
+    const context = idle(undefined, (name) => scheduled.push(name));
+    new Exports(context, { exporters: Object.fromEntries(names.map((name) => [name, exporter])) }).started(false, kv);
+    return [scheduled, puts];
+  };
+  expect(start('stats', 'search')).toEqual([['syncline:export:stats', 'syncline:export:search'], 1]);
+  expect(start('stats', 'search')).toEqual([[], 1]);
+  expect(start('stats')).toEqual([[], 2]);
+  expect(start('stats', 'search')).toEqual([['syncline:export:search'], 3]);
 });

@@ -66,6 +66,12 @@ async function adminOnline(id: string) {
   return { last, device, shards };
 }
 
+/** When the delivery chore is due, in epoch ms. */
+const deliverAt = () =>
+  runInDurableObject(catalog(), (_, state) =>
+    Number(state.storage.sql.exec("SELECT at FROM _syncline_schedule WHERE name = 'syncline:deliver'").one().at),
+  );
+
 test('sends hint without closing connection when live notice exceeds UTF-8 byte budget and resumes normal notices thereafter', async () => {
   const { device } = await adminOnline('h1');
   // Multi-byte characters exceed UTF-8 byte budget within character count limit.
@@ -80,10 +86,15 @@ test('sends hint without closing connection when live notice exceeds UTF-8 byte 
 test('retries fanout to broadcast shards via alarm backoff until shards acknowledge and devices receive missing changes', async () => {
   const { last, device, shards } = await adminOnline('r1');
   for (const shard of shards) await shard.broken(true);
+  const before = Date.now();
   await catalog().publish('r1', 'draft');
-  // Initial retry at 1 second scheduled by server write; subsequent retries back off.
+  // The server write schedules the first retry a second after the refused delivery, as the limits reference tells integrators; later
+  // retries back off.
+  const retryAt = await deliverAt();
+  const inASecond = [retryAt >= before + 1000, retryAt <= Date.now() + 1000];
   expect(await alarmAfter(catalog(), 1000)).toBe(true);
   for (const shard of shards) await shard.broken(false);
+  expect(inASecond).toEqual([true, true]);
   expect(await alarmAfter(catalog(), 2000)).toBe(true);
   expect(await device.next()).toMatchObject({
     base: last.cookie,
@@ -199,14 +210,14 @@ test('delivers a fanout round cut by an actor reset between commit and broadcast
 
 test('perpetuates periodic wakeup alarms when all shards are caught up to deliver rule evolution rescans without client traffic', async () => {
   await catalog().publish('w1');
-  const refreshAt = () =>
-    runInDurableObject(catalog(), (_, state) => {
-      const [row] = state.storage.sql.exec("SELECT at FROM _syncline_schedule WHERE name = 'syncline:deliver'").toArray();
-      return Number(row?.at) - Date.now();
-    });
-  expect(await refreshAt()).toBeGreaterThan(3_500_000);
+  // The wakeup was scheduled an hour ahead no later than now: the hour the limits reference tells integrators.
+  const hourAhead = async () => {
+    const at = await deliverAt();
+    return [at > Date.now() + 3_500_000, at <= Date.now() + 3_600_000];
+  };
+  expect(await hourAhead()).toEqual([true, true]);
   expect(await alarmAfter(catalog(), 3_600_000)).toBe(true);
-  expect(await refreshAt()).toBeGreaterThan(3_500_000);
+  expect(await hourAhead()).toEqual([true, true]);
 });
 
 test('multiplexes integrator schedule with fanout alarms without conflict and protects mutate from RPC access', async () => {

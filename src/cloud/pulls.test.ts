@@ -98,6 +98,25 @@ test('incremental pull: large commits read in bounded batches not exceeding one 
   expect(read.chars).toBeLessThanOrEqual(chunkLimit + valueBytes);
 });
 
+// A commit's entries count toward a chunk's row budget, given or skipped: the bounds above have commits of one chunk's rows at most.
+test('incremental pull over one commit of 30,000 entries it skips: the first chunk stops within them, the second reaches the head', () => {
+  const { storage } = measuredStorage();
+  const space = new Space(storage, [note, sized]);
+  space.mutate((tx) => tx.insert(note, { id: 'n1' }));
+  const cookie = space.head();
+  // A commit that changed only rows of a table that has left sync since.
+  const left = JSON.stringify(Array.from({ length: 30_000 }, (_, index) => ['archived', { id: `k${index}` }]));
+  storage.sql.exec(
+    'INSERT INTO _syncline_commit (version, nonce, keys, bytes) SELECT version + 1, 7, ?, bytes + ? FROM _syncline_commit ORDER BY version DESC LIMIT 1',
+    left,
+    left.length,
+  );
+  const first = space.pull({ cookie }, chunkLimit);
+  expect(first).toMatchObject({ patch: [], next: expect.any(String) });
+  const second = space.pull({ cookie, cursor: (first as { next: string }).next }, chunkLimit);
+  expect(second).toMatchObject({ patch: [], cookie: space.head() });
+});
+
 test('full pull: primary key column named bytes computes row byte sizes correctly without alias collision', () => {
   const { space, read } = measured();
   // Ordered by primary key, large rows first; sorting by byte alias would reorder smaller rows first and miscalculate byte budget.

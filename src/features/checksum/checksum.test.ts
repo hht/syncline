@@ -76,7 +76,10 @@ test('device only verifies against current version checksum: skips requesting fo
     expect(device.private.pullRequest()).not.toHaveProperty('checksum');
     for (const day of [1, 2]) {
       storage.sql.exec("UPDATE counter SET n = 99 WHERE id = 'a'");
-      vi.setSystemTime(Date.now() + 24 * 3600_000);
+      // The next round starts a full day after the last one completed, not before.
+      vi.setSystemTime(Date.now() + 24 * 3600_000 - 1);
+      expect(device.private.pullRequest()).not.toHaveProperty('checksum');
+      vi.setSystemTime(Date.now() + 1);
       expect(device.private.pullRequest()).toHaveProperty('checksum', '');
       await checksum();
       const cookie = device.private.cookie();

@@ -109,6 +109,20 @@ test('held writes and status changes reach their subscribers, with status errors
   expect(space.status()).toEqual({ ...known, pending: 0, downloadError: undefined });
 });
 
+// A Worker that breaks while the connect call still waits marks the space through the rejected call; once connected, only the broken
+// engine does.
+test('a core panic after the space connected shows as downloadError on its status and reaches status subscribers', async () => {
+  const { space, instance } = await openedWith();
+  worker().deliver(instance, { type: 'reply', id: worker().last('connect').call.id ?? -1 });
+  await space.waitForReady();
+  const errors: (string | undefined)[] = [];
+  space.onStatus((status) => errors.push(status.downloadError?.message));
+  worker().onmessage?.({ data: { type: 'broken', error: { message: 'unreachable' } } });
+  await flush();
+  expect(errors).toEqual([expect.stringContaining('Syncline core panicked: unreachable')]);
+  expect(space.status().downloadError?.message).toContain('Syncline core panicked: unreachable');
+});
+
 test('tablesOf asks the Worker which tables a query reads; reconnect goes out once the space connected, and does nothing once closed', async () => {
   const { space, instance } = await openedWith();
   const tables = space.tablesOf('SELECT id FROM note');
