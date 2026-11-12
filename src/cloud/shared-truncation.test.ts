@@ -50,6 +50,17 @@ test('cookie older than log floor receives reset response, prompting device to c
   expect((again.at(-1) as Poke).cookie).toEqual(space.head());
 });
 
+test('shard broadcast round from a base below the log floor carries no rows: a shard that far behind pushes hints, and its devices pull', () => {
+  const { cloud, space } = written(1);
+  const base = space.head();
+  for (let index = 0; index < 400; index += 1)
+    space.mutate((tx) => tx.upsert(program, { id: `p${index % 5}`, status: index % 3 ? 'draft' : 'published' }));
+  truncateAll(space);
+  const [low] = cloud.sql.exec('SELECT version FROM _syncline_low').toArray();
+  expect(Number(low?.version)).toBeGreaterThan(base.version);
+  expect(space.round(1_000_000, base)).toEqual({ base, cookie: space.head(), incarnation: expect.any(Number) });
+});
+
 test('chunk boundaries prune alongside truncated commits, retaining only boundaries strictly above log floor', () => {
   const { cloud, space } = written(400);
   truncateAll(space);

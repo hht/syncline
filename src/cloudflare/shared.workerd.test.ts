@@ -151,12 +151,14 @@ test('performs fresh full pull with clear op when client subscription narrows to
   expect(chunk.patch.some((op) => op.op === 'put' && op.row.id === 's1')).toBe(false);
 });
 
-test('bypasses cache with no-store when pull request specifies floor version not yet reached by cloud', async () => {
+test('bypasses cache with no-store when pull request specifies floor version not yet reached by cloud, and caches the answer once it is reached', async () => {
   await catalog().publish('a1');
   const { chunk: last } = (await pullAll('public')).at(-1) as { chunk: Poke };
-  const ahead = pullURL(url, { cookie: null, cursor: last.next ?? '', atLeast: last.cookie.version + 100 });
-  const response = await exports.default.fetch(ahead, { headers: { Authorization: `Bearer ${token('public')}` } });
-  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  // Asked of the space itself: the entry Worker answers every client no-store, whatever the space said
+  const headers = await entryHeaders('public');
+  const ask = (atLeast: number) => catalog().fetch(new Request(pullURL(url, { cookie: null, atLeast }), { headers }));
+  expect((await ask(last.cookie.version + 100)).headers.get('Cache-Control')).toBe('no-store');
+  expect((await ask(last.cookie.version)).headers.get('Cache-Control')).toBe('public, max-age=5');
 });
 
 test('the space serves only GET pulls forwarded by the entry Worker: other methods get 405, and a pull without subscription throws', async () => {

@@ -82,6 +82,21 @@ test('hint: ignored if not newer within same incarnation; another incarnation pu
   expect(catalog.pullRequest()).toMatchObject({ atLeast: cookie.version - 1, incarnation: incarnation + 1 });
 });
 
+test('notification of another incarnation whose base has the version of the local cookie: not applied (the nonces differ), recorded as target to pull', async () => {
+  // A shard still on another incarnation of the space sends the round that chains onto version 1 there
+  const other = setup();
+  other.publish('p1');
+  const foreign = other.publish('x2');
+  const { space, catalog, publish, programs } = setup();
+  publish('p1');
+  await pullRest(catalog, space);
+  expect(foreign.base?.version).toBe(catalog.cookie()?.version);
+  await catalog.notified(foreign, false);
+  expect(programs().map(({ id }) => id)).toEqual(['p1']);
+  expect(catalog.cookie()?.version).toBe(1);
+  expect(catalog.behind()).toBe(true);
+});
+
 test('cookie still below target version after apply (final chunk is stale copy computed before hint): next pull carries target version as lower bound, returned data will not be older', async () => {
   const { space, catalog, publish, caughtUp } = setup();
   publish('p1');
@@ -198,6 +213,21 @@ test('request emitted with target lower bound, hint for new incarnation arrives 
   await catalog.notified({ hint: rebuilt.head(), incarnation }, false);
   expect(await catalog.receive(pullOne(rebuilt, request))).toBe(true);
   expect(catalog.pullRequest()).toMatchObject({ atLeast: rebuilt.head().version, incarnation });
+});
+
+test('request emitted without lower bound, hint for another incarnation arrives in flight: response is of the incarnation the device is on, target kept (the request never asked for it), next request carries it', async () => {
+  const { space, catalog, publish } = setup();
+  publish('p1');
+  await pullRest(catalog, space);
+  const request = catalog.pullRequest();
+  expect(request).not.toHaveProperty('atLeast');
+  publish('p2');
+  const incarnation = space.round(0).incarnation + 1;
+  await catalog.notified({ hint: { version: 7, nonce: 1 }, incarnation }, true);
+  expect(await catalog.receive(space.pullShared(request, viewer))).toBe(true);
+  expect(catalog.cookie()?.version).toBe(2);
+  expect(catalog.behind()).toBe(true);
+  expect(catalog.pullRequest()).toMatchObject({ atLeast: 7, incarnation });
 });
 
 test('switching connection does not discard target version: shard version still needed (@see model/Shared.tla Connect), first request carries it', async () => {

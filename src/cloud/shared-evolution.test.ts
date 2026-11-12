@@ -59,15 +59,22 @@ test('app rolls back past plan declaration then upgrades again: refetches shared
   expect(plans(storage)).toEqual(['c']);
 });
 
-test('cloud rollback undeclares plan then re-declares it: records table drop upon leave and rescans whole table upon re-entry; incremental pull delivers drop and additions without reset', async () => {
+/** Cloud whose plan table holds `ids` in one commit, a device caught up on it, then a cloud rollback that undeclares plan: the table has left sync. */
+async function planLeft(ids: string[]) {
   const cloud = cloudStorage(...schema);
   const both = new Space(cloud, [program, plan], { shared });
-  both.mutate((tx) => tx.insert(plan, { id: 'a' }));
+  both.mutate((tx) => {
+    for (const id of ids) tx.insert(plan, { id });
+  });
   const storage = deviceStorage(...schema);
   const mirror = new Device(storage, []).shared('catalog', [program, plan]);
   await pullAll(mirror, both);
-
   new Space(cloud, [program], { shared: { ...shared, buckets: { all: { program: {} } } } });
+  return { cloud, storage, mirror };
+}
+
+test('cloud rollback undeclares plan then re-declares it: records table drop upon leave and rescans whole table upon re-entry; incremental pull delivers drop and additions without reset', async () => {
+  const { cloud, storage, mirror } = await planLeft(['a']);
   cloud.sql.exec("DELETE FROM plan WHERE id = 'a'");
   cloud.sql.exec("INSERT INTO plan VALUES ('c')");
   const again = new Space(cloud, [program, plan], { shared });
@@ -78,6 +85,18 @@ test('cloud rollback undeclares plan then re-declares it: records table drop upo
   await mirror.receive(next);
   await pullAll(mirror, again);
   expect(plans(storage)).toEqual(['c']);
+});
+
+test('plan leaves sync and returns with no chunk boundary in between, so one round of an incremental pull spans both: the tail skips the drop recorded on leaving, and the rows rescanned on re-entry stay', async () => {
+  const { cloud, storage, mirror } = await planLeft(['a', 'b']);
+  const again = new Space(cloud, [program, plan], { shared });
+  // Two changed rows per chunk: the first boundary after the device's cookie lies past the return
+  again.mutate((tx) => tx.insert(program, { id: 'p1' }));
+  again.mutate((tx) => tx.insert(program, { id: 'p2' }));
+  expect(await mirror.receive(again.pullShared(mirror.pullRequest(), everything))).toBe(true);
+  await pullAll(mirror, again);
+  expect(mirror.cookie()).toEqual(again.head());
+  expect(plans(storage)).toEqual(['a', 'b']);
 });
 
 test('a cloud-only column entering sync rescans its table: devices receive the values a server write stored while it was cloud-only', async () => {

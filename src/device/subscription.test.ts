@@ -1,5 +1,7 @@
 import { expect, test } from 'vitest';
-import { pullOne, pullRest, subscribed } from '../test/test-catalog.ts';
+import { catalog as catalogSpace, day, program, pullOne, pullRest, schema, subscribed } from '../test/test-catalog.ts';
+import { Device } from '../test/test-device.ts';
+import { deviceStorage } from '../test/test-storage.ts';
 import { setup } from './test-shared-mirror.ts';
 
 // Shared space subscription on device changes with token: pulls if subscription heard on connection differs from landed;
@@ -28,4 +30,22 @@ test('staged chunk subscription differs from response (token changed mid-pull): 
   await pullRest(catalog, space, (request) => space.pullShared(request, other, 1));
   expect(programs().map(({ id }) => id)).toEqual(['p1', 'p2', 'p3']);
   expect(catalog.behind()).toBe(false);
+});
+
+test('staged chunk of a wider subscription, then the token narrows back to the landed one: the cloud restarts from the cookie without a clear, so the device drops the stage and rows it may no longer see do not land', async () => {
+  const { space, publish } = catalogSpace();
+  publish('p1');
+  const storage = deviceStorage(...schema);
+  const catalog = new Device(storage, []).shared('catalog', [program, day]);
+  await pullRest(catalog, space);
+  publish('d1', 'draft', 'private');
+  publish('d2', 'draft', 'private');
+  const wide = space.pullShared(catalog.pullRequest(), subscribed(['all'], ['public']), 1);
+  expect(wide).toMatchObject({ patch: [{ op: 'put', table: 'day', row: { id: 'd1-d', audience: 'private' } }] });
+  expect(await catalog.receive(wide)).toBe(true);
+  expect(catalog.staging()).toBe(true);
+  await pullRest(catalog, space);
+  expect(catalog.behind()).toBe(false);
+  expect(storage.sql.exec('SELECT id FROM program ORDER BY id').toArray()).toEqual([{ id: 'p1' }]);
+  expect(storage.sql.exec('SELECT id FROM day ORDER BY id').toArray()).toEqual([{ id: 'p1-d' }]);
 });

@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest';
 import { program } from '../test/test-catalog.ts';
+import { captureReported } from '../test/test-errors.ts';
 import type { RecordingSocket } from '../test/test-sockets.ts';
 import type { Space } from './space.ts';
-import { hinted, last, setup } from './test-broadcast.ts';
+import { hinted, last, setup, unsent } from './test-broadcast.ts';
 
 // After a shared space rebuild: versions start over and cannot be compared numerically; shards and devices identify incarnation changes via the version 0 nonce, resetting devices to align with the new incarnation.
 
@@ -61,19 +62,75 @@ test('device reconnects within throttle window after rebuild (shard does not re-
 });
 
 test('device already in new incarnation bounds pulls when receiving messages from shard that missed rebuild and still holds prior incarnation', async () => {
-  const { catalog, commit, connect, rebuild, pullAll, programs } = await setup();
+  const { space, catalog, commit, connect, rebuild, pullAll, programs, fail } = await setup();
+  const reported = captureReported();
+  await commit('p2');
+  await pullAll();
+  const { incarnation } = space().round(0);
+  // Two writes: the new head is not below the version the shard will name, so only the incarnation tells the two apart
+  const rebuilt = rebuild();
+  rebuilt.mutate((tx) => tx.upsert(program, { id: 'p8', status: 'draft' }));
+  publish(rebuilt);
+  await pullAll();
+  await pullAll();
+  expect(programs().map(({ id }) => id)).toEqual(['p9']);
+  // The shard cannot reach the space, so it hints at the round it knows: version 2 of the prior incarnation
+  fail(true);
+  const socket = await connect();
+  expect(reported).toEqual(['Shared space error']);
+  expect(last(socket)).toMatchObject({ hint: { version: 2 }, incarnation });
+  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
+  // One request asking for that target is answered from the new incarnation, so the device drops the target
+  expect(await pullAll()).toEqual([expect.objectContaining({ atLeast: 2, incarnation })]);
+  expect(catalog.behind()).toBe(false);
+  expect(programs().map(({ id }) => id)).toEqual(['p9']);
+});
+
+test('device cookie in prior incarnation with the version of the new incarnation head: receives a hint, not an empty catch-up; device pulls, resets, and resyncs', async () => {
+  const run = await setup();
+  const { catalog, commit, connect, rebuild, pullAll } = run;
   await commit('p2');
   await pullAll();
   const space = rebuild();
+  space.mutate((tx) => tx.upsert(program, { id: 'p8', status: 'draft' }));
   publish(space);
-  await pullAll();
-  await pullAll();
-  expect(programs().map(({ id }) => id)).toEqual(['p9']);
+  expect(space.head().version).toBe(catalog.cookie()?.version);
   const socket = await connect();
-  await catalog.notified(JSON.parse(socket.sent.at(-1) ?? ''), false);
-  for (let pulls = 0; pulls < 3 && catalog.behind(); pulls += 1) await pullAll();
-  expect(catalog.behind()).toBe(false);
-  expect(programs().map(({ id }) => id)).toEqual(['p9']);
+  expect(hinted(socket)).toEqual(space.head());
+  await landsOnNewIncarnation(run, socket);
+});
+
+test('shard without memory chains the first round of a new incarnation: a connection last pushed a point of the prior incarnation receives a hint, not a notification chained onto that point', async () => {
+  const run = await setup();
+  const socket = await run.connect();
+  run.restart();
+  const space = await rebuiltAndNotified(run);
+  expect(hinted(socket)).toEqual(space.head());
+});
+
+test('round of the new incarnation reaches the shard after a further write: connections are hinted at the latest version the shard queried, not at the round', async () => {
+  const { shard, connect, rebuild } = await setup();
+  const socket = await connect();
+  const space = rebuild();
+  const base = space.head();
+  publish(space);
+  const round = space.round(64_000, base);
+  space.mutate((tx) => tx.upsert(program, { id: 'p10', status: 'published' }));
+  await shard().notify(round);
+  expect(hinted(socket)).toEqual(space.head());
+});
+
+test('late round of the prior incarnation reaches a shard without memory while a catch-up query is out: the connecting device still receives the answer of the new incarnation', async () => {
+  const run = await setup();
+  const { round: late } = unsent(run.space());
+  publish(run.rebuild());
+  run.restart();
+  const connecting = run.connect();
+  await run.shard().notify(late);
+  const socket = await connecting;
+  // The late round reached the socket first, as a hint; the answer follows it
+  expect(socket.sent).toHaveLength(2);
+  expect(hinted(socket)).toEqual(run.space().head());
 });
 
 test('device cookie in prior incarnation with version higher than new incarnation head: receives message with new incarnation without disconnect; device pulls, resets, and resyncs', async () => {
