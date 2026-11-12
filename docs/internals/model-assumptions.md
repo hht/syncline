@@ -34,6 +34,7 @@ Details for [Models and model checking](model.md): model conclusions hold only w
 - Online checksums: in the model, devices know exactly which rows are corrupted; in the implementation, devices detect only the mismatched primary-key range and re-download that entire range; the range contains the corrupted rows, and re-downloading uncorrupted rows is harmless.
 - Schema compatibility evaluation, altering column types, and modifying primary keys (unsupported).
 - Maximum concurrent connection limits.
+- Held writes and their resubmission: the model drops a rejected write once its mutation ID advances; the implementation keeps the rejected changes, and `resubmit` later executes them, or changes given in their place, as a commit without a client, as a backend write does, or discards them (`src/cloud/held.test.ts`).
 - Full refetch on failed revert of pending writes (synced tables modified outside Syncline) or local table upgrades: in the implementation, the connection stays open while pulling over HTTP; `Refetch` in the model covers only user-requested resyncs (disconnect, pull to head, reconnect) that keep pending writes; `resync({ discardPending: true })` first reverts pending writes and, if that revert fails, clears synced tables (not modeled); a table returning to sync is wiped on open, before the refetch lands (not modeled). Landing matches `Refetch` (full pull with pending writes replayed), guarded by `src/device/conflicts.test.ts` and `src/device/upgrade.test.ts`.
 
 ## Omitted from the model: shared spaces

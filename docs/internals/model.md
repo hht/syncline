@@ -38,6 +38,6 @@ A deterministic simulation runs the real TypeScript and Rust implementation. At 
 
 ## Details
 
-- [Scope](model-scope.md): combinations beyond exhaustive search limits, and what trace validation does not cover (protocol abstractions are documented at the top of each `.tla` file).
+- [Scope](model-scope.md): combinations beyond exhaustive search limits, what trace validation does not cover, and what the private space simulation does not cover (protocol abstractions are documented at the top of each `.tla` file).
 - [Model assumptions](model-assumptions.md): assumptions taken as axioms in the model and guaranteed by implementation and tests, plus features omitted from the model.
 - [Mutation testing](model-mutations.md): intentional model mutations, which configuration catches each mutation with which violated property, and why unflagged mutations are harmless.
