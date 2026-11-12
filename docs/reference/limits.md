@@ -14,7 +14,7 @@ Read [Schema](#schema) and [Writes](#writes) before you design your tables. Each
 - A non-null column added to an existing table needs a constant default.
 - These rules apply to local-only tables too.
 
-An unsupported type throws when the app opens the database. A changed storage type or a non-null column without a constant default fails opening: `sync()` rejects and `downloadError` is set. For the private space, `waitForReady()` rejects too. In the cloud, breaking any of these rules makes `SynclineSpace` throw.
+An unsupported type throws when the app opens the database. A changed storage type or a non-null column without a constant default fails opening: `sync()` rejects and `downloadError` is set. For the private space, `waitForReady()` rejects too. In the cloud, breaking any of these rules makes `SynclineSpace` and `SynclineSharedSpace` throw.
 
 ### Table and column names
 
@@ -23,8 +23,9 @@ An unsupported type throws when the app opens the database. A changed storage ty
 - Table names hold at most 64 characters.
 - Table names ignore case: `Note` and `note` are the same table. Keep the spelling a table was first created with.
 - Don't start a table name with `_syncline_`, and don't name a column `_extra`. Syncline reserves both.
+- Don't use a name every JavaScript object has, such as `constructor` or `toString`.
 
-Breaking a rule throws when the app opens the database, except a table name spelled differently from the stored table, which fails opening the same way as a changed storage type. In the cloud, `SynclineSpace` throws.
+Breaking a rule throws when the app opens the database, except a table name spelled differently from the stored table, which fails opening the same way as a changed storage type. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
 
 ### Keys
 
@@ -34,11 +35,13 @@ Breaking a rule throws when the app opens the database, except a table name spel
 - A foreign key column must have the same storage type as the column it points at, local-only tables included.
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
 
-An insert that leaves out a primary key column of a synced table fails, unless the column has a default. `autoIncrement` on a synced table throws when the app opens the database. In the cloud, `SynclineSpace` throws.
+An insert that leaves out a primary key column of a synced table fails, unless the column has a default. `autoIncrement` on a synced table throws when the app opens the database. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
 
-A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` throws.
+`autoIncrement` on a local-only table does not stop keys from being reused: after the row with the largest key is deleted, the next insert gets that key again.
 
-A foreign key column of another storage type throws when the app opens the database. In the cloud, `SynclineSpace` throws.
+A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
+
+A foreign key column of another storage type throws when the app opens the database. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
 
 A primary key that is too long fails the write with `ValidationError`.
 
@@ -54,6 +57,7 @@ Breaking a rule throws when the app opens the database.
 - The synced columns of one row total at most 1,900,000 bytes. Only local writes check this; a server write past Cloudflare's 2 MB row limit fails.
 - Text must be valid UTF-16. Lone surrogates are refused.
 - Numbers must be finite. NaN is refused, and so is an invalid `Date`, which becomes NaN. A query given a NaN parameter throws too.
+- BigInt values are refused. A query or write given one throws an error of the engine's own, not `ValidationError`.
 - `-0` is stored as `0`.
 
 A local write breaking a rule throws and rolls back. A server write breaking a text or number rule throws `ValidationError`, except for values given as SQL expressions or filled in by `$defaultFn`.
@@ -179,6 +183,9 @@ The cloud closes a connection with codes such as these. Devices handle them on t
 - **Cloudflare:** Durable Objects with SQLite storage, and a compatibility date of 2026-04-07 or later.
 - **iOS and Android:** a development build. Expo Go is not supported.
 - **Web:** a browser with OPFS support in Web Workers (`createSyncAccessHandle`).
+- **Expo:** `expo` ~58.0.14.
+- **React:** `syncline/react` needs `react` ^19.3.0 and `@tanstack/react-query` ^5.104.0.
+- **Background sync:** `syncline/expo/background` needs `expo-background-task` ~58.0.11 and `expo-task-manager` ~58.0.12.
 - **Drizzle:** `drizzle-orm` 1.0.0-rc.4.
 
 ## Edge cases

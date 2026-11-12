@@ -16,7 +16,7 @@
 - 给已有的表新增非空列，需要一个常量默认值。
 - 这些规则对仅本地表同样适用。
 
-不支持的类型会在应用打开数据库时抛错。改了存储类型，或新增非空列却没有常量默认值，会让打开失败：`sync()` 被拒绝，`downloadError` 被设置。对私有空间，`waitForReady()` 也会被拒绝。在云端，违反其中任何一条都会让 `SynclineSpace` 抛错。
+不支持的类型会在应用打开数据库时抛错。改了存储类型，或新增非空列却没有常量默认值，会让打开失败：`sync()` 被拒绝，`downloadError` 被设置。对私有空间，`waitForReady()` 也会被拒绝。在云端，违反其中任何一条都会让 `SynclineSpace` 和 `SynclineSharedSpace` 抛错。
 
 ### 表名和列名
 
@@ -25,8 +25,9 @@
 - 表名最多 64 个字符。
 - 表名不区分大小写：`Note` 和 `note` 是同一张表。请保持表第一次创建时的写法。
 - 表名不能以 `_syncline_` 开头，列名不能叫 `_extra`，这两个名字由 Syncline 保留。
+- 不能使用每个 JavaScript 对象都有的名字，例如 `constructor` 或 `toString`。
 
-违反规则时，应用打开数据库时会抛错；但表名写法与已存储的表不同时，会和改了存储类型一样让打开失败。云端的 `SynclineSpace` 会抛错。
+违反规则时，应用打开数据库时会抛错；但表名写法与已存储的表不同时，会和改了存储类型一样让打开失败。云端的 `SynclineSpace` 和 `SynclineSharedSpace` 会抛错。
 
 ### 主键和外键
 
@@ -36,11 +37,13 @@
 - 外键列的存储类型必须与它指向的列相同，仅本地表也一样。
 - 一行同步数据的主键，按 JSON（UTF-8）编码后最多 512 字节。
 
-向同步表插入时漏掉某个主键列，插入会失败，除非该列有默认值。同步表使用 `autoIncrement` 时，应用打开数据库时会抛错。云端的 `SynclineSpace` 会抛错。
+向同步表插入时漏掉某个主键列，插入会失败，除非该列有默认值。同步表使用 `autoIncrement` 时，应用打开数据库时会抛错。云端的 `SynclineSpace` 和 `SynclineSharedSpace` 会抛错。
 
-外键指向其他列时，打开私有空间会失败：`waitForReady()` 和 `sync()` 被拒绝，`downloadError` 被设置。云端的 `SynclineSpace` 会抛错。
+仅本地表上的 `autoIncrement` 不能防止主键被重复使用：主键最大的那一行被删除后，下一次插入会再次得到这个主键。
 
-外键列的存储类型不同时，应用打开数据库时会抛错。云端的 `SynclineSpace` 会抛错。
+外键指向其他列时，打开私有空间会失败：`waitForReady()` 和 `sync()` 被拒绝，`downloadError` 被设置。云端的 `SynclineSpace` 和 `SynclineSharedSpace` 会抛错。
+
+外键列的存储类型不同时，应用打开数据库时会抛错。云端的 `SynclineSpace` 和 `SynclineSharedSpace` 会抛错。
 
 主键过长时，写入失败并抛出 `ValidationError`。
 
@@ -56,6 +59,7 @@
 - 一行中同步列的总大小最多 1,900,000 字节。只有本地写入检查这一项；服务端写入超过 Cloudflare 的 2 MB 行上限时会失败。
 - 文本必须是合法的 UTF-16，单独的代理字符会被拒绝。
 - 数字必须是有限值。NaN 会被拒绝，无效的 `Date` 会变成 NaN，同样被拒绝。查询参数传入 NaN 也会抛错。
+- BigInt 值会被拒绝。查询或写入传入 BigInt 时，抛出的是引擎自己的错误，而不是 `ValidationError`。
 - `-0` 会存成 `0`。
 
 本地写入违反规则时会抛错并整体回滚。服务端写入违反文本或数字规则时抛出 `ValidationError`，但以 SQL 表达式给出或由 `$defaultFn` 填充的值不检查。
@@ -181,6 +185,9 @@
 - **Cloudflare**：使用 SQLite 存储的 Durable Objects，兼容日期不早于 2026-04-07。
 - **iOS 和 Android**：需要开发构建，不支持 Expo Go。
 - **Web**：浏览器需在 Web Worker 中支持 OPFS（`createSyncAccessHandle`）。
+- **Expo**：`expo` ~58.0.14。
+- **React**：`syncline/react` 需要 `react` ^19.3.0 和 `@tanstack/react-query` ^5.104.0。
+- **后台同步**：`syncline/expo/background` 需要 `expo-background-task` ~58.0.11 和 `expo-task-manager` ~58.0.12。
 - **Drizzle**：`drizzle-orm` 1.0.0-rc.4。
 
 ## 边界情况

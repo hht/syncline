@@ -133,6 +133,9 @@ const stated = [
   `| ${overQuota} | Upload quota reached |`,
   `| ${unsupportedMessage} | Binary message, or an upload to a shared space |`,
   // Requirements
+  `\`expo\` ${peers.expo}.`,
+  `\`react\` ${peers.react} and \`@tanstack/react-query\` ${peers['@tanstack/react-query']}.`,
+  `\`expo-background-task\` ${peers['expo-background-task']} and \`expo-task-manager\` ${peers['expo-task-manager']}.`,
   `\`drizzle-orm\` ${peers['drizzle-orm']}.`,
   // Edge cases
   `on about ${thousands(valueBytes / clientEntry)} launches without ever syncing`,

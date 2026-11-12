@@ -38,7 +38,8 @@ For these, show `downloadError` or `uploadError` to the user if you want; there 
 
 `write()` rejects and nothing is saved. Causes:
 
-- `ValidationError`: a value does not match its column declaration (type, non-null, enum, length, JSON) or your `validation` schema, or the primary key is too long. `issues` lists the fields and reasons.
+- `ValidationError`: a value breaks its column declaration (non-null, enum, length, JSON, a boolean other than 0 or 1, Infinity in a real column) or your `validation` schema, or the primary key is too long. `issues` lists the fields and reasons.
+- A value its column cannot hold, such as text that is not a number, or a fraction, in an integer column. SQLite refuses it with its own error, not `ValidationError`.
 - A [value](limits.md#values) or [write](limits.md#size) past a limit, such as invalid text, NaN, or too many rows.
 - A row that references a missing row through a foreign key.
 - A write to a `readOnly` table.
@@ -77,6 +78,14 @@ The cloud reports a different account than the one this database first synced wi
 
 The cloud is newer than the app, or the app uses a table or column the cloud has retired. Sync pauses. Ship an app update.
 
+### `downloadError` says to wait for cloud deployment
+
+The app is ahead of the cloud. Sync retries with backoff, and pending writes are kept. Causes:
+
+- The app declares a table or column the cloud does not have, or declares differently, such as with another type or key. Deploy the cloud with it.
+- The cloud runs an older Syncline release than the app. Deploy the cloud with the app's release.
+- The cloud dropped a table or column without retiring it, so the wait never ends. List it in `retired` on both sides. For a rollback of both sides, see [Edge cases](limits.md#devices).
+
 ### `uploadError` shows code 1007
 
 The cloud rejected a batch of uploaded writes: it could not read it, or the batch broke a limit. Uploads stop until the app restarts or calls `resync()`. If the writes can never succeed, `resync({ discardPending: true })` drops them.
@@ -107,8 +116,8 @@ In a method of your `SynclineSpace`:
 
 ### Errors in your cloud code
 
-- `SynclineSpace` throws when the schema breaks a rule in [Schema](limits.md#schema).
-- `SynclineSharedSpace` throws when reached without a name, or with a name too long for its shards (see [Shared spaces](limits.md#shared-spaces)).
+- `SynclineSpace` and `SynclineSharedSpace` throw when the schema breaks a rule that [Schema](limits.md#schema) says the cloud checks.
+- `SynclineSharedSpace` also throws when reached without a name, or with a name too long for its shards (see [Shared spaces](limits.md#shared-spaces)).
 - `mutate()` throws and rolls back when the write breaks a rule, such as a [limit](limits.md#size) or `ValidationError`.
 - `forward` and `forwardShared` throw when `verify` returns a value they cannot use, such as an `expiresAt` that is not a finite number or a bucket that breaks your rules. The device's request fails: `downloadError` shows it and the device retries with backoff.
 - An error thrown by your `scheduled(name)` goes to `reportError`, and the task is not run again. Call `schedule` inside it to retry.

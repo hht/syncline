@@ -40,7 +40,8 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 
 `write()` 被拒绝，什么都不会保存。原因：
 
-- `ValidationError`：某个值与它的列声明（类型、非空、枚举、长度、JSON）或你的 `validation` schema 不符，或主键太长。`issues` 列出字段和原因。
+- `ValidationError`：某个值违反它的列声明（非空、枚举、长度、JSON、布尔值不是 0 或 1、实数列里的 Infinity）或你的 `validation` schema，或主键太长。`issues` 列出字段和原因。
+- 某个值是它的列存不下的，比如整数列里不是数字的文本，或者小数。SQLite 会用它自己的错误拒绝，而不是 `ValidationError`。
 - [值](limits.md#值)或[写入](limits.md#大小)超出了限制，比如无效文本、NaN，或行数过多。
 - 某行通过外键引用了不存在的行。
 - 写入了 `readOnly` 表。
@@ -79,6 +80,14 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 
 云端比应用新，或者应用用到了云端已退役的表或列。同步暂停。请发布应用更新。
 
+### `downloadError` 提示等待云端部署
+
+应用领先于云端。同步按退避间隔重试，待上传的写入保留。原因：
+
+- 应用声明了云端没有的表或列，或者云端的声明不同，比如类型或键不同。部署带有它的云端。
+- 云端运行的 Syncline 版本比应用旧。用应用所用的版本部署云端。
+- 云端删掉了某张表或某一列却没有退役，所以等待永远不会结束。请在两边都把它写进 `retired`。云端和应用都回滚的情况，见[边界情况](limits.md#设备)。
+
 ### `uploadError` 显示代码 1007
 
 云端拒绝了上传的一批写入：无法解析，或超出了限制。上传会暂停，直到应用重启或调用 `resync()`。如果这些写入永远无法成功，用 `resync({ discardPending: true })` 丢弃。
@@ -109,8 +118,8 @@ Syncline 自己的表（`_syncline_*`）只能由 Syncline 修改。其中保存
 
 ### 云端代码中的错误
 
-- schema 违反[表结构](limits.md#表结构)中的规则时，`SynclineSpace` 抛错。
-- 没有名字，或名字对它的分片来说太长时，`SynclineSharedSpace` 抛错（见[共享空间](limits.md#共享空间)）。
+- schema 违反[表结构](limits.md#表结构)中写明由云端检查的规则时，`SynclineSpace` 和 `SynclineSharedSpace` 抛错。
+- 没有名字，或名字对它的分片来说太长时，`SynclineSharedSpace` 也会抛错（见[共享空间](limits.md#共享空间)）。
 - 写入违反规则时，`mutate()` 抛错并回滚，比如超出[限制](limits.md#大小)或 `ValidationError`。
 - `verify` 返回它们无法使用的值时，`forward` 和 `forwardShared` 抛错，比如 `expiresAt` 不是有限数，或某个 bucket 违反了你的规则。设备的请求会失败：`downloadError` 显示它，设备按退避间隔重试。
 - 你的 `scheduled(name)` 抛出的错误会交给 `reportError`，这个任务不会再执行。要重试，在其中调用 `schedule`。

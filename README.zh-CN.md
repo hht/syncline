@@ -52,7 +52,7 @@ pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-q
 
 这个包发布的是 TypeScript 源码，导入路径以 `.ts` 结尾。为了让 `tsc` 接受它们，在 `tsconfig.json` 里设置 `"allowImportingTsExtensions": true`。它的云端代码用到了 ES2024 的 API，所以 Worker 的 `tsconfig.json` 中 `lib` 需要包含 `es2024` 或更新的版本。使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`。
 
-应用还需要 `expo` 和 `react`。然后包装 Metro 配置：
+应用还需要 `expo` 和 `react`，版本见[运行要求](docs/reference/zh-CN/limits.md#运行要求)。然后包装 Metro 配置：
 
 ```js
 // metro.config.js
@@ -127,6 +127,7 @@ export default {
 
 ```tsx
 import { randomUUID } from 'expo-crypto';
+import { Button, Text, View } from 'react-native';
 import { openSyncline } from 'syncline/expo';
 import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
 import { schema, note } from './schema';
@@ -151,7 +152,14 @@ function Notes() {
   const { data } = useQuery((db) => db.select().from(note));
   const { write } = useSyncline();
   const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
-  // Render data and call add()
+  return (
+    <View>
+      {data?.map(({ id, body }) => (
+        <Text key={id}>{body}</Text>
+      ))}
+      <Button title="Add" onPress={add} />
+    </View>
+  );
 }
 ```
 

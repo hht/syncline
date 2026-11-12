@@ -37,6 +37,8 @@ Deploy the cloud first, then ship the app.
 
 Apps that have not updated keep syncing after you add tables or columns. After you retire one they still use, they stop with `updateNeeded` until they update.
 
+Rolling the cloud back to a release that still declares a retired name counts as reusing it: every space that recorded the name as retired throws when it starts.
+
 ### How do I share data between users?
 
 Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See the [shared spaces guide](../guides/shared-spaces.md), and `openShared()` in the [API](api.md).

@@ -12,7 +12,7 @@ Syncline keeps its own tables in every space's storage, next to yours. A deploy 
 - **Rolling back:** deploying an earlier release from v0.1.0 on undoes the steps that release doesn't know.
 - **Before v0.1.0:** spaces created by unreleased versions are not supported. Rebuild them.
 
-Your own tables follow your schema, as described in the [FAQ](../reference/faq.md#how-do-i-change-my-schema).
+Your own tables follow your schema, as described in the [FAQ](../reference/faq.md#how-do-i-change-my-schema). That holds for a rollback too: a version of your Worker that still declares a name you have since retired throws in every space that recorded it as retired.
 
 ## Spotting a space from before v0.1.0
 

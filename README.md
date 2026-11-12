@@ -50,7 +50,7 @@ Keep the quotes, so your shell passes `*` through. To pin a [release](https://gi
 
 The package ships TypeScript source whose imports end in `.ts`. So that `tsc` accepts them, set `"allowImportingTsExtensions": true` in your `tsconfig.json`. Its cloud code uses ES2024 APIs, so your Worker's `tsconfig.json` needs `es2024` or later in `lib`. For Jest, add `syncline` to `transformIgnorePatterns`.
 
-Your app also needs `expo` and `react`. Then wrap your Metro config:
+Your app also needs `expo` and `react`, in the versions under [Requirements](docs/reference/limits.md#requirements). Then wrap your Metro config:
 
 ```js
 // metro.config.js
@@ -125,6 +125,7 @@ Allow Wrangler's build scripts by adding `esbuild: true` and `workerd: true` und
 
 ```tsx
 import { randomUUID } from 'expo-crypto';
+import { Button, Text, View } from 'react-native';
 import { openSyncline } from 'syncline/expo';
 import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
 import { schema, note } from './schema';
@@ -149,7 +150,14 @@ function Notes() {
   const { data } = useQuery((db) => db.select().from(note));
   const { write } = useSyncline();
   const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
-  // Render data and call add()
+  return (
+    <View>
+      {data?.map(({ id, body }) => (
+        <Text key={id}>{body}</Text>
+      ))}
+      <Button title="Add" onPress={add} />
+    </View>
+  );
 }
 ```
 
