@@ -13,6 +13,7 @@ import {
   pushFailed,
   sameCookie,
   socketLimit,
+  tooManyConnections,
 } from '../common/protocol.ts';
 import type { PullRequest } from '../common/pull-url.ts';
 import { fitsBytes } from '../common/size.ts';
@@ -153,7 +154,7 @@ export class Server<S extends Socket> {
         .map((stale) => ({ stale, at: (stale.deserializeAttachment() as Attachment).acceptedAt }))
         .sort((a, b) => a.at - b.at)
         .slice(0, excess))
-        closeSocket(this.#events, stale, 1008, 'too many connections');
+        closeSocket(this.#events, stale, tooManyConnections, 'too many connections');
     if (!cookie) return closeSocket(this.#events, socket, pullNeeded, 'no cookie');
     // Cookie is off current history: incremental catch-up cannot chain; client must full-pull over HTTP (Connect in TLA+ models).
     if (!this.#space.onHistory(cookie)) return closeSocket(this.#events, socket, pullNeeded, 'not on history');

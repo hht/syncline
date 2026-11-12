@@ -11,6 +11,7 @@ import {
   pullNeeded,
   sameCookie,
   socketLimit,
+  unsupportedMessage,
 } from '../common/protocol.ts';
 import { fitsBytes } from '../common/size.ts';
 import { type Events, isolated, quiet } from './events.ts';
@@ -268,6 +269,6 @@ export class Broadcast<S extends Socket> {
 
   /** Devices never push writes to broadcast shards: close connection immediately upon receiving a message. */
   receive(socket: S) {
-    closeSocket(this.#events, socket, 1003, 'read only');
+    closeSocket(this.#events, socket, unsupportedMessage, 'read only');
   }
 }

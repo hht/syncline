@@ -156,6 +156,15 @@ export const socketLimit = 24_000;
 /** WebSocket close code (4001) indicating expired credentials, prompting the device to refresh authentication. */
 export const expired = 4001;
 
+/** WebSocket close code (1008) for a connection a private space at its connection limit closed to take a newer one. */
+export const tooManyConnections = 1008;
+
+/**
+ * WebSocket close code (1003) for a message the cloud does not take: a binary message, or an upload to a shared space.
+ * @see https://www.rfc-editor.org/rfc/rfc6455#section-7.4.1
+ */
+export const unsupportedMessage = 1003;
+
 /**
  * WebSocket subprotocol and token prefix.
  * Passes credentials in the Sec-WebSocket-Protocol header to prevent leaking tokens into URL access logs.

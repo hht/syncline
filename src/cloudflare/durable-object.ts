@@ -5,7 +5,7 @@ import { type Quota, Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import type { Transaction } from '../cloud/transaction.ts';
 import { pullBytes } from '../common/limits.ts';
-import { type Change, ping, pong, subprotocol } from '../common/protocol.ts';
+import { type Change, ping, pong, subprotocol, unsupportedMessage } from '../common/protocol.ts';
 import { type PullRequest, parsePullBody, parsePullRequest } from '../common/pull-url.ts';
 import { type CloudStorage, queryOf } from '../common/storage.ts';
 import { cloudTables } from '../tables/cloud-tables.ts';
@@ -159,7 +159,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
    * @see https://developers.cloudflare.com/workers/configuration/compatibility-flags/
    */
   override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
-    if (typeof message !== 'string') return socket.close(1003, 'text only');
+    if (typeof message !== 'string') return socket.close(unsupportedMessage, 'text only');
     this.#afterWrite(() => this.#server.receive(socket, message));
   }
 
