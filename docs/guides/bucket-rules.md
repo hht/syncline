@@ -94,7 +94,7 @@ One write changes at most 10,000 rows, so publishing a document whose revisions 
 
 ## Subscription size
 
-A token's buckets take at most 8,192 bytes as sorted JSON. With one UUID parameter per rule, that is about 170 buckets. Past it, `forwardShared` throws.
+A token's buckets take at most 8,192 bytes as sorted JSON. With one UUID parameter per rule, that is about 150 buckets. Past it, `forwardShared` throws.
 
 If users can need more, bucket by something coarser:
 

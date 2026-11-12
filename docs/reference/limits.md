@@ -125,7 +125,7 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 
 ## Shared spaces
 
-- A device's subscription takes at most 8,192 bytes encoded as JSON, sorted bucket names included, and at most 256 bytes per bucket. That is about 170 buckets when rules have one UUID parameter.
+- A device's subscription takes at most 8,192 bytes encoded as JSON, sorted bucket names included, and at most 256 bytes per bucket. That is about 150 buckets when rules have one UUID parameter.
 - The space name, with the suffix of its last shard (`#15` with the default 16 shards), fits in 1,024 bytes (UTF-8).
 - Live connections are spread over 16 broadcast shards by default (`shards`). Every server write sends one billed request to each shard and waits for all of them.
 - Plan for about 1,000 devices online at once per shard, and raise `shards` beyond that. Measured on Cloudflare, a change reaching all 1,000 devices on one shard added about 70 ms to the server write.

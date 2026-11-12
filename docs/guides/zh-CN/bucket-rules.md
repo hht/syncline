@@ -96,7 +96,7 @@ export const cloud = {
 
 ## 订阅大小
 
-一个 token 的桶排序后编码为 JSON，最多 8,192 字节。规则只有一个 UUID 参数时，约为 170 个桶。超过时 `forwardShared` 会抛错。
+一个 token 的桶排序后编码为 JSON，最多 8,192 字节。规则只有一个 UUID 参数时，约为 150 个桶。超过时 `forwardShared` 会抛错。
 
 如果用户可能需要更多桶，就按更粗的粒度分桶：
 
