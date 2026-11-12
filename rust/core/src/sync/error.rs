@@ -23,9 +23,7 @@ pub enum Kind {
     Account { stored: String, cloud: String },
     /// Swapping user while previous user still has pending writes
     Pending { owner: String, count: i64 },
-    /// Local write or replay rejected by schema/constraint rules (serialized as `"reject": {}`)
-    Reject {},
-    /// Protocol version mismatch with cloud: cloud version number
+    /// Protocol version mismatch with cloud: cloud version number, which `needs_update` reads; JS shows the message alone
     Version(i64),
     /// Device table schema is incompatible with cloud
     Schema(Incompatibility),
@@ -94,8 +92,7 @@ impl From<Error> for Failure {
                 let detail = detail.unwrap_or_else(|| rusqlite::ffi::code_to_str(code.extended_code).to_owned());
                 return Failure::new(format!("Error code {}: {detail}", code.extended_code));
             }
-            Error::Sql(_) | Error::Failed(_) => None,
-            Error::Reject(_) => Some(Kind::Reject {}),
+            Error::Sql(_) | Error::Failed(_) | Error::Reject(_) => None,
             Error::Invalid { table, issues } => Some(Kind::Validation { table, issues }),
             Error::PendingWrites { owner, count } => Some(Kind::Pending { owner, count }),
             Error::AccountMismatch { stored, cloud } => Some(Kind::Account { stored, cloud }),
@@ -115,12 +112,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_rejected_write_serializes_as_its_message_alone() {
+        let rejected = Failure::from(Error::Reject("referenced row is missing".to_owned()));
+        assert_eq!(
+            serde_json::to_value(rejected).unwrap_or_default(),
+            serde_json::json!({ "message": "referenced row is missing" })
+        );
+    }
+
+    #[test]
     fn kinds_flatten_into_the_serialized_error() {
         let json = |error: Error| serde_json::to_value(Failure::from(error)).unwrap_or_default();
-        assert_eq!(
-            json(Error::Reject("referenced row is missing".to_owned()))["reject"],
-            serde_json::json!({})
-        );
         assert_eq!(serde_json::to_value(Failure::version(6)).unwrap_or_default()["version"], 6);
         let pending = json(Error::PendingWrites {
             owner: "a".to_owned(),
