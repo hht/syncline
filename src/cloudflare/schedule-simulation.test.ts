@@ -4,12 +4,13 @@ import { ScheduleModel, type When } from '../test/test-schedule.ts';
 import { lease, Schedule } from './schedule.ts';
 import { flush, scheduleTable } from './test-schedule-table.ts';
 
-// Schedule simulation: a random seed picks the actions of model/Schedule.tla (By, Ensure, At, and cancel calls; the alarm firing;
-// tasks finishing; crashers and external resets cutting the alarm; leases and days passing) and drives the Schedule class with them
-// on SQLite under a fake clock. Task a finishes, c resets the object every run, d is a delivery rescheduled with At. A reset drops the
-// runs in memory and replays what an object start does (replacing the delivery entry at its time, arming the alarm). After every step
-// the schedule table must match the model entry by entry (time class, lease, backoff, resets), every task the alarm starts must be one
-// the model starts, and the alarm must be armed for the earliest entry; a final phase without new calls checks every call is served.
+// Schedule simulation: a random seed picks the actions of model/Schedule.tla (By, Ensure, At, and cancel calls, one or several in a
+// turn; the alarm firing; tasks finishing; crashers and external resets cutting the alarm; leases and days passing) and drives the
+// Schedule class with them on SQLite under a fake clock. Task a finishes, c resets the object every run, d is a delivery rescheduled
+// with At. A reset drops the runs in memory and replays what an object start does (replacing the delivery entry at its time, arming
+// the alarm). After every step the schedule table must match the model entry by entry (time class, lease, backoff, resets), every
+// task the alarm starts must be one the model starts, and the alarm must be armed for the earliest entry; a final phase without new
+// calls checks every call is served.
 // @see https://apple.github.io/foundationdb/testing.html
 
 const tasks = ['a', 'c', 'd'];
@@ -19,6 +20,10 @@ const replaced = new Set(['d']);
 const resetLimit = 3;
 const maxFaults = 3;
 const day = 86_400_000;
+
+/** Each action as many times as its weight, to pick one evenly. */
+const weighted = (actions: [number, () => Promise<void>][]) =>
+  actions.flatMap(([weight, action]) => Array<() => Promise<void>>(weight).fill(action));
 
 let clock = 0;
 const reported: unknown[] = [];
@@ -62,24 +67,36 @@ class Simulation {
     return items[Math.floor(this.#random() * items.length)] as T;
   }
 
+  /**
+   * An action that makes one scheduling call on the schedule (`real`) and on the model (`expected`) for a task of `from` and arms the
+   * alarm; one time in four another enabled call follows before that arm settles.
+   */
+  #call(name: string, from: string[], real: (t: string, at: number) => void, expected: (t: string, when: When) => void) {
+    return async () => {
+      const t = this.#pick(from);
+      const when = this.#pick<When>(['due', 'lease']);
+      this.steps.push(`${name}(${t}, ${when})`);
+      real(t, when === 'due' ? clock : clock + lease);
+      expected(t, when);
+      // Every caller arms the alarm after scheduling, and own, disown, and a write do not wait for it: another call in the same turn
+      // finds this arm in flight
+      const armed = this.#schedule.arm();
+      if (this.#random() < 0.25) {
+        this.steps.push('in the same turn:');
+        await this.#pick(weighted(this.#calls()))();
+      }
+      await armed;
+    };
+  }
+
   /** Scheduling calls the model enables now, with their weights. */
   #calls(): [number, () => Promise<void>][] {
     const model = this.#model;
-    const call =
-      (name: string, from: string[], real: (t: string, at: number) => void, expected: (t: string, when: When) => void) => async () => {
-        const t = this.#pick(from);
-        const when = this.#pick<When>(['due', 'lease']);
-        this.steps.push(`${name}(${t}, ${when})`);
-        real(t, when === 'due' ? clock : clock + lease);
-        expected(t, when);
-        // Every caller arms the alarm after scheduling
-        await this.#schedule.arm();
-      };
     const schedule = this.#schedule;
     return [
       [
         3,
-        call(
+        this.#call(
           'by',
           tasks,
           (t, at) => schedule.by(t, at),
@@ -88,7 +105,7 @@ class Simulation {
       ],
       [
         model.alarm ? 0 : 1,
-        call(
+        this.#call(
           'ensure',
           ['a', 'c'],
           (t, at) => schedule.ensure(t, at),
@@ -97,7 +114,7 @@ class Simulation {
       ],
       [
         1,
-        call(
+        this.#call(
           'at',
           [...replaced],
           (t, at) => schedule.at(t, at),
@@ -106,7 +123,7 @@ class Simulation {
       ],
       [
         model.present.get('a') ? 1 : 0,
-        call(
+        this.#call(
           'cancel',
           ['a'],
           (t) => schedule.cancel(t),
@@ -133,7 +150,7 @@ class Simulation {
 
   /** Takes one enabled action, if any. */
   async step(calls: boolean) {
-    const enabled = this.#actions(calls).flatMap(([weight, action]) => Array<() => Promise<void>>(weight).fill(action));
+    const enabled = weighted(this.#actions(calls));
     if (enabled.length === 0) return;
     await this.#pick(enabled)();
     this.check();
