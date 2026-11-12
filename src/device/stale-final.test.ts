@@ -85,12 +85,16 @@ test('stale final chunk staged, then a hint from the same incarnation: the next 
   expectCaughtUp();
 });
 
-test('stale final chunk staged, then a restart: the incarnation of staged chunks is unknown and assumed unchanged, so a hint from another incarnation keeps the staged floor', async () => {
-  const { space, storage, device, catalog, serve, boundary } = await withStaleFinal();
+test('stale final chunk staged, a hint of a newer version, then a restart: the target is lost with memory, so the floor falls back to the staged seen (Crash in model/Shared.tla); the incarnation of staged chunks is unknown and assumed unchanged, so a hint from another incarnation keeps the staged floor', async () => {
+  const { space, storage, device, catalog, publish, serve, boundary } = await withStaleFinal();
   for (let step = 0; step < 2; step += 1) expect(await catalog.receive(serve(catalog.pullRequest()))).toBe(true);
+  publish('p6');
+  await catalog.notified({ hint: space.head(), incarnation: space.round(0).incarnation }, false);
+  expect(catalog.pullRequest()).toMatchObject({ cursor: boundary, atLeast: 6 });
   device.close();
   const reopened = new Device(storage, [workout]).shared('catalog', [program]);
   await reopened.opened();
+  expect(reopened.pullRequest()).toMatchObject({ cursor: boundary, atLeast: 5 });
   await reopened.notified({ hint: { version: 2, nonce: 1 }, incarnation: space.round(0).incarnation + 1 }, false);
   const request = reopened.pullRequest();
   expect(request).toEqual(expect.objectContaining({ cursor: boundary, atLeast: 5 }));
