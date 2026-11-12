@@ -1,5 +1,3 @@
-import { Reject } from '../common/storage.ts';
-import { VersionMismatch } from '../common/version.ts';
 import { type Incompatibility, SchemaMismatch } from '../tables/declaration.ts';
 import { type Issue, ValidationError } from '../tables/validation.ts';
 import type { SyncStatus } from './status.ts';
@@ -8,9 +6,10 @@ import type { SyncStatus } from './status.ts';
  * Bridges errors across the Worker-page boundary and from the Rust core back to JavaScript.
  *
  * Structured cloning in `postMessage` preserves only standard error names and messages (call stacks differ across browsers). The Rust
- * core reports errors that integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatchError`, `PendingWritesError`,
- * `VersionMismatch`, `SchemaMismatch`, and `Reject`) in the serialized shape, and the page reconstructs them identical to native mobile,
- * as it does sync status errors (`downloadError`, `uploadError`) via `deserializeStatus`. Errors the Worker raises retain only their message. The two device-only error classes (`AccountMismatchError`, `PendingWritesError`) are defined here.
+ * core reports errors that integrators inspect with `instanceof` (`ValidationError` with table/paths, `AccountMismatchError`, `PendingWritesError`)
+ * and a schema mismatch in the serialized shape, and the page reconstructs them identical to native mobile, as it does sync status errors
+ * (`downloadError`, `uploadError`) via `deserializeStatus`. Its other errors and those the Worker raises retain only their message. The two
+ * device-only error classes (`AccountMismatchError`, `PendingWritesError`) are defined here.
  * What this module must not know: Where errors originate or how the page handles them.
  * @see https://html.spec.whatwg.org/multipage/structured-data.html#serializable-objects
  */
@@ -60,9 +59,7 @@ export type SerializedError = {
   validation?: { table: string; issues: Issue[] };
   account?: { stored: string; cloud: string };
   pending?: { owner: string; count: number };
-  version?: number;
   schema?: Incompatibility;
-  reject?: Record<string, never>;
 };
 
 /** Serializes an error the Worker itself raised; the Worker never constructs the classes above, which only the Rust core reports. */
@@ -78,13 +75,11 @@ export function deserializeError(serialized: SerializedError) {
   return error;
 }
 
-function restored({ message, validation, account, pending, version, schema, reject }: SerializedError): Error {
+function restored({ message, validation, account, pending, schema }: SerializedError): Error {
   if (validation) return new ValidationError(validation.table, validation.issues);
   if (account) return new AccountMismatchError(account.stored, account.cloud);
   if (pending) return new PendingWritesError(pending.owner, pending.count);
-  if (version !== undefined) return new VersionMismatch(version);
   if (schema) return new SchemaMismatch(schema);
-  if (reject) return new Reject(message);
   return new Error(message);
 }
 

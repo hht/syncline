@@ -71,13 +71,14 @@ test('cloud protocol version newer than device (HTTP pull returns 409): stops re
   network.cloudVersion = protocolVersion + 1;
   connection.start();
   await run(false);
-  expect(connection.status()).toMatchObject({ connected: false, connecting: false, updateNeeded: true, downloadError: expect.any(Error) });
+  const newer = new Error(`cloud sync protocol is newer (version ${protocolVersion + 1}); app update required`);
+  expect(connection.status()).toMatchObject({ connected: false, connecting: false, updateNeeded: true, downloadError: newer });
   expect(network.fire()).toBe(false);
   // Reconnecting cannot help until the app updates
   connection.reconnect();
   await flush();
   expect(network.ready()).toEqual([]);
-  await expect(connection.sync()).rejects.toThrow();
+  await expect(connection.sync()).rejects.toThrow(newer);
   expect(reported).toEqual([]);
 });
 
@@ -98,7 +99,8 @@ test('cloud protocol version older than device (during rollback): retries with b
   network.cloudVersion = protocolVersion - 1;
   connection.start();
   await run(false);
-  expect(connection.status()).toMatchObject({ connected: false, connecting: true, updateNeeded: false, downloadError: expect.any(Error) });
+  const older = new Error(`cloud sync protocol is older (version ${protocolVersion - 1}); wait for cloud deployment to finish`);
+  expect(connection.status()).toMatchObject({ connected: false, connecting: true, updateNeeded: false, downloadError: older });
   network.cloudVersion = protocolVersion;
   await run();
   expect(connection.status()).toMatchObject({ connected: true, hasSynced: true });

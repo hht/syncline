@@ -15,17 +15,3 @@ export const protocolVersion = 5;
 export const versionParam = 'v';
 export const versionMismatch = 4002;
 export const versionConflict = 409;
-
-/** Protocol version mismatch error indicating incompatible device and cloud wire versions. */
-export class VersionMismatch extends Error {
-  readonly cloud: number;
-
-  constructor(cloud: number) {
-    super(
-      cloud > protocolVersion
-        ? `Cloud protocol version ${cloud} is newer; update the application`
-        : `Cloud protocol version ${cloud} is older; wait for deployment to complete`,
-    );
-    this.cloud = cloud;
-  }
-}
