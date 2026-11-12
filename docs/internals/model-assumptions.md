@@ -42,6 +42,8 @@ Details for [Models and model checking](model.md): model conclusions hold only w
 - When a shard cannot retrieve the head version, it may send only a hint or omit catch-up, and must not send an empty catch-up chained onto the device's cookie: doing so would drop changes in `(device cookie, shard version]` (mutating catch-up in `Fanout.tla` this way causes `MCFanout` to report a `Covers` violation).
 - Backoff affects only timing, not eventual execution: model liveness assumes a finite bound on failures.
 - Point-in-time recovery: omitted for shared spaces because version nonces prior to the recovery point remain unchanged, causing chunk cache keyed by position to splice together histories from before and after recovery.
+- Tables and columns leaving sync and returning: `Shared.tla` changes bucket rules (`RuleChange`) but never removes a table, so its log holds no table drop entries. The implementation records a drop when a shared table or column leaves and rescans it when it returns, as private spaces do (`Leave` and `Enter` in `Private.tla`); a tail must then skip the drop of a table the same round rescans (`src/cloud/shared-evolution.test.ts`).
+- The age of a shard's query answer: `Fanout.tla` (`Answer`) and the fanout simulation answer a shard's query for the latest round with head at the moment the shard takes the answer, while a real answer is as old as its way back, so a shard may record a round behind head as known. It sends a connection nothing older than what it already pushed there, and a later round whose base lies past the known round makes it ask again. Not checked by the gates.
 
 ## Omitted from the model: both spaces
 
