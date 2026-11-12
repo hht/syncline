@@ -162,11 +162,11 @@ impl Client {
         }
     }
 
-    /// Closes the database: stops space synchronization, rolls back open local writes, and fails queued/waiting calls with "local database is closed".
+    /// Closes the database: stops space synchronization, rolls back open local writes, and fails queued/waiting calls with "Local database is closed".
     fn close(&mut self, jobs: &mut Vec<Job>, now: f64) {
         self.each(jobs, now, Connection::stop);
         self.closed = true;
-        let closed = || Err(Failure::new("local database is closed"));
+        let closed = || Err(Failure::new("Local database is closed"));
         if let Some(Write { validating: Some(id), .. }) = self.write {
             self.reply(id, closed());
         }

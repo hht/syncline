@@ -289,7 +289,7 @@ class Private extends Mirror {
   /** Verifies checksums: yields thread between batches in Rust; errors report normally or abort (null) if closed. */
   async verify(): Promise<boolean | undefined> {
     const closed = (error: Error) => {
-      if (error.message === 'local database is closed') return null;
+      if (error.message === 'Local database is closed') return null;
       throw error;
     };
     const matched = (await this.calls.probe({ type: 'verify' }).catch(closed)) as boolean | null;

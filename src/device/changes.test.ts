@@ -137,7 +137,7 @@ test('using query inside local write body queues behind active write, warning af
   vi.useFakeTimers();
   const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
-    // Database close fails queued query with "local database is closed", failing the write.
+    // Database close fails queued query with "Local database is closed", failing the write.
     write(phone.device, () => phone.device.query('SELECT id FROM workout', [])).catch(() => undefined);
     await vi.advanceTimersByTimeAsync(4999);
     expect(warned).not.toHaveBeenCalled();

@@ -181,7 +181,7 @@ test('pull landing queued behind an open local write stops when database closes 
   first.connection.stop();
   first.device.close();
   resolve();
-  await expect(open).rejects.toThrow('local database is closed');
+  await expect(open).rejects.toThrow('Local database is closed');
   await new Promise((resolve) => setImmediate(resolve));
   expect(reported).toEqual([]);
 });

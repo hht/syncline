@@ -80,7 +80,7 @@ fn call_before_open_replies_closed_and_one_without_a_reply_is_dropped() {
     let batch: Json = serde_json::from_str(&library.handle.next().unwrap()).unwrap();
     assert_eq!(
         batch,
-        json!([{ "type": "reply", "id": 1, "error": { "message": "local database is closed" } }])
+        json!([{ "type": "reply", "id": 1, "error": { "message": "Local database is closed" } }])
     );
 }
 
@@ -217,8 +217,8 @@ fn close_while_queued_to_open_fails_buffered_calls_as_closed_without_waiting() {
     }
     let ids: Vec<_> = replies.iter().map(|it| it["id"].clone()).collect();
     assert_eq!(ids, [json!(1), json!(2), json!(3)]);
-    assert_eq!(replies[0]["error"]["message"], "local database is closed");
-    assert_eq!(replies[1]["error"]["message"], "local database is closed");
+    assert_eq!(replies[0]["error"]["message"], "Local database is closed");
+    assert_eq!(replies[1]["error"]["message"], "Local database is closed");
     assert_eq!(replies[2].get("error"), None);
 }
 

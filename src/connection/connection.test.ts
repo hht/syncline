@@ -210,7 +210,7 @@ test('does not report error when stopped while pull result is queued behind acti
   connection.stop();
   device.close();
   resolve();
-  await expect(open).rejects.toThrow('local database is closed');
+  await expect(open).rejects.toThrow('Local database is closed');
   await flush();
   expect(reported).toEqual([]);
 });

@@ -139,9 +139,9 @@ test('after close: open local writes roll back, queued writes and receives abort
     phone.device.close();
   });
   const received = phone.device.private.receive(poke);
-  await expect(open).rejects.toThrow('local database is closed');
-  await expect(received).rejects.toThrow('local database is closed');
-  await expect(write(phone.device, async () => undefined)).rejects.toThrow('local database is closed');
+  await expect(open).rejects.toThrow('Local database is closed');
+  await expect(received).rejects.toThrow('Local database is closed');
+  await expect(write(phone.device, async () => undefined)).rejects.toThrow('Local database is closed');
   expect(read(phone.storage).workouts).toMatchObject([{ note: 'squat', weight: 102.5 }]);
   expect(phone.device.private.pending()).toEqual([]);
 });
@@ -194,7 +194,7 @@ test('closing the database while a write is validated fails that write as closed
     },
   };
   device = new Device(storage, tables, { validation: new Map([[workout, closing]]) });
-  await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }))).rejects.toThrow('local database is closed');
+  await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }))).rejects.toThrow('Local database is closed');
   expect(read(storage).workouts).toEqual([]);
 });
 

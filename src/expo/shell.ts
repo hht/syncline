@@ -146,7 +146,7 @@ export class Shell {
   send(input: Input) {
     if (this.#closed) {
       // Late inputs (token answers, timers, socket events) must not drive a core that a newer shell may now be driving.
-      if (typeof input.id === 'number') this.#deliver({ type: 'reply', id: input.id, error: { message: 'local database is closed' } });
+      if (typeof input.id === 'number') this.#deliver({ type: 'reply', id: input.id, error: { message: 'Local database is closed' } });
       return;
     }
     this.#inbox.push(input);
@@ -171,7 +171,7 @@ export class Shell {
   }
 
   /**
-   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls reply "local database is closed" here: the core takes no input after closing.
+   * Closes the database shell: cancels timers, closes sockets, and aborts requests. Subsequent calls reply "Local database is closed" here: the core takes no input after closing.
    */
   close() {
     this.#closed = true;

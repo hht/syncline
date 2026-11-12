@@ -170,7 +170,7 @@ test('socket events reach the core until it disconnects the socket, and none aft
   expect(received).toEqual([{ type: 'opened', socket: 2 }]);
 });
 
-test('after close, inputs no longer reach the core: calls are answered "local database is closed", other inputs are dropped', () => {
+test('after close, inputs no longer reach the core: calls are answered "Local database is closed", other inputs are dropped', () => {
   const inputs: string[] = [];
   const delivered: unknown[] = [];
   const closed = new Shell(
@@ -187,5 +187,5 @@ test('after close, inputs no longer reach the core: calls are answered "local da
   closed.send({ type: 'query', id: 3 });
   closed.send({ type: 'token', request: 1, token: 't' });
   expect(inputs).toEqual([]);
-  expect(delivered).toEqual([{ type: 'reply', id: 3, error: { message: 'local database is closed' } }]);
+  expect(delivered).toEqual([{ type: 'reply', id: 3, error: { message: 'Local database is closed' } }]);
 });
