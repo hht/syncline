@@ -3,6 +3,7 @@ import { flush } from '../test/test-drive.ts';
 import { type Fetch, type Input, receiveTimeout, Shell } from './shell.ts';
 
 // Verifies HTTP request execution on behalf of core: resets inactivity timer on each chunk and aborts stalled or cancelled requests.
+// Events of a request or socket the core let go of do not reach it.
 
 /** Manual timer mock where armed contains active uncancelled callbacks. */
 function timers() {
@@ -129,13 +130,44 @@ test('stream decoder decodes multibyte UTF-8 characters split across chunk bound
 
 test('aborts fetch when core cancels request mid-stream on disconnect and drops remaining response', async () => {
   const { schedule } = timers();
-  const { response, push } = streamed();
+  const { response, push, close } = streamed();
   const { received, send, signal } = shell(async () => response, schedule);
   await push('{"patch":');
   send({ type: 'stop' });
   await flush();
   expect(signal()?.aborted).toBe(true);
+  // This fetch ignores the abort, as a response already buffered would: it completes all the same.
+  await push('[]}');
+  await close();
   expect(received).toEqual([]);
+});
+
+test('socket events reach the core until it disconnects the socket, and none after', () => {
+  const received: Input[] = [];
+  const sockets: WebSocket[] = [];
+  const script: Record<string, unknown> = {
+    dial: { type: 'connect', socket: 2, url: 'wss://sync.test/space', protocols: [] },
+    hang: { type: 'disconnect', socket: 2 },
+  };
+  const outer = new Shell(
+    {
+      control(text: string) {
+        const input = JSON.parse(text) as Input;
+        if (input.type in script) return JSON.stringify([script[input.type]]);
+        received.push(input);
+        return '[]';
+      },
+    },
+    { socket: () => sockets[sockets.push({ close: () => undefined } as unknown as WebSocket) - 1] as WebSocket },
+    () => undefined,
+  );
+  outer.send({ type: 'dial' });
+  const [socket] = sockets;
+  socket?.onopen?.({} as Event);
+  outer.send({ type: 'hang' });
+  socket?.onmessage?.({ data: 'late' } as MessageEvent);
+  socket?.onclose?.({ code: 1006, reason: '' } as CloseEvent);
+  expect(received).toEqual([{ type: 'opened', socket: 2 }]);
 });
 
 test('after close, inputs no longer reach the core: calls are answered "local database is closed", other inputs are dropped', () => {
