@@ -6,7 +6,8 @@ import { evolve, nextDrop, retiredGrace } from '../cloud/evolution.ts';
 import type { Storage } from '../common/storage.ts';
 import { defineTables } from '../tables/table-definitions.ts';
 import { Schedule } from './schedule.ts';
-import { object, online } from './test-space.ts';
+import { fillCommits } from './test-reads.ts';
+import { object, online, space } from './test-space.ts';
 import type { TestSpace } from './test-worker.ts';
 import { Upkeep } from './upkeep.ts';
 
@@ -103,6 +104,17 @@ test('schedules commit log truncation on open and after commits when over limit,
     full = true;
     upkeep.written();
     expect(timetable.when('syncline:truncate')).toBeDefined();
+  });
+});
+
+test('a private space whose commit log passes its byte cap truncates it by alarm after the next write, without a restart', async () => {
+  const name = space();
+  // Seeds 70 commits with ~1 MB primary keys each, exceeding the 64 MiB floor.
+  const keys = `'[["note",{"id":"' || hex(randomblob(500000)) || '"}]]'`;
+  await runInDurableObject(object(name), (_: TestSpace, state) => fillCommits(state.storage, 70, keys));
+  await object(name).importNotes([{ id: 'n1', text: 'a write' }]);
+  await vi.waitFor(async () => expect(await sql(name, 'SELECT 1 FROM _syncline_commit WHERE version = 0')).toEqual([]), {
+    timeout: 10_000,
   });
 });
 

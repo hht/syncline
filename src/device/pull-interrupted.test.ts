@@ -56,6 +56,20 @@ test('incremental chunked pull mid-stream when cloud restores to before scanned 
   expect(both(restoredCloud).workouts.map(({ id }) => id)).toContain('w9');
 });
 
+test('cloud restores to a point between two chunks of an initial pull, undoing a write a later chunk read: resuming pull restarts from scratch, the rolled-back value never lands', async () => {
+  const { cloud, space, storage, device } = filled();
+  expect((await pullChunk(space, device)).result).toHaveProperty('next');
+  const image = cloud.image();
+  const restorePoint = both(cloud);
+  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'rolled back on restore' }));
+  // Paused on the chunk that stages the rolled-back value, with the pull unfinished.
+  let chunk = (await pullChunk(space, device)).result;
+  while (!JSON.stringify(chunk.patch).includes('rolled back on restore')) chunk = (await pullChunk(space, device)).result;
+  expect(chunk).toHaveProperty('next');
+  await pullRest(new Space(restoredStorage(image), tables), device);
+  expect(both(storage)).toEqual(restorePoint);
+});
+
 test('pre-deployment chunk carries cursor unrecognized by new code (format changed): continues pull from beginning, cookie and pending writes preserved, matches cloud after final chunk', async () => {
   const { space, device, pullToEqual } = filled();
   await pullRest(space, device);
