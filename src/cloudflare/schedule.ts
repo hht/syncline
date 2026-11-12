@@ -170,9 +170,10 @@ export class Schedule {
 
   /** Arms the alarm for the earliest entry in _syncline_schedule, or deletes the alarm if none remain. */
   async arm() {
+    const current = await this.#storage.getAlarm();
+    // Read after the wait: a later call in the same turn changes the schedule, and its own arm compares against the alarm as it was before this one writes.
     const [row] = this.#storage.sql.exec('SELECT min(at) AS at FROM _syncline_schedule').toArray();
     const at = row?.at === null || row?.at === undefined ? undefined : Number(row.at);
-    const current = await this.#storage.getAlarm();
     if (at === undefined) {
       if (current !== null) await this.#storage.deleteAlarm();
     } else if (current !== at) await this.#storage.setAlarm(at);

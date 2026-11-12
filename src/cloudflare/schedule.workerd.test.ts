@@ -71,6 +71,17 @@ test('supports recurring tasks that reschedule themselves in scheduled callbacks
   expect(await object(name).fired()).toEqual(['recurring', 'recurring']);
 });
 
+test('unscheduling a task and scheduling it again for the same time in one turn leaves the alarm at that time', async () => {
+  const name = space();
+  const at = Date.now() + 3_600_000;
+  await object(name).remind('timer', at);
+  await runInDurableObject(object(name), (instance) => {
+    instance.forget('timer');
+    instance.remind('timer', at);
+  });
+  expect(await object(name).alarmAt()).toBe(at);
+});
+
 test('an actor reset during a chore keeps it scheduled: once the lease expires, the alarm runs it to completion', async () => {
   const { name, phone } = await online(1);
   await object(name).hangExports(true);
