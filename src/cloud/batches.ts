@@ -1,10 +1,10 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { batchRows, readBytes } from '../common/limits.ts';
-import type { Op } from '../common/protocol.ts';
-import { quote, quoteAll, sizedBy, whereKey } from '../common/sql.ts';
-import type { Query } from '../common/storage.ts';
+import type { Op } from '../protocol/messages.ts';
+import { quote, quoteAll, sizedBy, whereKey } from '../sqlite/sql.ts';
+import type { Query } from '../sqlite/storage.ts';
 import { inRange, type Key, keyColumns, keyOf } from '../tables/keys.ts';
 import type { Buckets, Lane } from './buckets.ts';
+import { batchRows, readBytes } from './limits.ts';
 
 /**
  * Reads bounded batches by row count and byte size on the cloud (for pulls, catch-up, and notices,

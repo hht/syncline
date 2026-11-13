@@ -12,7 +12,7 @@ Syncline keeps its own tables in every space's storage, next to yours. A deploy 
 - **Rolling back:** deploying an earlier release from v0.1.0 on undoes the steps that release doesn't know.
 - **Before v0.1.0:** spaces created by unreleased versions are not supported. Rebuild them.
 
-Your own tables follow your schema, as described in the [FAQ](../reference/faq.md#how-do-i-change-my-schema).
+Your own tables follow your schema, as described in the [FAQ](../reference/faq.md#how-do-i-change-my-schema). That holds for a rollback too: a version of your Worker that still declares a name you have since retired throws in every space that recorded it as retired.
 
 ## Spotting a space from before v0.1.0
 
@@ -22,7 +22,7 @@ Writes and downloads still work, but every alarm fails with `no such column: res
 
 Rebuilding deletes all data in the space. Copy out anything you need first, and write it back afterwards: see [Bulk writes](bulk-writes.md).
 
-Devices download a rebuilt space from scratch on their own. Writes a device had not uploaded yet are kept and uploaded to the new space, where they apply to its rows: an update or delete of a row the rebuild removed does nothing, and a write the new space cannot run is [held](../reference/errors.md#held-writes). After a shared space is rebuilt, a device may first get old data from the cache; the cloud then makes it download again.
+Devices download a rebuilt space from scratch on their own. Writes a device had not uploaded yet are kept and uploaded to the new space, where they apply to its rows: an update or delete of a row the rebuild removed does nothing, and a write the new space cannot run is [held](../reference/errors.md#held-writes). After a shared space is rebuilt, devices [may first get old data from the cache](../reference/edge-cases.md#after-a-rebuild-devices-may-first-get-old-data-from-cache).
 
 ### One shared space: use a new name
 
@@ -31,7 +31,7 @@ A shared space is reached by name, so a new name is a new, empty space:
 1. Change `space` in `forwardShared`, and the name your server writes use, for example from `'shared'` to `'shared-2'`.
 2. Deploy, then write the data into the new space.
 
-The old object keeps its storage until you empty it.
+Devices connected during the deploy move to the new space once their connection ends, at the latest a minute after their token expires. A device that reaches the new space before you write the data clears its rows of the space, which fill again once you write it. The old object keeps its storage until you empty it.
 
 ### A whole class: two deploys
 

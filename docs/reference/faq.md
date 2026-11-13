@@ -37,6 +37,8 @@ Deploy the cloud first, then ship the app.
 
 Apps that have not updated keep syncing after you add tables or columns. After you retire one they still use, they stop with `updateNeeded` until they update.
 
+Rolling the cloud back to a release that still declares a retired name counts as reusing it: every space that recorded the name as retired throws when it starts.
+
 ### How do I share data between users?
 
 Use a shared space. The cloud writes the data, and each device downloads the parts its token allows. See the [shared spaces guide](../guides/shared-spaces.md), and `openShared()` in the [API](api.md).
@@ -51,7 +53,7 @@ No. Syncline needs a [development build](https://docs.expo.dev/develop/developme
 
 ### How do I connect to `wrangler dev`?
 
-Pass `allowCleartext: true` to `openSyncline`, and use `http://localhost:8787` from the iOS simulator or a browser, or `http://10.0.2.2:8787` from the Android emulator. From a phone, start `npx wrangler dev --ip 0.0.0.0` and use your computer's LAN address. Use `https://` everywhere else.
+Pass `allowCleartext: true` to `openSyncline`, and use the addresses in [Use it in your app](../../README.md#4-use-it-in-your-app). Use `https://` everywhere else.
 
 ## Errors
 

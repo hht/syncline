@@ -2,11 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, resolve } from 'node:path';
-import { clangFirst, wasmCompilers, wasmTarget } from '../../src/build-wasm.mjs';
+import { clangFirst, wasmCompilers, wasmTarget } from '../../rust/wasm/build.mjs';
 import { changedFiles } from './changed-files.ts';
 import { checkCommentRules } from './comment-rules.ts';
 import { coverage } from './coverage.ts';
-import { checkCommands, checkGateClaims, checkGuideCode, checkPackagePaths, checkPaths } from './docs.ts';
+import { checkCommands, checkExcerpts, checkGateClaims, checkPackagePaths, checkPaths } from './docs.ts';
 import { checkEnglish } from './english.ts';
 import { checkForbiddenWords } from './forbidden-words.ts';
 import { biome, deadCode, duplicates, layers, runTool, tests, together, typecheck } from './gates.ts';
@@ -58,7 +58,7 @@ const skip = (reason: string) => async () => ({ ok: true, output: reason, proble
 // Rust does not reference TS (the wasm referenced by TS is compiled first by the wasm gate below): only run when the Rust workspace or gates themselves change.
 const rustRelevant = !files || files.some((file) => /^(rust\/|tools\/check\/)/.test(file));
 // Tests compile wasm at the start (vitest globalSetup); when Rust changes, compile with all cores: compile it here first so its cargo has nothing left to do.
-const wasm = (output: 'node' | 'coverage' | 'web') => runTool(root, process.execPath, ['src/build-wasm.mjs', output], () => []);
+const wasm = (output: 'node' | 'coverage' | 'web') => runTool(root, process.execPath, ['rust/wasm/build.mjs', output], () => []);
 
 // Cargo building Rust (rust, wasm) uses all cores; running simultaneously with tests when Rust changes pushes timeout-bounded tests past their timeouts, so mark them first to finish before starting the rest.
 // Tests (vitest defaults to cores - 1 processes) run concurrently with other gates and workerd; running on all cores contends for CPU and stretches single tests toward their timeouts: use only two-thirds of the cores.
@@ -68,10 +68,10 @@ const gates: Gate[] = [
   // Icons by check type: 🎨 format and style 🔷 types 🧱 layers 🧹 dead code 👯 duplicates 🧪 tests 🏷️ naming 💬 comments 🔤 english 📄 documentation 🦀 Rust
   { name: 'biome', icon: '🎨', run: biome(root) },
   { name: 'tsc', icon: '🔷', run: typecheck(root, ['.', 'tsconfig.cloudflare.json', 'tsconfig.workers.json', 'examples/cloudflare']) },
-  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools', 'examples']) },
+  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'test', 'probes', 'tools', 'examples']) },
   { name: 'knip', icon: '🧹', run: deadCode(root) },
   // Report from 30 tokens: shared logic across modules should be extracted to one place; gates, dev scripts, and AGENTS.md follow .jscpd.json at 50.
-  // Guides are skipped: their code blocks are excerpts of examples/ by design (gate docs), and their translations repeat them.
+  // Guides and the API reference are skipped: their code blocks are excerpts of examples/ by design (gate docs), and their translations repeat them.
   // Rust starts from 40: declarations carry serde attributes; a single optional field (TS after?: Row is ~5 tokens) with skip_serializing_if is around twenty tokens;
   // sharing two or three fields across message types quickly exceeds 30 tokens.
   {
@@ -79,12 +79,12 @@ const gates: Gate[] = [
     icon: '👯',
     run: duplicates(
       root,
-      ['src', 'probes', 'tools', 'docs', 'rust', 'README.md', 'AGENTS.md'],
+      ['src', 'test', 'probes', 'tools', 'docs', 'rust', 'README.md', 'AGENTS.md'],
       [
         {
           path: '.',
           minTokens: 30,
-          ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md,README.zh-CN.md,docs/reference/zh-CN/**,docs/guides/**',
+          ignore: '**/*.rs,tools/**,.claude/**,AGENTS.md,README.zh-CN.md,docs/reference/zh-CN/**,docs/reference/api.md,docs/guides/**',
         },
         { path: 'rust', minTokens: 40 },
       ],
@@ -138,7 +138,7 @@ function checkDocs() {
     ...checkCommands(agents, Object.keys(scripts.scripts)),
     ...checkPackagePaths(docs, workspaceFiles()),
     ...checkGateClaims(docs, [...gates.map((gate) => gate.name), 'commit-message']),
-    ...checkGuideCode(docs, workspaceFiles('examples').map(read)),
+    ...checkExcerpts(docs, workspaceFiles('examples').map(read)),
   ];
 }
 

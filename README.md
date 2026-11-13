@@ -50,7 +50,7 @@ Keep the quotes, so your shell passes `*` through. To pin a [release](https://gi
 
 The package ships TypeScript source whose imports end in `.ts`. So that `tsc` accepts them, set `"allowImportingTsExtensions": true` in your `tsconfig.json`. Its cloud code uses ES2024 APIs, so your Worker's `tsconfig.json` needs `es2024` or later in `lib`. For Jest, add `syncline` to `transformIgnorePatterns`.
 
-Your app also needs `expo` and `react`. Then wrap your Metro config:
+Your app also needs `expo` and `react`, in the versions under [Requirements](docs/reference/limits.md#requirements). Then wrap your Metro config:
 
 ```js
 // metro.config.js
@@ -124,7 +124,9 @@ Allow Wrangler's build scripts by adding `esbuild: true` and `workerd: true` und
 ### 4. Use it in your app
 
 ```tsx
+import { QueryClient, QueryClientProvider, useMutation } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
+import { Button, Text, View } from 'react-native';
 import { openSyncline } from 'syncline/expo';
 import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
 import { schema, note } from './schema';
@@ -137,19 +139,33 @@ const syncline = openSyncline({
   token: getIdToken,
 });
 
+const queryClient = new QueryClient();
+
 export function App() {
   return (
-    <SynclineProvider value={syncline}>
-      <Notes />
-    </SynclineProvider>
+    <QueryClientProvider client={queryClient}>
+      <SynclineProvider value={syncline}>
+        <Notes />
+      </SynclineProvider>
+    </QueryClientProvider>
   );
 }
 
 function Notes() {
   const { data } = useQuery((db) => db.select().from(note));
   const { write } = useSyncline();
-  const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
-  // Render data and call add()
+  const add = useMutation({
+    mutationFn: () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' })),
+  });
+  return (
+    <View>
+      {data?.map(({ id, body }) => (
+        <Text key={id}>{body}</Text>
+      ))}
+      {add.error && <Text>{add.error.message}</Text>}
+      <Button title="Add" onPress={() => add.mutate()} />
+    </View>
+  );
 }
 ```
 
@@ -182,6 +198,7 @@ Reference:
 - [Errors](docs/reference/errors.md): what each error means and how to handle it.
 - [FAQ](docs/reference/faq.md): common questions.
 - [API](docs/reference/api.md): every export and option.
+- [Edge cases](docs/reference/edge-cases.md): rare situations most apps never meet.
 
 ## License
 

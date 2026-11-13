@@ -1,5 +1,5 @@
-import type { Op } from '../common/protocol.ts';
-import { utf8Bytes } from '../common/size.ts';
+import type { Op } from '../protocol/messages.ts';
+import { utf8Bytes } from '../protocol/size.ts';
 import { rowId } from '../tables/keys.ts';
 
 // Collects patched rows to send in live pokes to online devices after a push or server write.

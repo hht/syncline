@@ -1,6 +1,6 @@
 # Mutation testing
 
-Details for [Models and model checking](model.md): intentionally injecting any of the following mutations causes the configuration in parentheses to report a violation, demonstrating that these configurations catch such bugs. The final section lists mutations that do not trigger violations and explains why correctness does not depend on them.
+Details for [Models and model checking](model.md): intentionally injecting any of the following mutations causes the configuration in parentheses to report a violation, demonstrating that these configurations catch such bugs. The final section lists mutations that do not trigger violations and explains why the models' correctness does not depend on them, noting where the implementation's does.
 
 ## Private spaces (`Private.tla`)
 
@@ -111,8 +111,8 @@ Details for [Models and model checking](model.md): intentionally injecting any o
 
 ## Mutations that do not trigger a violation
 
-Correctness does not depend on them:
+Correctness of the models does not depend on them; an item says so where the implementation's does:
 - Applying notices chained onto the cookie while staged chunks exist: full exhaustive check on `MCPrivateRestoreChunk` and random walk on `MCPrivateIncrChunk` still pass. Chunks contain values current at read time and positions must be on current history; advancing the cookie via notices before continuing pulls still yields correct landed state. The implementation freezes notices during pulls for simplicity.
 - Range pulls do not require zero pending writes: full exhaustive check on `MCPrivateRange` still passes. Range pulls return head values, and landing reverts, applies, and replays pending writes as usual. "Zero pending writes" is a precondition for checksum comparison (local tables do not equal any cloud version when pending writes exist), but writes can still occur after a range pull is issued in the model.
-- Shared space tails do not skip items at or before `since` in the scan set: `MCSharedRule` still passes. Shared spaces have no table drop entries, and tails emit current values, so extra items only cause redundant reads; private space skips guard table deletions (`MCPrivateScopeTwice`).
+- Shared space tails do not skip items at or before `since` in the scan set: `MCSharedRule` still passes. `Shared.tla` has no table leaving sync, so its log holds no table drop entries, and tails emit current values: extra items only cause redundant reads in the model. The implementation does depend on the skip: a shared table leaving sync records a drop, and without the skip a pull spanning the table's return drops the rows it has just rescanned (`test/cloud/shared-evolution.test.ts`); private space skips guard table deletions (`MCPrivateScopeTwice`).
 - In shared spaces, first request after a hint omits the target floor (waiting until the request after landing to include it), and requests whose floor is not in the cloud's current incarnation still use cache: `MCLiveSharedRebuild` passes in both cases. Both optimizations only reduce stale cache reads and redundant pulls. Dropping targets from another incarnation depends only on "this request included it and the response was not from that incarnation", regardless of when it was attached.

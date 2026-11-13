@@ -250,12 +250,12 @@ mod tests {
     use crate::limits::WRITE_ROWS;
     use serde_json::json;
 
-    /// Three tables (workout, exercise, set) with chained foreign keys
+    /// Three tables (workbook, excerpt, set) with chained foreign keys
     fn rows(db: &Connection) -> Rows {
         db.execute_batch(
-            r#"CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT);
-               CREATE TABLE exercise (id TEXT PRIMARY KEY, workout_id TEXT);
-               CREATE TABLE "set" (id TEXT PRIMARY KEY, exercise_id TEXT);"#,
+            r#"CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT);
+               CREATE TABLE excerpt (id TEXT PRIMARY KEY, workbook_id TEXT);
+               CREATE TABLE "set" (id TEXT PRIMARY KEY, excerpt_id TEXT);"#,
         )
         .unwrap();
         let column =
@@ -265,16 +265,16 @@ mod tests {
             json!({ "name": name, "columns": [column("id"), column(other)], "key": ["id"], "indexes": [], "foreignKeys": foreign_keys })
         };
         let tables: Vec<Table> = serde_json::from_value(json!([
-            table("workout", "note", None),
-            table("exercise", "workout_id", Some("workout")),
-            table("set", "exercise_id", Some("exercise")),
+            table("workbook", "note", None),
+            table("excerpt", "workbook_id", Some("workbook")),
+            table("set", "excerpt_id", Some("excerpt")),
         ]))
         .unwrap();
         Rows::new(&tables, |name| {
             let other = match name {
-                "workout" => "note",
-                "exercise" => "workout_id",
-                _ => "exercise_id",
+                "workbook" => "note",
+                "excerpt" => "workbook_id",
+                _ => "excerpt_id",
             };
             vec!["id".to_owned(), other.to_owned()]
         })
@@ -303,25 +303,25 @@ mod tests {
         let rows = rows(&db);
         let mut room = Room::new(100);
         let written = json!([
-            { "op": "put", "table": "workout", "row": { "id": "w1", "note": "squat" } },
-            { "op": "put", "table": "exercise", "row": { "id": "e1", "workout_id": "w1" } },
-            { "op": "put", "table": "set", "row": { "id": "s1", "exercise_id": "e1" } },
-            { "op": "patch", "table": "workout", "row": { "id": "w1", "note": "front squat" } },
-            { "op": "patch", "table": "workout", "row": { "id": "w9", "note": "missing" } },
+            { "op": "put", "table": "workbook", "row": { "id": "w1", "note": "stamp" } },
+            { "op": "put", "table": "excerpt", "row": { "id": "e1", "workbook_id": "w1" } },
+            { "op": "put", "table": "set", "row": { "id": "s1", "excerpt_id": "e1" } },
+            { "op": "patch", "table": "workbook", "row": { "id": "w1", "note": "front stamp" } },
+            { "op": "patch", "table": "workbook", "row": { "id": "w9", "note": "missing" } },
         ]);
         rows.write(&db, &changes(written), &mut room).unwrap();
         assert_eq!(room.rows, 96);
-        let note: String = db.query_row("SELECT note FROM workout", [], |row| row.get(0)).unwrap();
-        assert_eq!(note, "front squat");
+        let note: String = db.query_row("SELECT note FROM workbook", [], |row| row.get(0)).unwrap();
+        assert_eq!(note, "front stamp");
 
         rows.write(
             &db,
-            &changes(json!([{ "op": "del", "table": "workout", "key": { "id": "w1" } }])),
+            &changes(json!([{ "op": "del", "table": "workbook", "key": { "id": "w1" } }])),
             &mut room,
         )
         .unwrap();
         assert_eq!(room.rows, 93);
-        for table in ["workout", "exercise", "set"] {
+        for table in ["workbook", "excerpt", "set"] {
             assert_eq!(count(&db, table), 0, "{table}");
         }
     }
@@ -331,17 +331,17 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         let rows = rows(&db);
         let setup = json!([
-            { "op": "put", "table": "workout", "row": { "id": "w1" } },
-            { "op": "put", "table": "workout", "row": { "id": "w2" } },
-            { "op": "put", "table": "exercise", "row": { "id": "e1", "workout_id": "w1" } },
+            { "op": "put", "table": "workbook", "row": { "id": "w1" } },
+            { "op": "put", "table": "workbook", "row": { "id": "w2" } },
+            { "op": "put", "table": "excerpt", "row": { "id": "e1", "workbook_id": "w1" } },
         ]);
         rows.write(&db, &changes(setup), &mut Room::new(100)).unwrap();
         let moved = json!([
-            { "op": "del", "table": "workout", "key": { "id": "w1" } },
-            { "op": "patch", "table": "exercise", "row": { "id": "e1", "workout_id": "w2" } },
+            { "op": "del", "table": "workbook", "key": { "id": "w1" } },
+            { "op": "patch", "table": "excerpt", "row": { "id": "e1", "workbook_id": "w2" } },
         ]);
         rows.write(&db, &changes(moved), &mut Room::new(100)).unwrap();
-        assert_eq!(count(&db, "exercise"), 1);
+        assert_eq!(count(&db, "excerpt"), 1);
     }
 
     #[test]
@@ -351,10 +351,10 @@ mod tests {
         let write = |value: serde_json::Value, room: i64| rows.write(&db, &changes(value), &mut Room::new(room));
         assert_eq!(
             reject(write(
-                json!([{ "op": "put", "table": "exercise", "row": { "id": "e1", "workout_id": "w9" } }]),
+                json!([{ "op": "put", "table": "excerpt", "row": { "id": "e1", "workbook_id": "w9" } }]),
                 100
             )),
-            "exercise references workout, which is missing"
+            "excerpt references workbook, which is missing"
         );
         assert_eq!(
             reject(write(json!([{ "op": "put", "table": "other", "row": { "id": "x" } }]), 100)),
@@ -362,31 +362,31 @@ mod tests {
         );
         assert_eq!(
             reject(write(
-                json!([{ "op": "put", "table": "workout", "row": { "id": "w1", "reps": 1 } }]),
+                json!([{ "op": "put", "table": "workbook", "row": { "id": "w1", "runs": 1 } }]),
                 100
             )),
-            "modified column is not on workout: reps"
+            "modified column is not on workbook: runs"
         );
         assert_eq!(
-            reject(write(json!([{ "op": "put", "table": "workout", "row": { "id": null } }]), 100)),
-            "mutation for workout is missing primary key id"
+            reject(write(json!([{ "op": "put", "table": "workbook", "row": { "id": null } }]), 100)),
+            "mutation for workbook is missing primary key id"
         );
         assert_eq!(
             reject(write(
-                json!([{ "op": "del", "table": "workout", "key": { "id": "w1", "note": "x" } }]),
+                json!([{ "op": "del", "table": "workbook", "key": { "id": "w1", "note": "x" } }]),
                 100
             )),
-            "delete for workout must only specify primary key"
+            "delete for workbook must only specify primary key"
         );
         let three = json!([
-            { "op": "put", "table": "workout", "row": { "id": "w1" } },
-            { "op": "put", "table": "exercise", "row": { "id": "e1", "workout_id": "w1" } },
-            { "op": "put", "table": "set", "row": { "id": "s1", "exercise_id": "e1" } },
+            { "op": "put", "table": "workbook", "row": { "id": "w1" } },
+            { "op": "put", "table": "excerpt", "row": { "id": "e1", "workbook_id": "w1" } },
+            { "op": "put", "table": "set", "row": { "id": "s1", "excerpt_id": "e1" } },
         ]);
         assert!(reject(write(three.clone(), 2)).starts_with("write modifies more than 2 rows"));
         write(three, 3).unwrap();
         assert!(
-            reject(write(json!([{ "op": "del", "table": "workout", "key": { "id": "w1" } }]), 2))
+            reject(write(json!([{ "op": "del", "table": "workbook", "key": { "id": "w1" } }]), 2))
                 .starts_with("write modifies more than 2 rows")
         );
         assert_eq!(count(&db, "set"), 1);
@@ -400,7 +400,7 @@ mod tests {
         let puts = |from: usize, count: usize| {
             changes(serde_json::Value::Array(
                 (from..from + count)
-                    .map(|index| json!({ "op": "put", "table": "workout", "row": { "id": format!("{index:0>500}") } }))
+                    .map(|index| json!({ "op": "put", "table": "workbook", "row": { "id": format!("{index:0>500}") } }))
                     .collect(),
             ))
         };
@@ -415,10 +415,10 @@ mod tests {
     #[test]
     fn foreign_key_referencing_table_outside_space_fails() {
         let tables: Vec<Table> = serde_json::from_value(json!([{
-            "name": "exercise",
+            "name": "excerpt",
             "columns": [{ "name": "id", "field": "id", "storage": "text", "notNull": false, "boolean": false, "json": false }],
             "key": ["id"], "indexes": [],
-            "foreignKeys": [{ "columns": ["workout_id"], "parent": "workout", "to": ["id"] }],
+            "foreignKeys": [{ "columns": ["workbook_id"], "parent": "workbook", "to": ["id"] }],
         }]))
         .unwrap();
         let Err(Error::Failed(message)) = Rows::new(&tables, |_| Vec::new()) else {
@@ -426,7 +426,7 @@ mod tests {
         };
         assert_eq!(
             message,
-            "exercise.workout_id references workout, which is not a synced table in this space: foreign keys can only reference synced tables in the same space"
+            "excerpt.workbook_id references workbook, which is not a synced table in this space: foreign keys can only reference synced tables in the same space"
         );
     }
 }

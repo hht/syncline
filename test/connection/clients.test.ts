@@ -1,0 +1,81 @@
+import { expect, test } from 'vitest';
+import { Space } from '../../src/cloud/space.ts';
+import { Device } from '../support/test-device.ts';
+import { drain, flush } from '../support/test-drive.ts';
+import { createWorkbook, serving, tables, workbook, workbooks, write } from '../support/test-schema.ts';
+import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
+import { Connection } from '../support/test-sync.ts';
+
+// One client per launch: accumulation of pending writes across launches still allows successful pulls and connections
+// (private space pull puts clients in POST body, connection URL only carries protocol version and cookie),
+// with initial catch-up confirming pending mutations via cookie (LmidsSince in model).
+
+/** Connects a device to a space with an optional limit per chunk and message, tracking connection URLs. */
+function connected(device: Device, limit?: number) {
+  const cloud = cloudStorage(createWorkbook);
+  const space = new Space(cloud, tables);
+  const { network } = serving(space, limit);
+  const addresses: string[] = [];
+  const options = network.options(0);
+  const socket = (address: string, protocols: string[]) => {
+    addresses.push(address);
+    return options.socket(address, protocols);
+  };
+  const connection = new Connection(device.private, { url: 'https://sync.test/space', ...options, socket });
+  return { cloud, space, network, connection, addresses };
+}
+
+test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', async () => {
+  const storage = deviceStorage(createWorkbook);
+  let device = new Device(storage, tables);
+  for (let launch = 0; launch < 200; launch += 1) {
+    device = new Device(storage, tables);
+    await write(device, (tx) => tx.insert(workbook).values({ id: `w${launch}`, note: String(launch) }));
+  }
+  expect(device.private.pullRequest().clients).toHaveLength(200);
+  const { cloud, network, connection, addresses } = connected(device);
+  connection.start();
+  await drain(network, { advance: false });
+  expect(device.private.pending()).toEqual([]);
+  expect(workbooks(cloud)).toHaveLength(200);
+  expect(addresses.length).toBeGreaterThan(0);
+  for (const address of addresses) expect([...new URL(address).searchParams.keys()]).toEqual(['v', 'cookie']);
+  connection.stop();
+});
+
+test('reconnect catch-up confirms applied mutations by cookie without re-executing when disconnected before poke delivery', async () => {
+  const device = new Device(deviceStorage(createWorkbook), tables);
+  const { cloud, network, connection } = connected(device);
+  connection.start();
+  await drain(network, { advance: false });
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', note: 'stamp' }));
+  await flush();
+  // Mutation applied on server; disconnect while confirmation poke is in flight.
+  network.deliver();
+  expect(workbooks(cloud)).toHaveLength(1);
+  network.disconnect(0);
+  expect(device.private.pending()).toHaveLength(1);
+  await drain(network);
+  expect(device.private.pending()).toEqual([]);
+  expect(workbooks(cloud)).toEqual([expect.objectContaining({ id: 'w1', note: 'stamp' })]);
+  connection.stop();
+});
+
+test('falls back to hint and HTTP pull when catch-up poke exceeds message size limit due to 200 client confirmations', async () => {
+  const storage = deviceStorage(createWorkbook);
+  const device = new Device(storage, tables);
+  const limit = 4000;
+  const { space, network, connection } = connected(device, limit);
+  connection.start();
+  await drain(network, { advance: false });
+  connection.stop();
+  const cookie = device.private.cookie();
+  for (let index = 0; index < 200; index += 1)
+    space.push([{ client: crypto.randomUUID(), id: 1, changes: [{ op: 'put', table: 'workbook', row: { id: `w${index}`, note: null } }] }]);
+  expect(JSON.stringify(space.pull({ cookie }, limit, true)).length).toBeGreaterThan(limit);
+  connection.start();
+  await drain(network);
+  expect(device.private.cookie()).toEqual(space.head());
+  expect(workbooks(storage)).toHaveLength(200);
+  connection.stop();
+});

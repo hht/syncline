@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 import {
   type Cookie,
   expired,
@@ -11,15 +11,16 @@ import {
   pullNeeded,
   sameCookie,
   socketLimit,
-} from '../common/protocol.ts';
-import { fitsBytes } from '../common/size.ts';
+  unsupportedMessage,
+} from '../protocol/messages.ts';
+import { fitsBytes } from '../protocol/size.ts';
 import { type Events, isolated, quiet } from './events.ts';
 import { closeSocket, type Socket, type Sockets } from './server.ts';
 import type { Round, Subscribed } from './shared.ts';
 
 /**
  * Pushes shared-space changes to connected devices from a broadcast shard (following shards and connections in model/Fanout.tla):
- * runs inside a shard Durable Object using hibernatable WebSockets. A shared space uses 128 shards by default, with devices
+ * runs inside a shard Durable Object using hibernatable WebSockets. A shared space uses 16 shards by default, with devices
  * connecting to a randomly chosen shard (a single object cannot handle fanout for hundreds of thousands of connections).
  * Shards store no table data; memory tracks only the latest known round (dispatched by the shared space for each round, as a Round),
  * filtering changes against each connection's subscription: rows belonging to subscribed buckets before or after the change are delivered,
@@ -48,8 +49,13 @@ const pointOf = ({ cookie, incarnation }: Round): Point => ({ cookie, incarnatio
 /** Minimum interval (in milliseconds) between queries to the shared space for the latest round. */
 const askInterval = 5000;
 
-/** Default number of broadcast shards: approximately 1,000 connections per shard (at 100k foreground devices), well within Durable Object connection and request-per-second limits. */
-export const defaultShards = 128;
+/**
+ * Default number of broadcast shards. Every server write calls each shard and waits for all of them, so the default stays small:
+ * about 16,000 connections at 1,000 per shard. Measured on Cloudflare, a one-row write took 38 ms with 16 shards and 259 ms with
+ * 128, and a round reaching all the connections of one shard added 20 ms to the write at 250 connections, 40 ms at 500, and 72 ms
+ * at 1,000 (a round reaching none of them, under 10 ms).
+ */
+export const defaultShards = 16;
 
 /**
  * Maximum character budget for a single broadcast notice across the shard: each connection copies the message on send,
@@ -263,6 +269,6 @@ export class Broadcast<S extends Socket> {
 
   /** Devices never push writes to broadcast shards: close connection immediately upon receiving a message. */
   receive(socket: S) {
-    closeSocket(this.#events, socket, 1003, 'read only');
+    closeSocket(this.#events, socket, unsupportedMessage, 'read only');
   }
 }

@@ -1,4 +1,4 @@
-import type { Cursor } from '../common/storage.ts';
+import type { Cursor } from '../sqlite/storage.ts';
 import type { Used } from './commits.ts';
 
 /** Milliseconds in one day, calculated by UTC calendar day. */

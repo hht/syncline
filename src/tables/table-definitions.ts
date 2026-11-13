@@ -1,7 +1,7 @@
 import { getColumns, is, SQL } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { literal, quote, quoteAll, tableColumns } from '../common/sql.ts';
-import type { Storage } from '../common/storage.ts';
+import { literal, quote, quoteAll, tableColumns } from '../sqlite/sql.ts';
+import type { Storage } from '../sqlite/storage.ts';
 import { keyColumns } from './keys.ts';
 import { affinityOf, checkDeclared, storageTypeOf } from './validation.ts';
 
@@ -22,19 +22,14 @@ export type Schema = Record<string, SQLiteTable>;
 /** Returns the table name for a Drizzle SQLite table definition. */
 export const tableName = (table: SQLiteTable) => getTableConfig(table).name;
 
-const byName = (schema: Schema) => Object.values(schema).map((table) => [tableName(table), table] as const);
-
-/** Combines synced tables with cloud overrides and cloud-only tables: a cloud table replaces the synced table of the same name. */
-export const cloudTables = (schema: Schema, cloud: Schema = {}) => [...new Map([...byName(schema), ...byName(cloud)]).values()];
-
 /**
  * SQLite data types permitted in STRICT tables.
  * @see https://sqlite.org/stricttables.html
  */
 const strictTypes = new Set(['int', 'integer', 'real', 'text', 'blob', 'any']);
 
-// Formats a static column default value as a SQL literal; SQL expression defaults throw.
-function defaultOf(column: SQLiteColumn) {
+/** Formats a static column default value as a SQL literal, or undefined without one; SQL expression defaults throw. */
+export function defaultOf(column: SQLiteColumn) {
   if (!column.hasDefault || column.default === undefined) return undefined;
   if (is(column.default, SQL))
     throw new Error(`Default value for column ${column.name} is a SQL expression, which is not supported; use a static literal value`);
@@ -95,21 +90,30 @@ function declaredIndexes(table: SQLiteTable): Index[] {
   });
 }
 
-// Resolves required foreign key indexes and bucket rule indexes for a cloud table, returning creations and deletions.
-function cloudIndexesOf(table: SQLiteTable, existing: Set<string>, bucketIndexes: ((table: string) => Index[]) | undefined) {
+// Resolves required foreign key indexes and bucket rule indexes for a cloud table, returning creations and deletions. Foreign keys are
+// those of the table and of `declared`, the synced table it replaces: cascades follow the schema, whether or not the cloud table declares
+// its references again.
+function cloudIndexesOf(
+  table: SQLiteTable,
+  declared: SQLiteTable | undefined,
+  existing: Set<string>,
+  bucketIndexes: ((table: string) => Index[]) | undefined,
+) {
   const { name, foreignKeys } = getTableConfig(table);
   const key = keyColumns(table);
-  const parents = foreignKeys.flatMap((foreignKey) => {
+  const parents = new Map<string, Index>();
+  for (const foreignKey of [...foreignKeys, ...(declared ? getTableConfig(declared).foreignKeys : [])]) {
     const columns = foreignKey.reference().columns.map((column) => column.name);
-    return columns.every((column, index) => key[index] === column) ? [] : [{ name: `${name}.${columns.join('.')}`, columns }];
-  });
+    const index = `${name}.${columns.join('.')}`;
+    if (!columns.every((column, position) => key[position] === column)) parents.set(index, { name: index, columns });
+  }
   const ruled = bucketIndexes?.(name) ?? [];
   const wanted = new Set(ruled.map((index) => index.name));
   const stale = [...existing].filter((index) => index.startsWith(bucketIndexPrefix(name)) && !wanted.has(index));
   return [
     ...createIndexes(
       name,
-      [...parents, ...ruled].filter((index) => !existing.has(index.name)),
+      [...parents.values(), ...ruled].filter((index) => !existing.has(index.name)),
     ),
     ...stale.map((index) => `DROP INDEX IF EXISTS ${quote(index)}`),
   ];
@@ -209,9 +213,9 @@ export type TableDefinition = {
   foreignKeys: ReturnType<typeof foreignKeysOf>;
 };
 
-/** Builds table definitions passed to the Rust device core for local SQLite initialization. */
-export function deviceDefinitions(tables: SQLiteTable[]): TableDefinition[] {
-  checkDeclared(tables);
+/** Builds table definitions passed to the Rust device core for local SQLite initialization, checked as {@link checkDeclared} checks them. */
+export function deviceDefinitions(tables: SQLiteTable[], kind: { localOnly?: boolean } = {}): TableDefinition[] {
+  checkDeclared(tables, kind);
   return tables.map((table) => {
     const { name } = getTableConfig(table);
     return {
@@ -252,13 +256,14 @@ export function defineTables(
   const synced: Synced = new Map(
     syncedTables.map((table) => [getTableConfig(table).name, new Set(getTableConfig(table).columns.map(({ name }) => name))]),
   );
+  const schema = new Map(syncedTables.map((table) => [getTableConfig(table).name, table]));
   const query = (sql: string) => storage.sql.exec(sql).toArray();
   const indexes = new Set(query("SELECT name FROM sqlite_schema WHERE type = 'index'").map(({ name }) => String(name)));
   const deferred: string[] = [];
   storage.transactionSync(() => {
     for (const table of tables) {
       const created = defineTable(query, table, synced);
-      const missing = cloudIndexesOf(table, indexes, bucketIndexes);
+      const missing = cloudIndexesOf(table, schema.get(getTableConfig(table).name), indexes, bucketIndexes);
       if (created) for (const sql of missing) query(sql);
       else deferred.push(...missing);
     }

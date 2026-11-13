@@ -40,6 +40,9 @@ pub fn documented() -> serde_json::Value {
         "socketLimit": crate::sync::SOCKET_LIMIT,
         "baseDelay": crate::sync::backoff::BASE_DELAY,
         "maxDelay": crate::sync::backoff::MAX_DELAY,
+        "renewBefore": crate::sync::backoff::RENEW_BEFORE,
+        "renewSpread": crate::sync::backoff::RENEW_SPREAD,
+        "safeInteger": crate::change::MAX_SAFE_INTEGER,
         "rowsPerDay": crate::verifier::ROWS_PER_DAY,
         "interval": crate::verifier::INTERVAL,
     })

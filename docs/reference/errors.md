@@ -30,15 +30,32 @@ Sync goes on. Log these errors.
 | `token` throws, returns `undefined` or `null`, or takes more than 30 seconds | Sets `downloadError` and retries with backoff |
 | The cloud rejects the token (HTTP 401) | Sets `downloadError` and retries with backoff |
 | The token expires | Gets a new token and reconnects |
-| The cloud closes the connection | Depends on the code; see [Connection errors](limits.md#connection-errors) |
+| The cloud closes the connection | Depends on the code; see [Connection errors](#connection-errors) |
 
 For these, show `downloadError` or `uploadError` to the user if you want; there is nothing to fix in your code. A token your cloud keeps rejecting is the exception: check `verify`. When the user signs out, call `close()` instead of throwing from `token`, or the device keeps retrying.
+
+### Connection errors
+
+The cloud closes a connection with codes such as these. Devices handle them on their own. Except for 4000, 4002, and 4003, the code shows in `uploadError` or `downloadError`.
+
+| Code | Meaning | What the device does |
+|---|---|---|
+| 4000 | The device must download first | Downloads, then reconnects |
+| 4001 | Token expired | Gets a new token and reconnects |
+| 4002 | App and cloud versions differ | Stops if the cloud is newer (`updateNeeded`), else retries |
+| 4003 | App and cloud schemas differ | Checks compatibility, then connects, stops (`updateNeeded`), or retries |
+| 1007 | Cloud rejected a batch of uploaded writes (unreadable, or past a limit) | Stops uploading; see [`uploadError` shows code 1007](#uploaderror-shows-code-1007) |
+| 1008 | Too many connections | Retries within 30 seconds |
+| 1011 | Cloud failed to store the upload | Retries |
+| 1013 | Upload quota reached | Retries later |
+| 1003 | Binary message, or an upload to a shared space | Retries |
 
 ### A write throws
 
 `write()` rejects and nothing is saved. Causes:
 
-- `ValidationError`: a value does not match its column declaration (type, non-null, enum, length, JSON) or your `validation` schema, or the primary key is too long. `issues` lists the fields and reasons.
+- `ValidationError`: a value breaks its column declaration (non-null, enum, length, JSON, a boolean other than 0 or 1, Infinity in a real column) or your `validation` schema, or the primary key is too long. `issues` lists the fields and reasons.
+- A value its column cannot hold, such as text that is not a number, or a fraction, in an integer column. SQLite refuses it with its own error, not `ValidationError`.
 - A [value](limits.md#values) or [write](limits.md#size) past a limit, such as invalid text, NaN, or too many rows.
 - A row that references a missing row through a foreign key.
 - A write to a `readOnly` table.
@@ -53,7 +70,7 @@ Listen with `onHeld` to show the user what failed. It reports each held write at
 
 ### `waitForReady()` rejects
 
-The database could not open. `downloadError` shows the same error, and `sync()` rejects with it. Causes:
+The database could not open. `downloadError` shows the same error, and `sync()` and `resync()` reject with it. Causes:
 
 - A declaration that does not match the stored database, such as a changed column type. See [Schema](limits.md#schema).
 - `PendingWritesError` or another tab, below.
@@ -77,21 +94,25 @@ The cloud reports a different account than the one this database first synced wi
 
 The cloud is newer than the app, or the app uses a table or column the cloud has retired. Sync pauses. Ship an app update.
 
+### `downloadError` says to wait for cloud deployment
+
+The app is ahead of the cloud. Sync retries with backoff, and pending writes are kept. Causes:
+
+- The app declares a table or column the cloud does not have, or declares differently, such as with another type or key. Deploy the cloud with it.
+- The cloud runs an older Syncline release than the app. Deploy the cloud with the app's release.
+- The cloud dropped a table or column without retiring it, so the wait never ends. List it in `retired` on both sides. For a rollback of both sides, see [Rolling back both sides after a column was added stops syncing](edge-cases.md#rolling-back-both-sides-after-a-column-was-added-stops-syncing).
+
 ### `uploadError` shows code 1007
 
 The cloud rejected a batch of uploaded writes: it could not read it, or the batch broke a limit. Uploads stop until the app restarts or calls `resync()`. If the writes can never succeed, `resync({ discardPending: true })` drops them.
 
-### Downloads keep failing after I added a trigger
-
-A trigger on a synced table that raises an error can block downloads, or opening the database. Remove the trigger, or stop it from raising when Syncline changes rows.
-
 ### The web app works in one tab only
 
-Only one tab per site can open the database. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
+Only one tab per site can open the database, and it keeps it until it closes or reloads. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
 
-### Syncline's own tables were changed
+### Rare errors
 
-Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database with `delete()` to recover. Pending writes are lost.
+Some errors take a mistake or an unusual release sequence, so most apps never meet them, such as [downloads that keep failing after adding a trigger](edge-cases.md#a-trigger-that-raises-an-error-can-block-downloads) or [a change to Syncline's own tables](edge-cases.md#a-pending-write-that-cannot-be-read-back-stops-the-device). See [Edge cases](edge-cases.md).
 
 ## In the cloud
 
@@ -107,12 +128,12 @@ In a method of your `SynclineSpace`:
 
 ### Errors in your cloud code
 
-- `SynclineSpace` throws when the schema breaks a rule in [Schema](limits.md#schema).
-- `SynclineSharedSpace` throws when reached without a name, or with a name too long for its shards (see [Shared spaces](limits.md#shared-spaces)).
+- `SynclineSpace` and `SynclineSharedSpace` throw when the schema breaks a rule that [Schema](limits.md#schema) says the cloud checks.
+- `SynclineSharedSpace` also throws when reached without a name, or with a name too long for its shards (see [Shared spaces](limits.md#shared-spaces)).
 - `mutate()` throws and rolls back when the write breaks a rule, such as a [limit](limits.md#size) or `ValidationError`.
 - `forward` and `forwardShared` throw when `verify` returns a value they cannot use, such as an `expiresAt` that is not a finite number or a bucket that breaks your rules. The device's request fails: `downloadError` shows it and the device retries with backoff.
 - An error thrown by your `scheduled(name)` goes to `reportError`, and the task is not run again. Call `schedule` inside it to retry.
-- A task of yours that keeps resetting the object pauses, and the failure goes to `reportError` (see Scheduled tasks in [Things to know](limits.md#things-to-know)).
+- A task of yours that keeps resetting the object pauses, and the failure goes to `reportError` (see [A task that keeps resetting the object pauses for a day](edge-cases.md#a-task-that-keeps-resetting-the-object-pauses-for-a-day)).
 
 ### Events
 

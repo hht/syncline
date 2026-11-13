@@ -1,12 +1,13 @@
-import { sharedWriteRows, writeRows } from '../common/limits.ts';
-import type { Cookie } from '../common/protocol.ts';
-import type { CloudStorage, Query } from '../common/storage.ts';
+import { writeRows } from '../protocol/limits.ts';
+import type { Cookie } from '../protocol/messages.ts';
+import type { CloudStorage, Query } from '../sqlite/storage.ts';
 import { canonicalKey } from '../tables/keys.ts';
 import { type Changed, checkReported, limitRows, type Rows } from '../tables/rows.ts';
 import type { Validator } from '../tables/validation.ts';
 import type { BucketRows } from './bucket-rows.ts';
 import type { Buckets } from './buckets.ts';
 import { type Commits, changedRows, type Used } from './commits.ts';
+import { sharedWriteRows } from './limits.ts';
 import { withBuckets } from './shared.ts';
 import type { Touched } from './written-rows.ts';
 

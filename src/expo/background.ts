@@ -1,7 +1,7 @@
 import { Platform } from 'expo';
 import { addExpirationListener, BackgroundTaskResult, registerTaskAsync, unregisterTaskAsync } from 'expo-background-task';
 import { defineTask } from 'expo-task-manager';
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 import { syncOnce } from './native.ts';
 import type { OpenOptions } from './syncline.ts';
 

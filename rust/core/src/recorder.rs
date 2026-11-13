@@ -217,16 +217,16 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT); CREATE TABLE draft (id TEXT PRIMARY KEY); CREATE TABLE scratch (id TEXT PRIMARY KEY);",
+                "CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT); CREATE TABLE draft (id TEXT PRIMARY KEY); CREATE TABLE scratch (id TEXT PRIMARY KEY);",
             )
             .unwrap();
         let column =
             |name: &str| json!({ "name": name, "field": name, "storage": "text", "notNull": false, "boolean": false, "json": false });
         let table = |name: &str, columns: serde_json::Value| json!({ "name": name, "columns": columns, "key": ["id"], "indexes": [], "foreignKeys": [] });
         let config: Config = serde_json::from_value(json!({
-            "synced": [table("workout", json!([column("id"), column("note")]))],
+            "synced": [table("workbook", json!([column("id"), column("note")]))],
             "localOnly": [table("draft", json!([column("id")]))],
-            "readOnly": [], "retired": [], "schemas": ["workout"],
+            "readOnly": [], "retired": [], "schemas": ["workbook"],
         }))
         .unwrap();
         let recorder = Recorder::new(&connection, config).unwrap();
@@ -246,12 +246,12 @@ mod tests {
         let (mut device, recorder, mut recording) = writing();
         device
             .connection()
-            .execute_batch("INSERT INTO workout VALUES ('w1', 'squat'); INSERT INTO draft VALUES ('d1');")
+            .execute_batch("INSERT INTO workbook VALUES ('w1', 'stamp'); INSERT INTO draft VALUES ('d1');")
             .unwrap();
         let finished = recorder.finish(&mut device, &mut recording).unwrap();
         assert_eq!(
             serde_json::to_value(&finished.changes).unwrap(),
-            json!([{ "op": "put", "table": "workout", "row": { "id": "w1", "note": "squat" } }])
+            json!([{ "op": "put", "table": "workbook", "row": { "id": "w1", "note": "stamp" } }])
         );
         assert_eq!(finished.local, ["draft"]);
         assert_eq!(finished.rows.len(), 1);
@@ -283,7 +283,7 @@ mod tests {
         let mut next = Some(recorder.start(&mut device).unwrap());
         device
             .connection()
-            .execute_batch("SAVEPOINT write; INSERT INTO workout VALUES ('w2', NULL);")
+            .execute_batch("SAVEPOINT write; INSERT INTO workbook VALUES ('w2', NULL);")
             .unwrap();
         assert_eq!(recorder.finish(&mut device, &mut next).unwrap().changes.len(), 1);
     }

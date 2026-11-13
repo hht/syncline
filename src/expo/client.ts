@@ -1,5 +1,5 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { notifyAll, report } from '../common/listeners.ts';
+import { notifyAll, report } from '../listeners.ts';
 import { readOnlyOf } from '../tables/declaration.ts';
 import { deviceDefinitions, tableName } from '../tables/table-definitions.ts';
 import { checkDeclared, ValidationError, Validator } from '../tables/validation.ts';
@@ -53,7 +53,7 @@ function opening<S extends Schema>(options: OpenOptions<S>) {
   return {
     config: {
       synced: deviceDefinitions(tables),
-      localOnly: deviceDefinitions(localTables),
+      localOnly: deviceDefinitions(localTables, { localOnly: true }),
       readOnly: [...readOnlyOf(tables, readOnly)],
       retired,
       schemas: [...tables, ...localTables].filter((table) => validation?.has(table)).map(tableName),

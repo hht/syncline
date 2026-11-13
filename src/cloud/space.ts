@@ -1,10 +1,10 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { writeRows } from '../common/limits.ts';
-import { type Pushed, parseChanges } from '../common/parse.ts';
-import { type Change, type Chunk, type Cookie, chunkLimit, type Poke, type Reset } from '../common/protocol.ts';
-import type { PullRequest } from '../common/pull-url.ts';
-import { type CloudStorage, isTransient, type Query, Reject } from '../common/storage.ts';
+import { writeRows } from '../protocol/limits.ts';
+import { type Change, type Chunk, type Cookie, chunkLimit, type Poke, type Reset } from '../protocol/messages.ts';
+import { type Pushed, parseChanges } from '../protocol/parse.ts';
+import type { PullRequest } from '../protocol/pull-url.ts';
+import { type CloudStorage, isTransient, type Query, Reject } from '../sqlite/storage.ts';
 import { type Declaration, readOnlyIn, readOnlyOf, withoutRetired } from '../tables/declaration.ts';
 import { prepareInternalTables } from '../tables/internal-tables.ts';
 import { Rows } from '../tables/rows.ts';

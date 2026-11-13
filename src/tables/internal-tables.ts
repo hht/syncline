@@ -1,4 +1,4 @@
-import { queryOf, type Storage } from '../common/storage.ts';
+import { queryOf, type Storage } from '../sqlite/storage.ts';
 
 /**
  * Internal schema and migration steps for cloud SQLite storage.

@@ -10,7 +10,7 @@ test('reports ADR numbers, dates, who decided, line numbers, and version history
       `/**
  * compare by line (ADR 002 §2)
  * 2026-10-01 user decided
- * old format defaults missing to 0 (hooks/use-coach.ts:309)
+ * old format defaults missing to 0 (hooks/use-session.ts:309)
  */
 // see node_modules/x/index.js
 // docs https://example.com
@@ -58,7 +58,7 @@ test('gates and dev scripts can write versions, numbers, and line numbers; dates
   ]);
 });
 
-test('product comments do not point to files: protocol models, @see, method calls, strings, and probes are allowed', () => {
+test('product and test comments do not point to files: protocol models, @see, method calls, strings, and probes are allowed', () => {
   const text = `/**
  * pull before connect (start in connection.ts, see link.ts)
  * following Push in model/Private.tla, MCPrivateJumpTwice.big.cfg checks twice
@@ -69,6 +69,7 @@ test('product comments do not point to files: protocol models, @see, method call
 // deployment config in wrangler.jsonc
 const file = 'server.ts';`;
   expect(found(text, 'src/a.ts')).toEqual(['2 do not point to files', '5 do not point to files', '8 do not point to files']);
+  expect(found(text, 'test/a.test.ts')).toEqual(['2 do not point to files', '5 do not point to files', '8 do not point to files']);
   expect(found(text, 'probes/a.ts')).toEqual([]);
 });
 

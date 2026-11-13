@@ -93,12 +93,12 @@ export function checkGateClaims(docs: SourceText[], gates: string[]): Problem[] 
 }
 
 /**
- * Code blocks in the guides, except shell commands (`sh`), must each appear verbatim in one of `examples`, whose code the gates
- * type-check and test: a block found nowhere was edited apart from the code that runs.
+ * Code blocks in the guides and the reference pages, except shell commands (`sh`), must each appear verbatim in one of `examples`,
+ * whose code the gates type-check and test: a block found nowhere was edited apart from the code that runs.
  */
-export function checkGuideCode(docs: SourceText[], examples: SourceText[]): Problem[] {
+export function checkExcerpts(docs: SourceText[], examples: SourceText[]): Problem[] {
   return docs
-    .filter(({ path }) => path.startsWith('docs/guides/'))
+    .filter(({ path }) => /^docs\/(guides|reference)\//.test(path))
     .flatMap(({ path, text }) =>
       [...text.matchAll(/^```(?!sh$)[^\n]*\n([\s\S]*?)^```$/gm)].flatMap((match) =>
         examples.some((example) => example.text.includes(match[1] ?? ''))

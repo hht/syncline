@@ -51,7 +51,7 @@ impl Opening {
         db.execute_batch("PRAGMA synchronous = FULL")?;
         // Before creating tables, so a refused declaration leaves none behind
         refuse_names(&config.synced, &config.local_only, &config.retired.iter().cloned().collect())?;
-        tables::define(db, config.synced.iter().chain(&config.local_only))?;
+        tables::define(db, &config.synced, &config.local_only)?;
         db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA journal_size_limit = 1048576")?;
         Ok(Options {
             config,

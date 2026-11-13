@@ -15,7 +15,7 @@
 | 部分 | 作用 |
 |---|---|
 | `SynclineSharedSpace` | 存放数据的 Durable Object。服务端写入都写到这里。 |
-| `SynclineBroadcast` | 承载设备实时连接的 Durable Object。共享空间默认把连接分散到 128 个这样的对象上（`shards`）。 |
+| `SynclineBroadcast` | 承载设备实时连接的 Durable Object。共享空间默认把连接分散到 16 个这样的对象上（`shards`）。 |
 | `SynclineSharedEntry` | 响应下载请求的 Worker 入口。Workers Cache 位于它前面。 |
 | `forwardShared` | 在 Worker 的 `fetch` 里调用。先检查 token，再把实时连接转给广播对象、把下载转给入口。 |
 
@@ -75,7 +75,7 @@ export class SharedSpace extends SynclineSharedSpace<Env> {
 `SynclineSharedSpace` 接收定义，外加：
 
 - `broadcast`：一个从 `env` 返回广播命名空间的函数。共享空间通过它把每次改动发给所有广播对象。
-- `cloud`、`validation`、`retired`、`onEvent`：可选，与 `SynclineSpace` 相同。见 [API](../../reference/api.md#shared-spaces)（英文）。
+- `cloud`、`validation`、`retired`、`onEvent`：可选，与 `SynclineSpace` 相同。见 [API](../../reference/zh-CN/api.md#共享空间)。
 
 再添加你自己的方法，在其中调用 `this.mutate`。这是写入的唯一途径。
 
@@ -131,7 +131,7 @@ export default {
 - **`space`**：共享空间 Durable Object 的名字。使用固定的名字。服务端写入必须到达同一个名字：`env.SHARED_SPACE.getByName('shared')`。名字不同就是不同的空间。
 - **`definition`**：构建共享空间时用的同一个对象。
 
-空间名加上 `#127`（默认分片数时）必须在 1,024 字节以内。只能按名字访问空间（`getByName` 或 `idFromName`）。用 `newUniqueId` 或 `idFromString` 得到的 ID 会让它抛错。
+空间名加上 `#15`（默认分片数时）必须在 1,024 字节以内。只能按名字访问空间（`getByName` 或 `idFromName`）。用 `newUniqueId` 或 `idFromString` 得到的 ID 会让它抛错。
 
 私有空间和共享空间共用一个 Worker，按路径路由，如上所示。
 
@@ -165,7 +165,7 @@ export default {
 | 如果漏掉 | 会发生什么 |
 |---|---|
 | `cache` | 什么都不缓存。每次下载都打到共享空间 Durable Object，并按此计费。 |
-| `"default"` 的 `enabled: false` | 每个发往 Worker 的请求都先查缓存。`forwardShared` 把自己的响应标为 `no-store`，所以不会被缓存；但你的其他路由只要返回 200 且没有 `Cache-Control`，就会被缓存 2 小时，之后直接返回缓存而不执行你的代码。 |
+| `"default"` 的 `enabled: false` | 每个发往 Worker 的 `GET` 请求都先查缓存。`forwardShared` 把自己的响应标为 `no-store`，所以不会被缓存；但你的其他 `GET` 路由只要响应没有 `Cache-Control`，就会被缓存（[200 缓存 2 小时，404 缓存 3 分钟，还有其他状态码](https://developers.cloudflare.com/workers/cache/configuration/)），之后直接返回缓存而不执行你的代码，除非请求带 `Authorization` 或响应设置了 `Set-Cookie`。不能缓存的路由请标为 `no-store`。 |
 
 Workers Cache 需要 Wrangler 4.69.0 或更高版本；按入口配置的 `exports` 需要 4.107.0 或更高版本（[配置](https://developers.cloudflare.com/workers/cache/configuration/)）。
 
@@ -199,9 +199,9 @@ Workers Cache 需要 Wrangler 4.69.0 或更高版本；按入口配置的 `expor
   });
 ```
 
-下载每次都会检查 token。实时连接在重连前一直沿用旧的桶。不调用 `reconnect()` 时，实时更新按旧权限过滤，直到旧 token 过期后最多一分钟。
+下载每次都会检查 token。实时连接在重连前一直沿用旧的桶。不调用 `reconnect()` 时，实时更新按旧权限过滤，直到设备下一次下载，最迟到旧 token 过期后一分钟。
 
-给订阅增加桶只下载新增的桶。去掉桶会重新下载全部数据；在下载完成前，旧的行仍然可见。
+给订阅增加桶只下载新增的桶；去掉桶会[重新下载全部数据](../../reference/zh-CN/edge-cases.md#从订阅去掉桶会重新下载全部内容)。
 
 ## 7. 本地开发
 

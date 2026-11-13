@@ -1,15 +1,16 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { type Events, isolated, quiet } from '../cloud/events.ts';
+import { pullBytes } from '../cloud/limits.ts';
 import type { SpaceChecksum } from '../cloud/pulls.ts';
 import { type Quota, Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import type { Transaction } from '../cloud/transaction.ts';
-import { pullBytes } from '../common/limits.ts';
-import { type Change, ping, pong, subprotocol } from '../common/protocol.ts';
-import { type PullRequest, parsePullBody, parsePullRequest } from '../common/pull-url.ts';
-import { type CloudStorage, queryOf } from '../common/storage.ts';
+import { type Change, ping, pong, subprotocol, unsupportedMessage } from '../protocol/messages.ts';
+import { type PullRequest, parsePullBody, parsePullRequest } from '../protocol/pull-url.ts';
+import { type CloudStorage, queryOf } from '../sqlite/storage.ts';
+import { cloudTables } from '../tables/cloud-tables.ts';
 import { schemaConflict } from '../tables/declaration.ts';
-import { cloudTables, defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
+import { defineTables, type Schema, tableName } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { expiresHeader, numberHeader, spaceHeader } from './forward.ts';
 import { isSocket, schemaFingerprintOf } from './requests.ts';
@@ -19,7 +20,8 @@ import { Upkeep } from './upkeep.ts';
 
 /**
  * SpaceOptions configuration:
- * - cloud: cloud-only schema augmenting synced tables with server-only columns or cloud-only tables;
+ * - cloud: cloud-only tables, and synced tables declared again with cloud-only columns added (keeping every synced column, its storage
+ *   type and default, and the primary key);
  * - retired: permanently removed table and column names ("table.column") excluded from sync;
  * - validation: Standard Schema definitions validating pushed and server writes;
  * - readOnly: server-write-only synced tables; client mutations touching them are held;
@@ -157,7 +159,7 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
    * @see https://developers.cloudflare.com/workers/configuration/compatibility-flags/
    */
   override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
-    if (typeof message !== 'string') return socket.close(1003, 'text only');
+    if (typeof message !== 'string') return socket.close(unsupportedMessage, 'text only');
     this.#afterWrite(() => this.#server.receive(socket, message));
   }
 

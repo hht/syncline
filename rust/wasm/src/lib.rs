@@ -4,9 +4,10 @@
 //! Statement parameters and results are JSON text mirroring JS values: numbers for integers and floats, strings for text, null for empty,
 //! booleans bound to 0 and 1, byte arrays for BLOBs, and `{"real": "Infinity"}` for infinities not representable in JSON.
 //! Changesets pass raw bytes (`Uint8Array`) directly.
-//! Method error messages match JS expectations: SQLite errors include result codes ("Error code 13: ..."), rejections and declaration mismatches
-//! format as JSON (`{"reject": reason}`, `{"invalid": {"table", "issues"}}`; account switches or mismatches during open match core `Failure`
-//! JSON, identical to instructions returned by `control`), which JS parses into corresponding error instances.
+//! Method error messages match JS expectations: SQLite errors include result codes ("Error code 13: ..."); rejections, declaration
+//! mismatches, and account switches or mismatches during open format as core `Failure` JSON, identical to instructions returned by
+//! `control`, which JS parses into the error it shows: an instance of a matching class for the kinds it has one for, a plain error
+//! with the message otherwise.
 //! What this module should not know: sync rules implemented inside the core.
 
 use rusqlite::Connection;
@@ -158,13 +159,13 @@ impl Database {
         Ok(json!({ "columns": columns, "rows": rows, "written": written }).to_string())
     }
 
-    /// Defines tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
+    /// Defines tables as synced tables, adds columns, and creates indexes from a JSON array of `Table` declarations compiled from JS.
     ///
     /// # Errors
     /// Returns an error if the declaration is invalid JSON, conflicts with existing tables, or fails execution.
     pub fn define(&self, tables: &str) -> Result<(), JsError> {
         let tables: Vec<Table> = parsed(tables).map_err(failure)?;
-        tables::define(self.store().connection(), &tables).map_err(failure)
+        tables::define(self.store().connection(), &tables, &[]).map_err(failure)
     }
 
     #[wasm_bindgen(js_name = inTransaction)]

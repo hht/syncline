@@ -1,8 +1,8 @@
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { keyBytes, tableNameChars } from '../common/limits.ts';
-import { foldCase, quote, whereKey } from '../common/sql.ts';
-import { type Query, Reject } from '../common/storage.ts';
+import { keyBytes, tableNameChars } from '../protocol/limits.ts';
+import { foldCase, quote, whereKey } from '../sqlite/sql.ts';
+import { type Query, Reject } from '../sqlite/storage.ts';
 import { keyBytesOf, keyColumns, keyOf, primaryKey } from './keys.ts';
 
 /**
@@ -93,13 +93,51 @@ export function storageTypeOf(table: string, column: SQLiteColumn): 'integer' | 
 }
 
 /**
+ * Throws unless every foreign key column of a table has the storage type of the column it references.
+ * SQLite converts one side of a comparison to the type of the other side's column: the reference check turns a text column's value
+ * into a number to find a number key ('05' finds 5), and the cascade turns that key into text to find the row ('5' misses '05'), which
+ * it leaves behind. Durable Object SQL also binds every number as a real, so the cloud looks for the text key '5.0' where a device
+ * looks for '5'.
+ * @see https://sqlite.org/datatype3.html#type_conversions_prior_to_comparison
+ * @see https://github.com/cloudflare/workerd/blob/v1.20261104.1/src/workerd/api/sql.h#L29
+ */
+function checkReferences(table: SQLiteTable) {
+  const { name, foreignKeys } = getTableConfig(table);
+  for (const foreignKey of foreignKeys) {
+    const { columns, foreignColumns, foreignTable } = foreignKey.reference();
+    const parent = getTableConfig(foreignTable).name;
+    for (const [index, column] of columns.entries()) {
+      const to = foreignColumns[index] as SQLiteColumn;
+      const storage = storageTypeOf(name, column);
+      // A local-only table may reference a table Syncline never stores, whose column can have a type Syncline does not support.
+      const referenced = affinityOf(to.getSQLType()) ?? to.getSQLType();
+      if (storage !== referenced)
+        throw new Error(
+          `Foreign key ${name}.${column.name} (${storage}) references ${parent}.${to.name} (${referenced}); a foreign key column must have the storage type of the column it references`,
+        );
+    }
+  }
+}
+
+// Throws for a key SQLite counts up, which each device does on its own.
+// @see https://sqlite.org/autoinc.html
+function checkCounted(table: string, column: SQLiteColumn) {
+  if ('autoIncrement' in column && column.autoIncrement === true)
+    throw new Error(
+      `Column ${table}.${column.name} is autoIncrement: devices would give different rows the same key; give each row a key no other device produces, such as a UUID`,
+    );
+}
+
+/**
  * Validates declared schema tables before database initialization.
- * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, and storage affinities.
+ * Verifies identifier naming rules, table names unique ignoring case, internal table name reservations, primary key presence, storage
+ * affinities, and that foreign key columns are stored as the columns they reference.
+ * Tables are synced tables, which must not use autoIncrement, unless `localOnly` says they stay on the device.
  * @see https://sqlite.org/json1.html#path_arguments
  * @see https://tc39.es/ecma262/#sec-ordinaryownpropertykeys
  * @see https://sqlite.org/sessionintro.html
  */
-export function checkDeclared(tables: SQLiteTable[]) {
+export function checkDeclared(tables: SQLiteTable[], { localOnly = false } = {}) {
   const seen = new Map<string, string>();
   for (const table of tables) {
     const { name, columns } = getTableConfig(table);
@@ -115,7 +153,9 @@ export function checkDeclared(tables: SQLiteTable[]) {
     for (const column of columns) {
       checkColumnName(name, column.name);
       storageTypeOf(name, column);
+      if (!localOnly) checkCounted(name, column);
     }
+    checkReferences(table);
   }
 }
 
@@ -143,7 +183,7 @@ function checkOf(table: string, column: SQLiteColumn): Check {
   const length = 'length' in column && typeof column.length === 'number' ? column.length : undefined;
   const json = column.columnType === 'SQLiteTextJson';
   return (value) => {
-    if (typeof value !== 'string') return 'must be a string';
+    if (typeof value !== 'string') return 'must be text';
     if (enumValues && !enumValues.includes(value)) return `must be one of: ${enumValues.join(', ')}`;
     if (length !== undefined && value.length > length) return `exceeds ${length} characters`;
     if (json && !isJson(value)) return 'must be valid JSON';
@@ -207,12 +247,15 @@ export class Validator {
     if (!stored) return undefined;
     const issues = fields.flatMap(({ field, column, check }): Issue[] => {
       const value = stored[column.name];
-      const message = value === null ? (column.notNull ? 'cannot be null' : undefined) : check(value);
+      const message = value === null ? (column.notNull ? 'must not be null' : undefined) : check(value);
       return message === undefined ? [] : [{ path: [field], message }];
     });
     const keyed = keyBytesOf(keyOf(key, stored));
     if (keyed > keyBytes)
-      issues.push({ path: [], message: `primary key serialized to ${keyed} bytes, exceeding ${keyBytes}-byte limit for pull URLs` });
+      issues.push({
+        path: [],
+        message: `primary key serialized to JSON is ${keyed} bytes, exceeding ${keyBytes}: pull continuation cursor carries it in the URL`,
+      });
     if (issues.length > 0) throw new ValidationError(table, issues);
     this.checkSchema(table, stored);
     return stored;

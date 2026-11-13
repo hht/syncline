@@ -10,5 +10,5 @@
     "lib": ["es2024"],
     "types": []
   },
-  "files": ["src/cloudflare/worker-configuration.d.ts", "src/cloudflare/index.ts"]
+  "files": ["test/worker/worker-configuration.d.ts", "src/cloudflare/index.ts"]
 }

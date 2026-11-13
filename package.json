@@ -1,6 +1,6 @@
 {
   "name": "syncline",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Offline-first SQLite sync for Expo apps, backed by Cloudflare",
   "license": "Apache-2.0",
   "repository": {
@@ -27,7 +27,7 @@
     "node": ">=26"
   },
   "scripts": {
-    "postinstall": "wrangler types --config src/cloudflare/wrangler.jsonc src/cloudflare/worker-configuration.d.ts && wrangler types --config examples/cloudflare/wrangler.jsonc examples/cloudflare/worker-configuration.d.ts",
+    "postinstall": "wrangler types --config test/worker/wrangler.jsonc test/worker/worker-configuration.d.ts && wrangler types --config examples/cloudflare/wrangler.jsonc examples/cloudflare/worker-configuration.d.ts",
     "check": "node tools/check/check.ts",
     "q": "node tools/check/quiet.ts",
     "model": "node tools/dev/model.ts check",
@@ -38,11 +38,6 @@
   },
   "files": [
     "src",
-    "!src/test",
-    "!src/**/*.test.ts",
-    "!src/**/test-*.ts",
-    "!src/build-wasm.mjs",
-    "!src/cloudflare/wrangler.jsonc",
     "ios",
     "android/build.gradle",
     "android/src",
@@ -58,7 +53,7 @@
       "default": "./src/expo/native.ts"
     },
     "./metro": "./metro.cjs",
-    "./react": "./src/expo/react.ts",
+    "./react": "./src/react/index.ts",
     "./cloudflare": "./src/cloudflare/index.ts",
     "./expo/background": "./src/expo/background.ts"
   },

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { globSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
-import { coverageTarget, llvmBin, wasmTarget } from '../../src/build-wasm.mjs';
+import { coverageTarget, llvmBin, wasmTarget } from '../../rust/wasm/build.mjs';
 import type { Problem } from './problem.ts';
 import type { GateResult } from './run-gates.ts';
 import { cargo, nativeCoverage, nativeTests, testModule } from './rust.ts';

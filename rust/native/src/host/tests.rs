@@ -4,13 +4,14 @@ use crate::Handle;
 use serde_json::{Value as Json, json};
 
 /// A test database in a temporary directory, deleted when dropped.
-struct Library {
+pub(super) struct Library {
     handle: Handle,
-    directory: std::path::PathBuf,
+    pub(super) directory: std::path::PathBuf,
 }
 
 impl Library {
-    fn start(name: &str) -> Library {
+    /// Starts a handle on a database file in a directory named after `name`, which no other test of the process may use.
+    pub(super) fn start(name: &str) -> Library {
         let directory = std::env::temp_dir().join(format!("syncline-host-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         Library {
@@ -19,12 +20,13 @@ impl Library {
         }
     }
 
-    fn send(&self, call: &Json) {
+    /// Sends `call` without waiting for its reply.
+    pub(super) fn send(&self, call: &Json) {
         self.handle.send(call.to_string());
     }
 
     /// Waits for reply matching id, skipping other instructions.
-    fn reply(&self, id: u64) -> Json {
+    pub(super) fn reply(&self, id: u64) -> Json {
         loop {
             let batch: Vec<Json> = serde_json::from_str(&self.handle.next().expect("stream ended before reply")).unwrap();
             if let Some(reply) = batch.into_iter().find(|it| it["type"] == "reply" && it["id"] == id) {
@@ -78,7 +80,7 @@ fn call_before_open_replies_closed_and_one_without_a_reply_is_dropped() {
     let batch: Json = serde_json::from_str(&library.handle.next().unwrap()).unwrap();
     assert_eq!(
         batch,
-        json!([{ "type": "reply", "id": 1, "error": { "message": "local database is closed" } }])
+        json!([{ "type": "reply", "id": 1, "error": { "message": "Local database is closed" } }])
     );
 }
 
@@ -125,7 +127,7 @@ fn opening() -> Json {
 }
 
 /// Waits for replies on a handle until reply matching last, skipping other instructions.
-fn replies(handle: &Handle, last: u64) -> Vec<Json> {
+pub(super) fn replies(handle: &Handle, last: u64) -> Vec<Json> {
     let mut replies = Vec::new();
     while replies.last().is_none_or(|it: &Json| it["id"] != last) {
         let batch: Vec<Json> = serde_json::from_str(&handle.next().expect("stream ended before reply")).unwrap();
@@ -215,8 +217,8 @@ fn close_while_queued_to_open_fails_buffered_calls_as_closed_without_waiting() {
     }
     let ids: Vec<_> = replies.iter().map(|it| it["id"].clone()).collect();
     assert_eq!(ids, [json!(1), json!(2), json!(3)]);
-    assert_eq!(replies[0]["error"]["message"], "local database is closed");
-    assert_eq!(replies[1]["error"]["message"], "local database is closed");
+    assert_eq!(replies[0]["error"]["message"], "Local database is closed");
+    assert_eq!(replies[1]["error"]["message"], "Local database is closed");
     assert_eq!(replies[2].get("error"), None);
 }
 

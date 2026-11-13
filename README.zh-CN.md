@@ -9,7 +9,7 @@
 应用直接读写本地 SQLite 数据库，Syncline 在后台与云端保持同步。离线时照常可用，联网后自动追上。
 
 > [!WARNING]
-> Syncline 仍处于预发布阶段。尚未发布到 npm，不兼容的改动可能随时出现，且不提供迁移。
+> Syncline 仍处于预发布阶段。尚未发布到 npm，不兼容的改动可能出现，且不提供迁移。
 
 ## 特性
 
@@ -52,7 +52,7 @@ pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-q
 
 这个包发布的是 TypeScript 源码，导入路径以 `.ts` 结尾。为了让 `tsc` 接受它们，在 `tsconfig.json` 里设置 `"allowImportingTsExtensions": true`。它的云端代码用到了 ES2024 的 API，所以 Worker 的 `tsconfig.json` 中 `lib` 需要包含 `es2024` 或更新的版本。使用 Jest 时，把 `syncline` 加进 `transformIgnorePatterns`。
 
-应用还需要 `expo` 和 `react`。然后包装 Metro 配置：
+应用还需要 `expo` 和 `react`，版本见[运行要求](docs/reference/zh-CN/limits.md#运行要求)。然后包装 Metro 配置：
 
 ```js
 // metro.config.js
@@ -126,7 +126,9 @@ export default {
 ### 4. 在应用中使用
 
 ```tsx
+import { QueryClient, QueryClientProvider, useMutation } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
+import { Button, Text, View } from 'react-native';
 import { openSyncline } from 'syncline/expo';
 import { SynclineProvider, useQuery, useSyncline } from 'syncline/react';
 import { schema, note } from './schema';
@@ -139,19 +141,33 @@ const syncline = openSyncline({
   token: getIdToken,
 });
 
+const queryClient = new QueryClient();
+
 export function App() {
   return (
-    <SynclineProvider value={syncline}>
-      <Notes />
-    </SynclineProvider>
+    <QueryClientProvider client={queryClient}>
+      <SynclineProvider value={syncline}>
+        <Notes />
+      </SynclineProvider>
+    </QueryClientProvider>
   );
 }
 
 function Notes() {
   const { data } = useQuery((db) => db.select().from(note));
   const { write } = useSyncline();
-  const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
-  // Render data and call add()
+  const add = useMutation({
+    mutationFn: () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' })),
+  });
+  return (
+    <View>
+      {data?.map(({ id, body }) => (
+        <Text key={id}>{body}</Text>
+      ))}
+      {add.error && <Text>{add.error.message}</Text>}
+      <Button title="Add" onPress={() => add.mutate()} />
+    </View>
+  );
 }
 ```
 
@@ -183,7 +199,8 @@ function Notes() {
 - [限制](docs/reference/zh-CN/limits.md)：Syncline 不支持什么，超出每项限制会发生什么。设计 schema 前请先读。
 - [报错](docs/reference/zh-CN/errors.md)：每种报错的含义和处理方法。
 - [常见问题](docs/reference/zh-CN/faq.md)：常见问题。
-- [API](docs/reference/api.md)（英文）：所有导出和选项。
+- [API](docs/reference/zh-CN/api.md)：所有导出和选项。
+- [边界情况](docs/reference/zh-CN/edge-cases.md)：很少遇到的情况，大多数应用碰不到。
 
 ## 许可证
 

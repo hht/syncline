@@ -12,7 +12,7 @@ const anywhere = new Set([
   ...['Page', 'Pages', 'Paged', 'Paging'],
   ...['Log', 'Logs', 'Logger'],
 ]);
-// Version numbers do not belong in names: finishedV2At, coach_v2; p95 is not a version number.
+// Version numbers do not belong in names: finishedV2At, draft_v2; p95 is not a version number.
 const version = /(?:^|_)v\d+(?:_|$)|V\d+(?=[A-Z_]|$)/;
 // Vague suffixes: userData does not state what kind of data.
 const suffixes = new Set(['Data', 'Info']);

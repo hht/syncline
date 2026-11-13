@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 
 /**
  * Multiplexes chores and integrator callbacks onto a single Durable Object alarm:
@@ -49,7 +49,12 @@ export class Schedule {
 
   /** Reschedules chore name unconditionally to at epoch ms, resetting any active failure backoff. */
   at(name: string, at: number) {
-    this.#storage.sql.exec('INSERT OR REPLACE INTO _syncline_schedule (name, at) VALUES (?, ?)', name, at);
+    this.#storage.sql.exec(
+      // Writes nothing when the entry already holds this time with no backoff: replacing the row would bill it and its index row again.
+      'INSERT INTO _syncline_schedule (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at, failures = 0, resets = 0 WHERE at <> excluded.at OR failures <> 0 OR resets <> 0',
+      name,
+      at,
+    );
   }
 
   cancel(name: string) {
@@ -165,9 +170,10 @@ export class Schedule {
 
   /** Arms the alarm for the earliest entry in _syncline_schedule, or deletes the alarm if none remain. */
   async arm() {
+    const current = await this.#storage.getAlarm();
+    // Read after the wait: a later call in the same turn changes the schedule, and its own arm compares against the alarm as it was before this one writes.
     const [row] = this.#storage.sql.exec('SELECT min(at) AS at FROM _syncline_schedule').toArray();
     const at = row?.at === null || row?.at === undefined ? undefined : Number(row.at);
-    const current = await this.#storage.getAlarm();
     if (at === undefined) {
       if (current !== null) await this.#storage.deleteAlarm();
     } else if (current !== at) await this.#storage.setAlarm(at);

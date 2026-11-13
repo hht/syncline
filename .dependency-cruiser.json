@@ -2,14 +2,13 @@
   "forbidden": [
     {
       "name": "device-not-cloud",
-      "comment": "Device JS entry points and bindings (under expo/) must not import cloud code via any path: Metro does not tree-shake, so imported cloud code would be bundled into mobile apps.",
+      "comment": "Device JS entry points and bindings (under expo/ and react/) must not import cloud code or pluggable features via any path: Metro does not tree-shake, so imported code would be bundled into mobile apps, and every TypeScript feature runs in the cloud (device features live in the Rust core).",
       "severity": "error",
       "from": {
-        "path": "^src/expo/[^/]+\\.ts$",
-        "pathNot": "\\.test\\.ts$"
+        "path": "^src/(expo|react)/[^/]+\\.ts$"
       },
       "to": {
-        "path": "^src/(cloud|cloudflare|features/[^/]+/cloud)/",
+        "path": "^src/(cloud/|cloudflare/|features/)",
         "reachable": true
       }
     },
@@ -18,8 +17,8 @@
       "comment": "Core code must not import pluggable features (under src/features/: checksums, exports): the core defines interfaces, while cloud features are wired by the entry assembly root (cloudflare/index.ts) and device features live in the Rust core. The core works completely without them (only tests verifying checksums wire them).",
       "severity": "error",
       "from": {
-        "path": "^src/(common|tables|cloud|expo|cloudflare)/",
-        "pathNot": "(\\.test\\.ts$|/test-[^/]+\\.ts$|^src/cloudflare/index\\.ts$)"
+        "path": "^src/",
+        "pathNot": "^src/(features/|cloudflare/index\\.ts$)"
       },
       "to": {
         "path": "^src/features/"
@@ -36,13 +35,24 @@
     },
     {
       "name": "product-not-tools",
-      "comment": "Product code must not import gates or development scripts: tools/ is strictly for development.",
+      "comment": "Product code and tests must not import gates or development scripts: tools/ is strictly for development.",
       "severity": "error",
       "from": {
-        "path": "^(src|probes)/"
+        "path": "^(src|test|probes)/"
       },
       "to": {
         "path": "^tools/"
+      }
+    },
+    {
+      "name": "product-not-test",
+      "comment": "Shipped code must not import tests or their helpers: test/ is not published, so the import would fail in integrators' apps and Workers.",
+      "severity": "error",
+      "from": {
+        "path": "^src/"
+      },
+      "to": {
+        "path": "^test/"
       }
     }
   ],

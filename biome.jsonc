@@ -20,7 +20,7 @@
     }
   },
   "overrides": [
-    // Code bundled into mobile apps must avoid built-ins unsupported by Hermes; tests run only in Node.
-    { "includes": ["src/**", "!**/*.test.ts"], "plugins": ["./tools/check/hermes-builtins.grit"] }
+    // Code bundled into mobile apps must avoid built-ins unsupported by Hermes; tests and tools run only in Node.
+    { "includes": ["src/**"], "plugins": ["./tools/check/hermes-builtins.grit"] }
   ]
 }

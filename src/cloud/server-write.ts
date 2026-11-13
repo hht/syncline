@@ -1,5 +1,5 @@
-import type { Value } from '../common/protocol.ts';
-import type { Query } from '../common/storage.ts';
+import type { Value } from '../protocol/messages.ts';
+import type { Query } from '../sqlite/storage.ts';
 import { rowId } from '../tables/keys.ts';
 import type { Changed, Readback, Rows } from '../tables/rows.ts';
 import { type Database, type Transaction, transaction } from './transaction.ts';

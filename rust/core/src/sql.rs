@@ -127,3 +127,27 @@ pub fn all_rows<T>(db: &Connection, sql: &str, map: impl FnMut(&rusqlite::Row) -
         .collect::<rusqlite::Result<_>>()
         .unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::types::Value;
+
+    /// A cascading delete matches all its keys at once: in one parameter they would be up to 16 MB.
+    #[test]
+    fn among_splits_keys_into_parameters_of_bounded_size() {
+        let columns = ["id".to_owned()];
+        let rows: Vec<Row> = (0..1100)
+            .map(|index| Row(vec![("id".to_owned(), Value::Text(format!("{index:0>500}")))]))
+            .collect();
+        let batches = among(&columns, &rows);
+        let sizes: Vec<usize> = batches.iter().map(|(_, values)| values.len()).collect();
+        assert_eq!(batches.len(), 2, "{sizes:?}");
+        assert!(sizes.iter().all(|size| *size <= VALUE_CHARS + 2), "{sizes:?}");
+        let keys: usize = batches
+            .iter()
+            .map(|(_, values)| serde_json::from_str::<Vec<serde_json::Value>>(values).unwrap().len())
+            .sum();
+        assert_eq!(keys, 1100);
+    }
+}

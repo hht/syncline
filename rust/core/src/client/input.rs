@@ -54,7 +54,8 @@ pub enum Input {
         tables: Vec<Table>,
         owner: Option<String>,
     },
-    /// Starts or stops synchronization for a space (e.g. app background/foreground transitions).
+    /// Starts or stops synchronization for a space. Apps start it right after `Connect` and never stop it (closing ends it); tests
+    /// stop it to take a device offline.
     Start {
         channel: String,
     },

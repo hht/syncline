@@ -5,14 +5,15 @@ import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { buildWasm } from '../src/build-wasm.mjs';
+import { buildWasm } from '../rust/wasm/build.mjs';
+import { digestsFile } from '../src/prebuilt.mjs';
 
 /**
  * Publishes a release (`pnpm release <version>`): from a clean `dev` that passes `pnpm check`, builds the device binaries, commits the version
- * and tags it, resets `dev` to the unreleased version, pushes `dev` and the tag, attaches the gzipped binaries and their manifest to a GitHub Release on the tag, and only then
+ * with their digests and tags it, resets `dev` to the unreleased version, pushes `dev` and the tag, attaches the gzipped binaries to a GitHub Release on the tag, and only then
  * merges the tag into `main` through a pull request, which takes only pull requests, so `main` always installs a release whose binaries
- * exist. Installs download the binaries with src/prebuilt.mjs. The binaries build from the tagged tree except its package.json version,
- * which no binary build reads.
+ * exist. Installs download the binaries with src/prebuilt.mjs. The binaries build from the tagged tree except its package.json version
+ * and their own digests, which no binary build reads.
  * Out of scope: release notes beyond what GitHub generates.
  * @see https://cli.github.com/manual/gh_release_create
  * @see https://cli.github.com/manual/gh_pr_merge
@@ -29,18 +30,17 @@ export const androidAbis = ['armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'];
 export const webFiles = ['syncline_wasm.js', 'syncline_wasm.d.ts', 'syncline_wasm_bg.wasm'];
 
 /**
- * Gzips each binary into `dir` as `<asset>.gz` and writes manifest.json recording the version, commit, and each asset's SHA-256, which
- * src/prebuilt.mjs checks. Returns the paths to upload.
+ * Gzips each binary into `dir` as `<asset>.gz`. Returns the paths to upload and each asset's SHA-256 by name, which src/prebuilt.mjs
+ * checks a download against.
  */
-export function pack(dir: string, binaries: Record<string, string>, version: string, commit: string) {
-  const files: Record<string, string> = {};
+export function pack(dir: string, binaries: Record<string, string>) {
+  const digests: Record<string, string> = {};
   for (const [asset, path] of Object.entries(binaries)) {
     const body = gzipSync(readFileSync(path), { level: 9 });
     writeFileSync(join(dir, `${asset}.gz`), body);
-    files[`${asset}.gz`] = createHash('sha256').update(body).digest('hex');
+    digests[`${asset}.gz`] = createHash('sha256').update(body).digest('hex');
   }
-  writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify({ version, commit, files }, null, 2)}\n`);
-  return [...Object.keys(files), 'manifest.json'].map((name) => join(dir, name));
+  return { assets: Object.keys(digests).map((name) => join(dir, name)), digests };
 }
 
 function run(command: string, args: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
@@ -108,10 +108,19 @@ function build() {
 /** The package.json version outside releases; no release ever carries it. */
 const unreleased = '0.0.0';
 
-function setVersion(version: string, message: string) {
-  const manifest = join(root, 'package.json');
+/**
+ * Writes `version` and the digests of its binaries into the package at `tree`, where an install reads both (src/prebuilt.mjs), and
+ * returns the files written.
+ */
+export function stamp(tree: string, version: string, digests: Record<string, string>) {
+  const manifest = join(tree, 'package.json');
   writeFileSync(manifest, readFileSync(manifest, 'utf8').replace(/^ {2}"version": "[^"]+",$/m, `  "version": "${version}",`));
-  run('git', ['commit', '-m', message, '--', 'package.json']);
+  writeFileSync(join(tree, digestsFile), `${JSON.stringify(digests, null, 2)}\n`);
+  return ['package.json', digestsFile];
+}
+
+function setVersion(version: string, digests: Record<string, string>, message: string) {
+  run('git', ['commit', '-m', message, '--', ...stamp(root, version, digests)]);
 }
 
 const gh = (...args: string[]) => execFileSync('gh', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -177,15 +186,23 @@ function release(version: string) {
   mergeable();
   run('pnpm', ['audit', '--prod', '--audit-level', 'high']);
   run('pnpm', ['check']);
-  const binaries = build();
-  setVersion(version, `chore: release ${tag}`);
+  const packed = mkdtempSync(join(tmpdir(), 'syncline-release-'));
+  const { assets, digests } = pack(packed, build());
+  setVersion(version, digests, `chore: release ${tag}`);
   run('git', ['tag', tag]);
-  const assets = pack(mkdtempSync(join(tmpdir(), 'syncline-release-')), binaries, version, git('rev-parse', 'HEAD'));
   // dev goes back to a version never released, so installing it or one of its commits fails asking for a release tag instead of pairing
   // its JavaScript with this release's binaries.
-  setVersion(unreleased, `chore: reset the version after releasing ${tag}`);
+  setVersion(unreleased, {}, `chore: reset the version after releasing ${tag}`);
   run('git', ['push', '--atomic', 'origin', 'dev', `refs/tags/${tag}`]);
-  run('gh', ['release', 'create', tag, '--verify-tag', '--title', tag, '--generate-notes', ...assets]);
+  try {
+    run('gh', ['release', 'create', tag, '--verify-tag', '--title', tag, '--generate-notes', ...assets]);
+  } catch (error) {
+    // The pushed tag records the digests of these files, and a rebuild need not produce the same bytes.
+    throw new Error(
+      `${tag} is pushed, but its binaries are not all attached: attach the files in ${packed} (gh release upload ${tag} ${packed}/* --clobber once the release exists), then merge ${tag} into main through a pull request`,
+      { cause: error },
+    );
+  }
   try {
     merge(tag);
   } catch (error) {

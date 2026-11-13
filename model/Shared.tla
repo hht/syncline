@@ -97,13 +97,14 @@
 (* a different incarnation, the device drops the target (the shard was     *)
 (* stale); requests whose floor does not match the cloud's current         *)
 (* incarnation are computed live without entering cache. Devices can       *)
-(* restart (clearing in-memory target position and floor while preserving  *)
-(* local database state) or disconnect; pulls may be dropped. When a token *)
-(* changes, the device reconnects to receive pushes under the new          *)
-(* subscription: the old connection eventually expires and closes (or      *)
-(* earlier if the integrator calls reconnect()); if a landing pull's       *)
-(* subscription differs from heard on the connection, the connection is   *)
-(* replaced after landing. Connecting to a new connection voids heard.     *)
+(* restart or disconnect, and pulls may be dropped; a restart clears the   *)
+(* in-memory target position and the part of a request's floor that came   *)
+(* from it, and preserves local database state. When a token changes, the  *)
+(* device reconnects to receive pushes under the new subscription: the old *)
+(* connection eventually expires and closes (or earlier if the integrator  *)
+(* calls reconnect()); if a landing pull's subscription differs from heard *)
+(* on the connection, the connection is replaced after landing. Connecting *)
+(* to a new connection voids heard.                                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
@@ -503,12 +504,13 @@ PullDone(p, N) ==
 PullFresh == PullDone(Now, sub)
 
 \* Device restarts: connection closes, in-flight pull is abandoned, in-memory target position, heard subscription, stale connection flag, and request floor are cleared; local database tables, cookie, landed subscription, staged chunks, and resumption request are preserved
-\* (floor for a fresh request without staged chunks is in-memory and lost; floor from a staged final chunk is determined by staged chunks and retained)
+\* (the target is in memory, so the part of a floor that came from it is lost: a fresh request without staged chunks loses its floor, and a request continuing from a staged final chunk
+\* keeps the highest staged seen, which the staged chunks determine)
 Crash ==
     /\ faults < MaxFaults
     /\ faults' = faults + 1
     /\ dConn' = FALSE /\ chan' = <<>> /\ dInflight' = None /\ pSubs' = {} /\ dWant' = NoCookie /\ dHeard' = NoHeard /\ dStale' = FALSE
-    /\ dNext' = IF dNext.kind = "start" /\ dStage = <<>> THEN [dNext EXCEPT !.floor = 0] ELSE dNext
+    /\ dNext' = [dNext EXCEPT !.floor = IF @ = 0 THEN 0 ELSE MaxSeen(dStage)]
     /\ UNCHANGED <<cPushed, cSub, dTables, dCookie, dSub, dStage>> /\ UNCHANGED server /\ UNCHANGED <<chunks, latePushes>>
 
 \* Pull fails (network error, timeout): abandons in-flight request to retry later

@@ -13,7 +13,7 @@
 mod connect;
 
 use crate::host::Event;
-use connect::{Stream, Unconnected, connect};
+use connect::{CONNECT_TIMEOUT, Stream, Unconnected, connect};
 use rustls::ClientConfig;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -146,7 +146,7 @@ fn run(
     let send = |input: Input| {
         let _ = events.send(Event::Network(input));
     };
-    let mut ws = match connect(url, protocols, tls) {
+    let mut ws = match connect(url, protocols, tls, CONNECT_TIMEOUT) {
         Ok(ws) => ws,
         Err(error) => {
             return send(match error {

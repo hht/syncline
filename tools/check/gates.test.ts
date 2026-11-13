@@ -44,7 +44,7 @@ test('biome: checks only specified files', async () => {
 
 test('biome: flags Hermes-unsupported toSorted in device code while allowing it in tests and tools', async () => {
   const sorted = 'export const sorted = [2, 1].toSorted((a, b) => a - b);\n';
-  const dir = writtenFiles({ ...biomeFiles, 'src/a.ts': sorted, 'src/a.test.ts': sorted, 'tools/a.ts': sorted });
+  const dir = writtenFiles({ ...biomeFiles, 'src/a.ts': sorted, 'test/a.test.ts': sorted, 'tools/a.ts': sorted });
   expect(summary((await biome(dir)(undefined)).problems)).toEqual(['src/a.ts:1 plugin']);
 });
 
@@ -61,24 +61,31 @@ test('tsc: enforces strict options and reports errors across projects', async ()
   expect(summary(result.problems)).toEqual(['one/a.ts:2 TS2322', 'two/b.ts:1 TS2322']);
 });
 
-test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature imports, product-to-tools imports, and circular dependencies', async () => {
+test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature imports, product-to-tools and product-to-test imports, and circular dependencies', async () => {
   const dir = writtenFiles({
     '.dependency-cruiser.json': JSON.stringify({ extends: join(repo, '.dependency-cruiser.json') }),
-    'tsconfig.json': JSON.stringify({ include: ['src/**/*.ts', 'tools/**/*.ts'] }),
-    'src/expo/native.ts': "import '../common/bridge.ts';\n",
-    'src/common/bridge.ts': "import '../cloud/server.ts';\nimport '../features/checksum/index.ts';\n",
+    'tsconfig.json': JSON.stringify({ include: ['src/**/*.ts', 'test/**/*.ts', 'tools/**/*.ts'] }),
+    'src/expo/native.ts': "import '../protocol/bridge.ts';\n",
+    'src/react/index.ts': "import '../cloud/server.ts';\n",
+    'src/protocol/bridge.ts': "import '../cloud/server.ts';\nimport '../features/checksum/index.ts';\n",
     'src/cloud/server.ts': "import '../../tools/check/problem.ts';\n",
     'src/features/checksum/index.ts': '',
     'src/tables/a.ts': "import './b.ts';\n",
     'src/tables/b.ts': "import './a.ts';\n",
     'tools/check/problem.ts': '',
+    'src/cloud/helper.ts': "import '../../test/support/fixture.ts';\n",
+    'test/support/fixture.ts': '',
   });
-  const result = await layers(dir, ['src', 'tools'])();
+  const result = await layers(dir, ['src', 'test', 'tools'])();
   expect(result.ok).toBe(false);
   expect(summary(result.problems).sort()).toEqual([
+    'src/cloud/helper.ts:1 product-not-test',
     'src/cloud/server.ts:1 product-not-tools',
-    'src/common/bridge.ts:2 core-not-features',
+    // Reaches cloud code and a feature, each a violation
     'src/expo/native.ts:1 device-not-cloud',
+    'src/expo/native.ts:1 device-not-cloud',
+    'src/protocol/bridge.ts:2 core-not-features',
+    'src/react/index.ts:1 device-not-cloud',
     'src/tables/a.ts:1 no-circular',
   ]);
 });

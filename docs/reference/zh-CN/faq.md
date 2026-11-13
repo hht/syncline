@@ -10,7 +10,7 @@
 
 能。读写都走本地数据库，设备重新联网后写入会自动上传。
 
-### 两台设备同时改同一行会怎样？
+### 两台设备改同一行会怎样？
 
 云端按列、按到达顺序执行写入。两台设备改了同一列时，后到的写入生效；改的是不同列时，两边的修改都保留。
 
@@ -39,9 +39,11 @@
 
 新增表或列后，没升级的应用照常同步。退役了旧应用还在用的表或列后，旧应用会停止同步（`updateNeeded`），直到升级。
 
+把云端回滚到仍然声明某个已退役名字的版本，等同于再次使用它：每个已把这个名字记录为退役的空间，启动时都会抛错。
+
 ### 怎么在用户之间共享数据？
 
-使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见[共享空间指南](../../guides/zh-CN/shared-spaces.md)，以及 [API](../api.md)（英文）中的 `openShared()`。
+使用共享空间。数据由云端写入，每台设备只下载其 token 允许的部分。详见[共享空间指南](../../guides/zh-CN/shared-spaces.md)，以及 [API](api.md#opensharedname-options) 中的 `openShared()`。
 
 ### 应用能在后台同步吗？
 
@@ -53,7 +55,7 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 ### 怎么连接 `wrangler dev`？
 
-给 `openSyncline` 传入 `allowCleartext: true`。iOS 模拟器或浏览器用 `http://localhost:8787`，Android 模拟器用 `http://10.0.2.2:8787`。手机要先用 `npx wrangler dev --ip 0.0.0.0` 启动，再用电脑的局域网地址。其他场合一律用 `https://`。
+给 `openSyncline` 传入 `allowCleartext: true`，地址用[在应用中使用](../../../README.zh-CN.md#4-在应用中使用)中给出的。其他场合一律用 `https://`。
 
 ## 报错
 

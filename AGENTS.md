@@ -22,13 +22,14 @@ Hold the protocol to four properties only: never stalls, never loses data, event
 ## Directory layout
 
 ```
-src/            TypeScript: cloud (cloud/, cloudflare/), device JS bindings (expo/), table declarations (tables/), pluggable features (features/), test helpers (test/)
+src/            Code that ships, a directory or file per question: device-cloud contract (protocol/), SQLite access (sqlite/), table declarations (tables/), cloud (cloud/, cloudflare/), device JS bindings (expo/, react/), pluggable features (features/)
+test/           Tests of src/: a directory per module or behavior tested, cross-module tests at the root, helpers shared across directories (support/), the test Worker (worker/)
 rust/           Device side: core (local database and sync state machine, no networking or timers), native (iOS and Android threads and networking), wasm (web Worker)
 ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations
 probes/         Probes run against live Cloudflare
 docs/           guides/ and reference/ are integrator documentation; internals/ is architecture decisions and model notes
-examples/       Example Worker and app code the guides quote, type-checked and tested by the gates
+examples/       Example Worker and app code the guides and the API reference quote, type-checked by the gates (the Worker also tested)
 tools/          Gates (check/) and model runner (dev/)
 ```
 
@@ -54,7 +55,7 @@ Code standards not covered by automated gates and enforced by pre-commit review:
 ## Environment
 
 - Always invoke cargo as `~/.cargo/bin/cargo` with `RUSTUP_TOOLCHAIN=` (empty); the toolchain version follows `rust/rust-toolchain.toml`.
-- Building web WebAssembly requires LLVM installed via mise (version in `src/build-wasm.mjs`, which prints the install command when missing) and the `wasm-bindgen` CLI matching the `wasm-bindgen` version in `rust/Cargo.toml`; Android additionally requires `cargo-ndk`.
+- Building web WebAssembly requires LLVM installed via mise (version in `rust/wasm/build.mjs`, which prints the install command when missing) and the `wasm-bindgen` CLI matching the `wasm-bindgen` version in `rust/Cargo.toml`; Android additionally requires `cargo-ndk`.
 - Test and hook timeouts (60 seconds) only catch hangs, not slowness: under high machine load, if a test still times out, wait for load to drop and re-run rather than changing the tests.
 
 ## Commands
@@ -64,7 +65,7 @@ The single check entrypoint is `pnpm check` (the local git hook runs it on chang
 - `pnpm check`: runs gates in two parallel batches (Rust-compiling gates finish first), printing only `file:line rule message` with full logs in `.check/<gate>.log`; `--changed` checks only files modified or untracked relative to `HEAD` (used by pre-commit); the full run also measures coverage against the thresholds in `tools/check/coverage.ts`, listing uncovered lines in `.check/test.log`.
 - `pnpm q <command>`: prints a concise summary with full logs in `.q/`.
 - `pnpm release <version>`: publishes a release; see Commits.
-- `pnpm postinstall`: regenerates Workers types from `src/cloudflare/wrangler.jsonc`; runs automatically on install.
+- `pnpm postinstall`: regenerates Workers types from `test/worker/wrangler.jsonc`; runs automatically on install.
 - `pnpm model`, `pnpm model:setup`, `pnpm model:big`, `pnpm model:trace`: slow gates for protocol models, excluded from `pnpm check`; run `pnpm model` after changing model logic (comment-only changes skip it) and require it to be fully green before committing; see "How to run" in [Models and model checking](docs/internals/model.md) for when to run each. Estimate duration before long model runs and ask the user first if a run takes tens of minutes or longer.
 
 ## Commits

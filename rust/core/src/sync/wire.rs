@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn accepts_only_sqlite_primitives_as_values() {
         let put = |value: &str| format!(r#"{{"op":"put","table":"note","key":{{"id":"n1"}},"row":{{"id":"n1","body":{value}}}}}"#);
-        for value in [r#""squat""#, "null", "1.5"] {
+        for value in [r#""stamp""#, "null", "1.5"] {
             assert!(pulled(&last(&put(value))).is_ok(), "{value}");
         }
         for value in [r#"{"nested":1}"#, "[1]", "true"] {

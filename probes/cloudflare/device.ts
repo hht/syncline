@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { bearer, type Chunk, type Op, type Poke, subprotocol } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { bearer, type Chunk, type Op, type Poke, subprotocol } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { untilJson, wranglerBin } from './deploy.ts';
 
 /**

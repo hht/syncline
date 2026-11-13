@@ -18,7 +18,7 @@ const wrangler = spawn(
   [
     'dev',
     '--config',
-    'src/cloudflare/wrangler.jsonc',
+    'test/worker/wrangler.jsonc',
     '--ip',
     '127.0.0.1',
     // Picked by the system when wrangler binds, so no other process can take it in between

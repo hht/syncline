@@ -3,7 +3,7 @@
 //! Idles until the earliest timer expires when no events are queued; expired timers fire between events, and 0 ms timers
 //! (yielding the thread for phased checksum or shrink steps) queue behind arrived events so JS reads/writes can interleave.
 //! Database opening and closing live at this layer: opening opens the database file and defines tables on this thread without
-//! blocking JS; calls after closing return "local database is closed".
+//! blocking JS; calls after closing return "Local database is closed".
 //! Stale events from disconnected sockets or aborted requests are discarded before reaching the core (matching the web host).
 //! Panics on the sync thread deliver `broken`, causing pending JS callers to fail.
 //! What this module should not know: sync protocol rules or how JS uses responses.
@@ -154,7 +154,7 @@ impl Host {
                 }
                 None => {
                     if let Some(id) = call_id(&input) {
-                        self.deliver(vec![failed(id, Failure::new("local database is closed"))]);
+                        self.deliver(vec![failed(id, Failure::new("Local database is closed"))]);
                     }
                 }
             },
@@ -276,5 +276,7 @@ fn now() -> f64 {
 mod cloud_tests;
 #[cfg(test)]
 mod network_tests;
+#[cfg(test)]
+mod owner_tests;
 #[cfg(test)]
 mod tests;

@@ -71,4 +71,4 @@ Devices hear about each batch once it commits.
 - A device starting from scratch during the import can get a cached start up to 60 seconds old. It then downloads the changes after that point.
 - New devices start from the nearest saved point, recorded every 1,000 modified rows by default (`chunkRows`).
 
-After a shared space is rebuilt, devices may first get old data from the cache. The cloud then makes them download again.
+After a shared space is rebuilt, devices [may first get old data from the cache](../reference/edge-cases.md#after-a-rebuild-devices-may-first-get-old-data-from-cache).

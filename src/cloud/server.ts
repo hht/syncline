@@ -1,5 +1,3 @@
-import { pushBytes } from '../common/limits.ts';
-import { type Pushed, parseMutations } from '../common/parse.ts';
 import {
   type Change,
   type Cookie,
@@ -13,11 +11,14 @@ import {
   pushFailed,
   sameCookie,
   socketLimit,
-} from '../common/protocol.ts';
-import type { PullRequest } from '../common/pull-url.ts';
-import { fitsBytes } from '../common/size.ts';
+  tooManyConnections,
+} from '../protocol/messages.ts';
+import { type Pushed, parseMutations } from '../protocol/parse.ts';
+import type { PullRequest } from '../protocol/pull-url.ts';
+import { fitsBytes } from '../protocol/size.ts';
 import { schemaFingerprint, schemaMismatch } from '../tables/declaration.ts';
 import { type Events, isolated, quiet } from './events.ts';
+import { pushBytes } from './limits.ts';
 import type { Oversized, Space } from './space.ts';
 import type { Transaction } from './transaction.ts';
 
@@ -95,6 +96,7 @@ export class Server<S extends Socket> {
    * limit specifies HTTP pull chunk budget; WebSocket messages are further capped at socketLimit bytes.
    * events receives connection closures and push failures; quota enforces token bucket rate limiting;
    * dailyWrites caps billed SQLite row writes per UTC day; connections caps concurrent open sockets (default 32).
+   * Closes the sockets still attached with pullNeeded when space changed its sync scope on open.
    */
   constructor(
     sockets: Sockets<S>,
@@ -116,6 +118,11 @@ export class Server<S extends Socket> {
     this.#dailyWrites = dailyWrites;
     this.#connections = connections;
     this.#tokens = quota?.burst ?? 0;
+    // A code update keeps hibernated sockets attached, and the next poke would not chain onto their cookie, one commit before the scope
+    // change: closed to pull the new scope and reconnect (Enter and Leave in the TLA+ models drop every connection).
+    if (space.evolvedFrom)
+      for (const socket of sockets.getWebSockets())
+        if (socket.readyState === WebSocket.OPEN) closeSocket(this.#events, socket, pullNeeded, 'scope changed');
   }
 
   /**
@@ -147,7 +154,7 @@ export class Server<S extends Socket> {
         .map((stale) => ({ stale, at: (stale.deserializeAttachment() as Attachment).acceptedAt }))
         .sort((a, b) => a.at - b.at)
         .slice(0, excess))
-        closeSocket(this.#events, stale, 1008, 'too many connections');
+        closeSocket(this.#events, stale, tooManyConnections, 'too many connections');
     if (!cookie) return closeSocket(this.#events, socket, pullNeeded, 'no cookie');
     // Cookie is off current history: incremental catch-up cannot chain; client must full-pull over HTTP (Connect in TLA+ models).
     if (!this.#space.onHistory(cookie)) return closeSocket(this.#events, socket, pullNeeded, 'not on history');

@@ -57,8 +57,8 @@ const product: Rule[] = [
   ],
 ];
 
-// Product code comments (src/ and Rust rust/) only state final rules and algorithms, and do not point to files (dev scripts like probes need file paths and are skipped): file paths become wrong after moving or renaming without tooling to verify. To refer to other modules, state their behavior directly or write {@link Symbol} (navigable in editor, renamed during refactoring); protocol models (model/*.tla, *.cfg) are the source of truth for the specification, so actions pointing to models are kept; external materials use @see.
-const source = /^(src|rust)\//;
+// Product code and test comments (src/, test/, and Rust rust/) only state final rules and algorithms, and do not point to files (dev scripts like probes need file paths and are skipped): file paths become wrong after moving or renaming without tooling to verify. To refer to other modules, state their behavior directly or write {@link Symbol} (navigable in editor, renamed during refactoring); protocol models (model/*.tla, *.cfg) are the source of truth for the specification, so actions pointing to models are kept; external materials use @see.
+const source = /^(src|test|rust)\//;
 const sourceRules: Rule[] = [
   ...product,
   // Filenames: lowercase start (all files in this repo) or preceded by / (paths elsewhere); followed by ( is a method call (res.json()), ignored.

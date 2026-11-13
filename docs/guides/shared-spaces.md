@@ -13,7 +13,7 @@ A shared space needs four parts in your Worker:
 | Part | What it does |
 |---|---|
 | `SynclineSharedSpace` | Durable Object holding the data. Your server writes go here. |
-| `SynclineBroadcast` | Durable Objects that hold devices' live connections. The shared space spreads them over 128 of these by default (`shards`). |
+| `SynclineBroadcast` | Durable Objects that hold devices' live connections. The shared space spreads them over 16 of these by default (`shards`). |
 | `SynclineSharedEntry` | Worker entrypoint that answers downloads. Workers Cache sits in front of it. |
 | `forwardShared` | Called from your Worker's `fetch`. Checks the token, then sends live connections to a broadcast object and downloads to the entry. |
 
@@ -129,7 +129,7 @@ The `route` fields:
 - **`space`**: the name of the shared space Durable Object. Use a fixed name. Your server writes must reach the same name: `env.SHARED_SPACE.getByName('shared')`. Different names are separate spaces.
 - **`definition`**: the same object the space was built with.
 
-The space name, plus `#127` with the default shards, must fit in 1,024 bytes. Reach the space only by name (`getByName` or `idFromName`). An ID from `newUniqueId` or `idFromString` makes it throw.
+The space name, plus `#15` with the default shards, must fit in 1,024 bytes. Reach the space only by name (`getByName` or `idFromName`). An ID from `newUniqueId` or `idFromString` makes it throw.
 
 Private and shared spaces share one Worker. Route by path, as above.
 
@@ -163,7 +163,7 @@ Workers Cache sits in front of every entrypoint once enabled, including the defa
 | If you leave out | What happens |
 |---|---|
 | `cache` | Nothing is cached. Every download reaches the shared space Durable Object, and is billed as such. |
-| `"default"` with `enabled: false` | Every request to your Worker first looks up the cache. `forwardShared` marks its own responses `no-store`, so they are not kept, but any other route of yours answering 200 without `Cache-Control` is cached for 2 hours and served without running your code. |
+| `"default"` with `enabled: false` | Every `GET` request to your Worker first looks up the cache. `forwardShared` marks its own responses `no-store`, so they are not kept, but your other `GET` routes answering without `Cache-Control` are cached ([a 200 for 2 hours, a 404 for 3 minutes, and others](https://developers.cloudflare.com/workers/cache/configuration/)) and served without running your code, unless the request has `Authorization` or the response sets `Set-Cookie`. Mark them `no-store` if they must not be cached. |
 
 Workers Cache needs Wrangler 4.69.0 or later; per-entrypoint `exports` need 4.107.0 or later ([configuration](https://developers.cloudflare.com/workers/cache/configuration/)).
 
@@ -197,9 +197,9 @@ Call `reconnect()` on the shared space when a user's access changes, for example
   });
 ```
 
-Downloads check the token every time. A live connection keeps the old buckets until it reconnects. Without `reconnect()`, live updates follow the old access until at most a minute after the old token expires.
+Downloads check the token every time. A live connection keeps the old buckets until it reconnects. Without `reconnect()`, live updates follow the old access until the device's next download, at the latest a minute after the old token expires.
 
-Adding buckets downloads only the new buckets. Removing buckets downloads everything again; the old rows stay visible until that lands.
+Adding buckets downloads only the new buckets; removing buckets [downloads everything again](../reference/edge-cases.md#removing-buckets-downloads-everything-again).
 
 ## 7. Develop locally
 

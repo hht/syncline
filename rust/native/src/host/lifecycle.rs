@@ -2,7 +2,7 @@
 //! only when this ticket reaches the head of the file queue (after previous instances close). Failures are returned to the open call.
 //! While waiting in line, open calls and subsequent calls buffer in order rather than blocking, while close calls remain immediate.
 //! Closing stops sync, closes the database file, and releases the ticket before replying (JS waits for reply before deleting files),
-//! clearing remaining timers, sockets, and requests. Calls after closing return "local database is closed".
+//! clearing remaining timers, sockets, and requests. Calls after closing return "Local database is closed".
 //! What this module should not know: database contents or internal state machine rules.
 
 use super::{Host, now};
@@ -50,7 +50,7 @@ impl Host {
         }
     }
 
-    /// Opens database file, defines tables, and opens device: errors reply to open call and release ticket; later calls return "local database is closed".
+    /// Opens database file, defines tables, and opens device: errors reply to open call and release ticket; later calls return "Local database is closed".
     fn open_file(&mut self, id: u64, opening: Opening) {
         let opened = rusqlite::Connection::open(&self.path)
             .and_then(Database::new)
@@ -91,7 +91,7 @@ impl Host {
         self.requests.clear();
         // Closed while waiting to open: open call fails with closed, buffered calls fail in order, followed by close reply.
         if let Some(Waiting { id, later, .. }) = self.waiting.take() {
-            self.deliver(vec![failed(id, Failure::new("local database is closed"))]);
+            self.deliver(vec![failed(id, Failure::new("Local database is closed"))]);
             for call in later {
                 self.call(&call);
             }

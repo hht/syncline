@@ -1,4 +1,4 @@
-import { notifyAll } from '../common/listeners.ts';
+import { notifyAll } from '../listeners.ts';
 
 /**
  * Cloud events surfaced to the integrator for logging, metrics, or alerts.

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { writeRows } from '../../src/common/limits.ts';
+import { writeRows } from '../../src/protocol/limits.ts';
 import { untilJson, withWorker } from './deploy.ts';
 import { connect, next, sleep, tailCalls } from './device.ts';
 

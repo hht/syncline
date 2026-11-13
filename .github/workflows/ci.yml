@@ -32,7 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: rust
-      # LLVM for compiling SQLite to wasm, at the version src/build-wasm.mjs pins; the token lifts GitHub's anonymous rate limit
+      # LLVM for compiling SQLite to wasm, at the version rust/wasm/build.mjs pins; the token lifts GitHub's anonymous rate limit
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install: false
@@ -40,9 +40,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          llvm=$(grep -o 'github:llvm/llvm-project@llvmorg-[0-9.]*' src/build-wasm.mjs)
+          llvm=$(grep -o 'github:llvm/llvm-project@llvmorg-[0-9.]*' rust/wasm/build.mjs)
           mise install "$llvm"
-      # The wasm-bindgen CLI at the version rust/Cargo.toml pins, where src/build-wasm.mjs runs it from
+      # The wasm-bindgen CLI at the version rust/Cargo.toml pins, where rust/wasm/build.mjs runs it from
       - name: Install wasm-bindgen
         run: |
           version=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' rust/Cargo.toml)

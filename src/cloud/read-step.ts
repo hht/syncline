@@ -1,5 +1,5 @@
-import type { Cookie, Op, Value } from '../common/protocol.ts';
-import { opChars } from '../common/size.ts';
+import type { Cookie, Op, Value } from '../protocol/messages.ts';
+import { opChars } from '../protocol/size.ts';
 import { forgetTable, type Key, rowId } from '../tables/keys.ts';
 import { type TableReads, wholeTable } from './batches.ts';
 import type { Buckets, Lane, Subscription } from './buckets.ts';

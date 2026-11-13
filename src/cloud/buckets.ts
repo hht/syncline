@@ -1,8 +1,8 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { subscriptionBytes } from '../common/limits.ts';
-import { utf8Bytes } from '../common/size.ts';
-import { among, literal, quote, quoteAll } from '../common/sql.ts';
-import { type Query, Reject } from '../common/storage.ts';
+import { subscriptionBytes } from '../protocol/limits.ts';
+import { utf8Bytes } from '../protocol/size.ts';
+import { among, literal, quote, quoteAll } from '../sqlite/sql.ts';
+import { type Query, Reject } from '../sqlite/storage.ts';
 import { fingerprintOf } from '../tables/fingerprint.ts';
 import { keyColumns, keyOf, rowId } from '../tables/keys.ts';
 import { bucketIndexPrefix } from '../tables/table-definitions.ts';
@@ -65,6 +65,9 @@ const normalized = (condition: string) =>
 const groupArgs = 32;
 const maxArgs = 127;
 
+/** Maximum number of bucket rules one table can belong to. */
+export const rulesPerTable = groupArgs * maxArgs;
+
 /** Query lane for scanning a table: `where` and `bindings` filter rows along this lane (using only this table's columns); shared spaces scan one lane per bucket with `bucket` set to canonical ID; private spaces scan whole table without `bucket`. */
 export type Lane = { bucket?: string; where: string; bindings: readonly unknown[] };
 
@@ -98,8 +101,8 @@ export class Buckets {
     );
     for (const [name, members] of Object.entries(rules)) this.#rules.set(name, parseRule(name, members, columns));
     for (const table of columns.keys())
-      if (this.#on(table).length > groupArgs * maxArgs)
-        throw new Error(`Table ${table} belongs to ${this.#on(table).length} bucket rules, exceeding the limit of ${groupArgs * maxArgs}.`);
+      if (this.#on(table).length > rulesPerTable)
+        throw new Error(`Table ${table} belongs to ${this.#on(table).length} bucket rules, exceeding the limit of ${rulesPerTable}.`);
     const most = (name: string, { by }: Member) => 2 * (by.length === 0 ? utf8Bytes(bucketId([name])) : bucketBytes) + 3;
     this.reserve =
       Math.max(0, ...[...columns.keys()].map((table) => this.#on(table).reduce((total, [name, member]) => total + most(name, member), 0))) +

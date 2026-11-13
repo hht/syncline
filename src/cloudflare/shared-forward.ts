@@ -3,7 +3,7 @@ import { defaultShards } from '../cloud/broadcast.ts';
 import { type Bucket, type BucketRules, Buckets, subscriptionHash } from '../cloud/buckets.ts';
 import { canonicalPosition } from '../cloud/position.ts';
 import type { Subscribed } from '../cloud/shared.ts';
-import { parsePullRequest, pullURL } from '../common/pull-url.ts';
+import { parsePullRequest, pullURL } from '../protocol/pull-url.ts';
 import type { Schema } from '../tables/table-definitions.ts';
 import { admit, expiresHeader } from './forward.ts';
 import { withoutToken } from './requests.ts';
@@ -33,7 +33,7 @@ export type SharedDefinition = {
   schema: Schema;
   /** Bucket rules mapping rule names to covered tables and conditions. */
   rules: BucketRules;
-  /** Broadcast shard count, default 128. */
+  /** Broadcast shard count, default 16: about 1,000 connections each; every server write calls each shard. */
   shards?: number;
   /** Chunk boundary row threshold. */
   chunkRows?: number;
