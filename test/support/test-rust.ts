@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { coverageOutput, wasmOutput } from '../../src/build-wasm.mjs';
+import { coverageOutput, wasmOutput } from '../../rust/wasm/build.mjs';
 import { decodeRows, encode } from '../../src/expo/client.ts';
 import { deserializeError } from '../../src/expo/errors.ts';
 import type { Delivered, Input, Shell } from '../../src/expo/shell.ts';

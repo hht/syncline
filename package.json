@@ -38,7 +38,6 @@
   },
   "files": [
     "src",
-    "!src/build-wasm.mjs",
     "ios",
     "android/build.gradle",
     "android/src",

@@ -25,7 +25,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
  */
 
 const llvm = 'github:llvm/llvm-project@llvmorg-23.1.4';
-const workspace = resolve(import.meta.dirname, '../rust');
+const workspace = resolve(import.meta.dirname, '..');
 const cargoBin = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin');
 export const wasmOutput = join(workspace, 'target/node');
 /** Target directory and node output of the coverage build. */

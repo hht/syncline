@@ -24,7 +24,7 @@
     "examples/cloudflare/setup.ts",
     "examples/app/*.ts"
   ],
-  "project": ["src/**/*.{ts,mjs}", "test/**/*.ts", "tools/**/*.ts", "probes/**/*.ts", "examples/**/*.ts"],
+  "project": ["src/**/*.{ts,mjs}", "rust/wasm/build.mjs", "test/**/*.ts", "tools/**/*.ts", "probes/**/*.ts", "examples/**/*.ts"],
   // Gates invoke these tools via node_modules/.bin paths undetected by knip; cloudflare:workers is a runtime built-in, not an npm package.
   "ignoreDependencies": ["@biomejs/biome", "dependency-cruiser", "jscpd", "cloudflare"]
 }

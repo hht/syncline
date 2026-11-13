@@ -15,6 +15,7 @@
     "tools/**/*.ts",
     "src",
     "test",
+    "rust/wasm/build.mjs",
     "examples/app",
     "probes/cloudflare/push-size.ts",
     "probes/cloudflare/push-batch.ts",

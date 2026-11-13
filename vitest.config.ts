@@ -41,7 +41,7 @@ export default defineConfig({
           hookTimeout: 60_000,
           include: ['{test,tools}/**/*.test.ts'],
           // Compiles Rust device side to wasm for tests.
-          globalSetup: ['src/build-wasm.mjs'],
+          globalSetup: ['rust/wasm/build.mjs'],
           setupFiles: process.env.SYNCLINE_COVERAGE === undefined ? [] : ['test/support/rust-coverage.ts'],
           // Cloud tests run in the Workers runtime (vitest.workerd.config.ts).
           exclude: ['**/node_modules/**', 'test/**/*.workerd.test.ts'],

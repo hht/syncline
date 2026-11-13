@@ -55,7 +55,7 @@ Code standards not covered by automated gates and enforced by pre-commit review:
 ## Environment
 
 - Always invoke cargo as `~/.cargo/bin/cargo` with `RUSTUP_TOOLCHAIN=` (empty); the toolchain version follows `rust/rust-toolchain.toml`.
-- Building web WebAssembly requires LLVM installed via mise (version in `src/build-wasm.mjs`, which prints the install command when missing) and the `wasm-bindgen` CLI matching the `wasm-bindgen` version in `rust/Cargo.toml`; Android additionally requires `cargo-ndk`.
+- Building web WebAssembly requires LLVM installed via mise (version in `rust/wasm/build.mjs`, which prints the install command when missing) and the `wasm-bindgen` CLI matching the `wasm-bindgen` version in `rust/Cargo.toml`; Android additionally requires `cargo-ndk`.
 - Test and hook timeouts (60 seconds) only catch hangs, not slowness: under high machine load, if a test still times out, wait for load to drop and re-run rather than changing the tests.
 
 ## Commands

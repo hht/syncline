@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
-import { coverageOutput } from '../../src/build-wasm.mjs';
+import { coverageOutput } from '../../rust/wasm/build.mjs';
 
 /**
  * Setup file for the full check, which sets SYNCLINE_COVERAGE to a profile directory: after each test file that loaded the Rust wasm,

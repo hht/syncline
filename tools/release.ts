@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { buildWasm } from '../src/build-wasm.mjs';
+import { buildWasm } from '../rust/wasm/build.mjs';
 import { digestsFile } from '../src/prebuilt.mjs';
 
 /**
