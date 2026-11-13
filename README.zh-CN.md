@@ -126,6 +126,7 @@ export default {
 ### 4. 在应用中使用
 
 ```tsx
+import { QueryClient, QueryClientProvider, useMutation } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { Button, Text, View } from 'react-native';
 import { openSyncline } from 'syncline/expo';
@@ -140,24 +141,31 @@ const syncline = openSyncline({
   token: getIdToken,
 });
 
+const queryClient = new QueryClient();
+
 export function App() {
   return (
-    <SynclineProvider value={syncline}>
-      <Notes />
-    </SynclineProvider>
+    <QueryClientProvider client={queryClient}>
+      <SynclineProvider value={syncline}>
+        <Notes />
+      </SynclineProvider>
+    </QueryClientProvider>
   );
 }
 
 function Notes() {
   const { data } = useQuery((db) => db.select().from(note));
   const { write } = useSyncline();
-  const add = () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' }));
+  const add = useMutation({
+    mutationFn: () => write(async (tx) => tx.insert(note).values({ id: randomUUID(), body: 'Hello' })),
+  });
   return (
     <View>
       {data?.map(({ id, body }) => (
         <Text key={id}>{body}</Text>
       ))}
-      <Button title="Add" onPress={add} />
+      {add.error && <Text>{add.error.message}</Text>}
+      <Button title="Add" onPress={() => add.mutate()} />
     </View>
   );
 }
