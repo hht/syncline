@@ -7,7 +7,7 @@ import { defaultConnections } from '../src/cloud/server.ts';
 import { defaultRows } from '../src/cloud/shared.ts';
 import { Space } from '../src/cloud/space.ts';
 import { receiveTimeout as shellReceiveTimeout } from '../src/expo/shell.ts';
-import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../src/features/exports/cloud/exports.ts';
+import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../src/features/exports.ts';
 import {
   commitFloor,
   keyBytes,

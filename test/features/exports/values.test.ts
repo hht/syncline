@@ -2,7 +2,7 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import type { Space } from '../../../src/cloud/space.ts';
-import type { Exporter } from '../../../src/features/exports/cloud/exports.ts';
+import type { Exporter } from '../../../src/features/exports.ts';
 import type { Device } from '../../support/test-device.ts';
 import { failure, rows, upload } from '../../support/test-roundtrip.ts';
 import { write } from '../../support/test-schema.ts';

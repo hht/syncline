@@ -1,7 +1,7 @@
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { expect } from 'vitest';
 import { Space } from '../../../src/cloud/space.ts';
-import { type Exporter, Exports } from '../../../src/features/exports/cloud/exports.ts';
+import { type Exporter, Exports } from '../../../src/features/exports.ts';
 import type { Op } from '../../../src/protocol/messages.ts';
 import { defineTables } from '../../../src/tables/table-definitions.ts';
 import { install } from '../../support/test-schema.ts';

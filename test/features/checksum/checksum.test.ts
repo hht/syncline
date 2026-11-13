@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import { checksumOf, plus, rowHash } from '../../../src/features/checksum/common/checksum.ts';
+import { checksumOf, plus, rowHash } from '../../../src/features/checksum/checksum.ts';
 import { Device, Space } from '../../support/test-checksum.ts';
 import { schema, serverInc, snapshot, synced, tables, writes } from '../../support/test-counter.ts';
 import { captureReported } from '../../support/test-errors.ts';

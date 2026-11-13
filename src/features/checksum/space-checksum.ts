@@ -1,8 +1,8 @@
-import type { TableReads } from '../../../cloud/batches.ts';
-import { decodeScan, encodeScan, type Scan } from '../../../cloud/position.ts';
-import type { Checksum, ChecksumPart, Value } from '../../../protocol/messages.ts';
-import { fingerprintOf } from '../../../tables/fingerprint.ts';
-import { plus, rangeRows, rowText } from '../common/checksum.ts';
+import type { TableReads } from '../../cloud/batches.ts';
+import { decodeScan, encodeScan, type Scan } from '../../cloud/position.ts';
+import type { Checksum, ChecksumPart, Value } from '../../protocol/messages.ts';
+import { fingerprintOf } from '../../tables/fingerprint.ts';
+import { plus, rangeRows, rowText } from './checksum.ts';
 
 /**
  * Computes checksums for private spaces: computed on demand when the device requests (pull includes checksum),

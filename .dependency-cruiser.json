@@ -2,13 +2,13 @@
   "forbidden": [
     {
       "name": "device-not-cloud",
-      "comment": "Device JS entry points and bindings (under expo/ and react/) must not import cloud code via any path: Metro does not tree-shake, so imported cloud code would be bundled into mobile apps.",
+      "comment": "Device JS entry points and bindings (under expo/ and react/) must not import cloud code or pluggable features via any path: Metro does not tree-shake, so imported code would be bundled into mobile apps, and every TypeScript feature runs in the cloud (device features live in the Rust core).",
       "severity": "error",
       "from": {
         "path": "^src/(expo|react)/[^/]+\\.ts$"
       },
       "to": {
-        "path": "^src/(cloud|cloudflare|features/[^/]+/cloud)/",
+        "path": "^src/(cloud/|cloudflare/|features/)",
         "reachable": true
       }
     },

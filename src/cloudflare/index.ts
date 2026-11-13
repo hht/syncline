@@ -1,15 +1,15 @@
 // Cloud entry point: private spaces, shared spaces and their broadcast shards, Worker forwarding, and point-in-time recovery.
 // Assembly root: wires pluggable online checksums and exports into {@link SynclineSpace}.
 
-import { spaceChecksum } from '../features/checksum/cloud/checksums.ts';
-import { type ExportOptions, Exports } from '../features/exports/cloud/exports.ts';
+import { spaceChecksum } from '../features/checksum/space-checksum.ts';
+import { type ExportOptions, Exports } from '../features/exports.ts';
 import type { Schema } from '../tables/table-definitions.ts';
 import { SpaceObject, type SpaceOptions } from './durable-object.ts';
 
 export type { Bucket, BucketRules } from '../cloud/buckets.ts';
 export type { SynclineEvent } from '../cloud/events.ts';
 export type { Transaction } from '../cloud/transaction.ts';
-export type { Exporter } from '../features/exports/cloud/exports.ts';
+export type { Exporter } from '../features/exports.ts';
 export type { Change } from '../protocol/messages.ts';
 export { ValidationError } from '../tables/validation.ts';
 export { restoreSpace } from './durable-object.ts';

@@ -1,4 +1,4 @@
-import { fingerprintOf } from '../../../tables/fingerprint.ts';
+import { fingerprintOf } from '../../tables/fingerprint.ts';
 
 /**
  * Checksum of rows in a space: sum of row hashes (modulo 2^32).

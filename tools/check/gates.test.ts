@@ -81,6 +81,8 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
   expect(summary(result.problems).sort()).toEqual([
     'src/cloud/helper.ts:1 product-not-test',
     'src/cloud/server.ts:1 product-not-tools',
+    // Reaches cloud code and a feature, each a violation
+    'src/expo/native.ts:1 device-not-cloud',
     'src/expo/native.ts:1 device-not-cloud',
     'src/protocol/bridge.ts:2 core-not-features',
     'src/react/index.ts:1 device-not-cloud',

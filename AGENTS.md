@@ -22,8 +22,8 @@ Hold the protocol to four properties only: never stalls, never loses data, event
 ## Directory layout
 
 ```
-src/            TypeScript that ships: cloud (cloud/, cloudflare/), device JS bindings (expo/), table declarations (tables/), pluggable features (features/)
-test/           TypeScript tests: a directory per module or behavior tested, cross-module tests at the root, helpers shared across directories (support/), the test Worker (worker/)
+src/            Code that ships, a directory or file per question: device-cloud contract (protocol/), SQLite access (sqlite/), table declarations (tables/), cloud (cloud/, cloudflare/), device JS bindings (expo/, react/), pluggable features (features/)
+test/           Tests of src/: a directory per module or behavior tested, cross-module tests at the root, helpers shared across directories (support/), the test Worker (worker/)
 rust/           Device side: core (local database and sync state machine, no networking or timers), native (iOS and Android threads and networking), wasm (web Worker)
 ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations

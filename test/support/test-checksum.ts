@@ -1,6 +1,6 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { Space as CoreSpace } from '../../src/cloud/space.ts';
-import { spaceChecksum } from '../../src/features/checksum/cloud/checksums.ts';
+import { spaceChecksum } from '../../src/features/checksum/space-checksum.ts';
 import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import type { CloudStorage } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';

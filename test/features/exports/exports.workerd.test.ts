@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
-import { defaultExportDelay, maxExportDelay } from '../../../src/features/exports/cloud/exports.ts';
+import { defaultExportDelay, maxExportDelay } from '../../../src/features/exports.ts';
 import { alarmAfter, object, online, put, squat } from '../../worker/test-space.ts';
 import type { TestSpace } from '../../worker/test-worker.ts';
 
