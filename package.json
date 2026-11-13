@@ -54,7 +54,7 @@
       "default": "./src/expo/native.ts"
     },
     "./metro": "./metro.cjs",
-    "./react": "./src/expo/react.ts",
+    "./react": "./src/react/index.ts",
     "./cloudflare": "./src/cloudflare/index.ts",
     "./expo/background": "./src/expo/background.ts"
   },

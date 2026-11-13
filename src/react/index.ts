@@ -1,7 +1,7 @@
 import { useQueryClient, useQuery as useTanStackQuery } from '@tanstack/react-query';
 import { createContext, createElement, type ReactNode, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import type { Database, Syncline } from '../expo/syncline.ts';
 import { invalidateOnChange, queryOptions, removeQueries } from './query-cache.ts';
-import type { Database, Syncline } from './syncline.ts';
 
 /**
  * Integrates Syncline with React and TanStack Query.

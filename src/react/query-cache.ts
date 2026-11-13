@@ -1,5 +1,5 @@
 import type { Query, QueryClient } from '@tanstack/react-query';
-import type { Syncline } from './syncline.ts';
+import type { Syncline } from '../expo/syncline.ts';
 
 /**
  * Maps local database queries onto the TanStack Query cache: keys isolate database instances and carry SQL and parameters.

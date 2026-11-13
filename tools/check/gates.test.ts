@@ -66,6 +66,7 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
     '.dependency-cruiser.json': JSON.stringify({ extends: join(repo, '.dependency-cruiser.json') }),
     'tsconfig.json': JSON.stringify({ include: ['src/**/*.ts', 'test/**/*.ts', 'tools/**/*.ts'] }),
     'src/expo/native.ts': "import '../protocol/bridge.ts';\n",
+    'src/react/index.ts': "import '../cloud/server.ts';\n",
     'src/protocol/bridge.ts': "import '../cloud/server.ts';\nimport '../features/checksum/index.ts';\n",
     'src/cloud/server.ts': "import '../../tools/check/problem.ts';\n",
     'src/features/checksum/index.ts': '',
@@ -82,6 +83,7 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
     'src/cloud/server.ts:1 product-not-tools',
     'src/expo/native.ts:1 device-not-cloud',
     'src/protocol/bridge.ts:2 core-not-features',
+    'src/react/index.ts:1 device-not-cloud',
     'src/tables/a.ts:1 no-circular',
   ]);
 });
