@@ -36,7 +36,7 @@ await applyD1Migrations(env.EXPORTS, env.MIGRATIONS);
 测试通过共享空间自己的方法写入，再像设备一样下载。示例的辅助函数 `pull` 和 `connect` 在 [`examples/cloudflare/client.ts`](../../../examples/cloudflare/client.ts) 里。
 
 > [!NOTE]
-> 这些辅助函数使用应用与云端之间的通信格式。它不是公开 API：任何版本都可能改变它，辅助函数也要随之修改。
+> 这些辅助函数使用应用与云端之间的通信格式。它不是公开 API：任何版本都可能改变它，这些辅助函数也会随之改变。
 
 写入落在每个 token 能读的桶里：
 
