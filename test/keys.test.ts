@@ -143,7 +143,7 @@ test('a primary key of exactly 512 bytes is accepted by the device and the cloud
   expect(await failure(() => write(phone.device, (tx) => tx.insert(item).values({ id: over })))).toEqual(
     expect.stringContaining('is 513 bytes'),
   );
-  expect(() => space.mutate((tx) => tx.insert(item, { id: over }))).toThrow('to 513 bytes');
+  expect(() => space.mutate((tx) => tx.insert(item, { id: over }))).toThrow('is 513 bytes');
 });
 
 test('a new install pulling in small chunks receives every row exactly once, whatever its key', async () => {

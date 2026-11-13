@@ -183,7 +183,7 @@ function checkOf(table: string, column: SQLiteColumn): Check {
   const length = 'length' in column && typeof column.length === 'number' ? column.length : undefined;
   const json = column.columnType === 'SQLiteTextJson';
   return (value) => {
-    if (typeof value !== 'string') return 'must be a string';
+    if (typeof value !== 'string') return 'must be text';
     if (enumValues && !enumValues.includes(value)) return `must be one of: ${enumValues.join(', ')}`;
     if (length !== undefined && value.length > length) return `exceeds ${length} characters`;
     if (json && !isJson(value)) return 'must be valid JSON';
@@ -247,12 +247,15 @@ export class Validator {
     if (!stored) return undefined;
     const issues = fields.flatMap(({ field, column, check }): Issue[] => {
       const value = stored[column.name];
-      const message = value === null ? (column.notNull ? 'cannot be null' : undefined) : check(value);
+      const message = value === null ? (column.notNull ? 'must not be null' : undefined) : check(value);
       return message === undefined ? [] : [{ path: [field], message }];
     });
     const keyed = keyBytesOf(keyOf(key, stored));
     if (keyed > keyBytes)
-      issues.push({ path: [], message: `primary key serialized to ${keyed} bytes, exceeding ${keyBytes}-byte limit for pull URLs` });
+      issues.push({
+        path: [],
+        message: `primary key serialized to JSON is ${keyed} bytes, exceeding ${keyBytes}: pull continuation cursor carries it in the URL`,
+      });
     if (issues.length > 0) throw new ValidationError(table, issues);
     this.checkSchema(table, stored);
     return stored;

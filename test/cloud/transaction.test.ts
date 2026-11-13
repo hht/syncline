@@ -2,6 +2,7 @@ import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
+import { keyBytes } from '../../src/protocol/limits.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
 import { ValidationError } from '../../src/tables/validation.ts';
 import { cabinet, contents, doc, landedRequest, project, pullAll, rules, schema, viewer } from '../support/test-cabinet.ts';
@@ -141,8 +142,26 @@ test('a server write storing bytes in a text column of a table created without S
   const storage = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)');
   const space = new Space(storage, [note]);
   const writing = () => space.mutate((tx) => tx.insert(note, { id: 'n1', body: new Uint8Array([1]) as never }));
-  expect(writing).toThrow(new ValidationError('note', [{ path: ['body'], message: 'must be a string' }]));
+  expect(writing).toThrow(new ValidationError('note', [{ path: ['body'], message: 'must be text' }]));
   expect(writing).toThrow(expect.objectContaining({ name: 'ValidationError' }));
+  expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
+});
+
+test('a server write storing NULL in a column declared not null, in a table created without that constraint, throws ValidationError and stores nothing', () => {
+  const storage = cloudStorage('CREATE TABLE memo (id TEXT PRIMARY KEY, title TEXT)');
+  const memo = sqliteTable('memo', { id: text().primaryKey(), title: text().notNull() });
+  const space = new Space(storage, [memo]);
+  const writing = () => space.mutate((tx) => tx.insert(memo, { id: 'm1', title: null as never }));
+  expect(writing).toThrow(new ValidationError('memo', [{ path: ['title'], message: 'must not be null' }]));
+  expect(storage.sql.exec('SELECT id FROM memo').toArray()).toEqual([]);
+});
+
+test('a server write whose primary key serializes over keyBytes throws ValidationError naming its size, as the device does, and stores nothing', () => {
+  const storage = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)');
+  const space = new Space(storage, [note]);
+  const writing = () => space.mutate((tx) => tx.insert(note, { id: 'k'.repeat(600), body: 'b' }));
+  const message = `primary key serialized to JSON is 609 bytes, exceeding ${keyBytes}: pull continuation cursor carries it in the URL`;
+  expect(writing).toThrow(new ValidationError('note', [{ path: [], message }]));
   expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
 });
 
