@@ -156,7 +156,7 @@ Syncline 在每次连接前调用 `token`，连接期间每下载一块数据之
 - **它不等网络。** 离线时，它立即发起一次连接尝试，尝试失败时被拒绝。
 - **它以状态中显示的错误被拒绝**，即 `downloadError` 或 `uploadError`。其中只有 `PendingWritesError` 和 `AccountMismatchError` 可以用 `instanceof` 判断。
 - **`AccountMismatchError` 让同步停止后**，之后的调用以 `sync has not started` 被拒绝。
-- **云端以 [1007](errors.md#uploaderror-显示代码-1007) 拒绝上传之后**，它会立即被拒绝，直到应用重启或调用 `resync()`。
+- **云端以 [1007](errors.md#uploaderror-显示关闭码-1007) 拒绝上传之后**，它会立即被拒绝，直到应用重启或调用 `resync()`。
 
 #### `resync(options?)`
 
@@ -164,7 +164,7 @@ Syncline 在每次连接前调用 `token`，连接期间每下载一块数据之
 
 - **`options.signal`** 与 `sync` 中的相同。
 - **待上传的写入会保留**，下载之后照常上传。
-- **`options.discardPending: true` 会把它们也丢弃。** 在云端一直以 [1007](errors.md#uploaderror-显示代码-1007) 拒绝上传时使用。
+- **`options.discardPending: true` 会把它们也丢弃。** 在云端一直以 [1007](errors.md#uploaderror-显示关闭码-1007) 拒绝上传时使用。
 - **被丢弃的写入可能已经在云端。** 如果云端执行了它而设备没收到确认，下载会把它的改动带回来。
 - **丢弃可能失败。** 如果某条待上传的写入无法撤销，同步表会[改为被清空](edge-cases.md#丢弃待上传的写入可能清空同步表)。
 

@@ -28,7 +28,8 @@ import { rustLimits } from './support/test-rust.ts';
 import { cloudStorage } from './support/test-storage.ts';
 
 // Documentation limits for integrators match code constants: each statement is computed dynamically from constants; modifying constants without updating documentation fails. Device-side values are read from the Rust core.
-// Every number the document writes in digits stands in such a statement, or in one listed as given by no constant of this repository.
+// Every number Limits and Edge cases write in digits stands in such a statement, or in one listed as given by no constant of this repository;
+// every number of the connection codes table of Errors stands in such a statement.
 
 const {
   receiveTimeout,
@@ -125,17 +126,6 @@ const stated = [
   // Things to know
   `An uploaded write is billed ${billed(1, 1) - 1} row writes besides the rows it changes`,
   `One \`write\` of 100 rows costs ${billed(1, 100)}; 100 writes of one row each cost ${billed(100, 1)}.`,
-  // Connection errors
-  `Except for ${pullNeeded}, ${versionMismatch}, and ${schemaMismatch}, the code shows`,
-  `| ${pullNeeded} | The device must download first |`,
-  `| ${expired} | Token expired |`,
-  `| ${versionMismatch} | App and cloud versions differ |`,
-  `| ${schemaMismatch} | App and cloud schemas differ |`,
-  `| ${invalidPush} | Cloud rejected a batch of uploaded writes`,
-  `| ${tooManyConnections} | Too many connections | Retries within ${seconds(maxDelay)} |`,
-  `| ${pushFailed} | Cloud failed to store the upload |`,
-  `| ${overQuota} | Upload quota reached |`,
-  `| ${unsupportedMessage} | Binary message, or an upload to a shared space |`,
   // Requirements
   `\`expo\` ${peers.expo}.`,
   `\`react\` ${peers.react} and \`@tanstack/react-query\` ${peers['@tanstack/react-query']}.`,
@@ -178,13 +168,42 @@ test.each(stated)('limits.md or edge-cases.md states: %s', (sentence) => {
   expect(limits).toContain(sentence);
 });
 
-test('every number limits.md and edge-cases.md write in digits stands in a statement tied to the code, or in one listed as given by no constant', () => {
-  let rest = limits;
-  for (const sentence of [...stated, ...outside]) {
+/** The connection codes table of Errors. */
+const codes = [
+  `Except for ${pullNeeded}, ${versionMismatch}, and ${schemaMismatch}, the code shows`,
+  `| ${pullNeeded} | The device must download first |`,
+  `| ${expired} | Token expired |`,
+  `| ${versionMismatch} | App and cloud versions differ |`,
+  `| ${schemaMismatch} | App and cloud schemas differ |`,
+  `| ${invalidPush} | Cloud rejected a batch of uploaded writes (unreadable, or past a limit) | Stops uploading; see [\`uploadError\` shows code ${invalidPush}](#uploaderror-shows-code-${invalidPush}) |`,
+  `| ${tooManyConnections} | Too many connections | Retries within ${seconds(maxDelay)} |`,
+  `| ${pushFailed} | Cloud failed to store the upload |`,
+  `| ${overQuota} | Upload quota reached |`,
+  `| ${unsupportedMessage} | Binary message, or an upload to a shared space |`,
+];
+
+test.each(codes)('errors.md states: %s', (sentence) => {
+  expect(reference('errors.md')).toContain(sentence);
+});
+
+/** Numbers `text` writes in digits outside `sentences`, each of which it must hold. */
+function unclaimed(text: string, sentences: string[]) {
+  let rest = text;
+  for (const sentence of sentences) {
     expect(rest).toContain(sentence);
     rest = rest.replace(sentence, () => '');
   }
-  expect(rest.match(numbers) ?? []).toEqual([]);
+  return rest.match(numbers) ?? [];
+}
+
+test('every number the connection codes table of errors.md writes in digits stands in a statement tied to the code', () => {
+  const errors = reference('errors.md');
+  const start = errors.indexOf('### Connection errors');
+  expect(unclaimed(errors.slice(start, errors.indexOf('\n### ', start)), codes)).toEqual([]);
+});
+
+test('every number limits.md and edge-cases.md write in digits stands in a statement tied to the code, or in one listed as given by no constant', () => {
+  expect(unclaimed(limits, [...stated, ...outside])).toEqual([]);
 });
 
 test('checksum verification waits a full day after completing a round', () => {
@@ -192,7 +211,7 @@ test('checksum verification waits a full day after completing a round', () => {
   expect(limits).toContain('a full day after the previous round completed');
 });
 
-test.each(['limits.md', 'edge-cases.md'])('the Chinese translation of %s states the same numbers as the English', (path) => {
+test.each(['limits.md', 'edge-cases.md', 'errors.md'])('the Chinese translation of %s states the same numbers as the English', (path) => {
   const sorted = (text: string) => (text.match(numbers) ?? []).sort();
   expect(sorted(reference(`zh-CN/${path}`))).toEqual(sorted(reference(path)));
 });

@@ -70,7 +70,11 @@ Nothing is lost. To keep the code out of `downloadError`, have `token` return to
 
 `resync({ discardPending: true })` undoes the pending writes at once and keeps the other rows visible until the download lands.
 
-If a pending write cannot be undone, Syncline clears the synced tables instead and reports why to the app's error handler. The download then fills them again. A write cannot be undone when synced tables were changed outside Syncline, or when a trigger of yours raises an error: see App triggers under [Things to know](limits.md#things-to-know).
+If a pending write cannot be undone, Syncline clears the synced tables instead and reports why to the app's error handler. The download then fills them again. A write cannot be undone when synced tables were changed outside Syncline, or when [a trigger of yours raises an error](#a-trigger-that-raises-an-error-can-block-downloads).
+
+### A trigger that raises an error can block downloads
+
+A trigger on a synced table that raises an error when Syncline changes rows can block downloads, or opening the database. Remove the trigger, or stop it from raising when Syncline changes rows.
 
 ### Names that differ only by case are one name
 
@@ -113,7 +117,7 @@ A write uploads in one piece: a disconnect during its upload starts it over on t
 
 ### A pending write that cannot be read back stops the device
 
-Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database to recover; pending writes are lost.
+Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database with `delete()` to recover; pending writes are lost.
 
 ### A failed read of the pending count keeps the previous number
 

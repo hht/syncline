@@ -30,9 +30,25 @@ Sync goes on. Log these errors.
 | `token` throws, returns `undefined` or `null`, or takes more than 30 seconds | Sets `downloadError` and retries with backoff |
 | The cloud rejects the token (HTTP 401) | Sets `downloadError` and retries with backoff |
 | The token expires | Gets a new token and reconnects |
-| The cloud closes the connection | Depends on the code; see [Connection errors](limits.md#connection-errors) |
+| The cloud closes the connection | Depends on the code; see [Connection errors](#connection-errors) |
 
 For these, show `downloadError` or `uploadError` to the user if you want; there is nothing to fix in your code. A token your cloud keeps rejecting is the exception: check `verify`. When the user signs out, call `close()` instead of throwing from `token`, or the device keeps retrying.
+
+### Connection errors
+
+The cloud closes a connection with codes such as these. Devices handle them on their own. Except for 4000, 4002, and 4003, the code shows in `uploadError` or `downloadError`.
+
+| Code | Meaning | What the device does |
+|---|---|---|
+| 4000 | The device must download first | Downloads, then reconnects |
+| 4001 | Token expired | Gets a new token and reconnects |
+| 4002 | App and cloud versions differ | Stops if the cloud is newer (`updateNeeded`), else retries |
+| 4003 | App and cloud schemas differ | Checks compatibility, then connects, stops (`updateNeeded`), or retries |
+| 1007 | Cloud rejected a batch of uploaded writes (unreadable, or past a limit) | Stops uploading; see [`uploadError` shows code 1007](#uploaderror-shows-code-1007) |
+| 1008 | Too many connections | Retries within 30 seconds |
+| 1011 | Cloud failed to store the upload | Retries |
+| 1013 | Upload quota reached | Retries later |
+| 1003 | Binary message, or an upload to a shared space | Retries |
 
 ### A write throws
 
@@ -90,17 +106,13 @@ The app is ahead of the cloud. Sync retries with backoff, and pending writes are
 
 The cloud rejected a batch of uploaded writes: it could not read it, or the batch broke a limit. Uploads stop until the app restarts or calls `resync()`. If the writes can never succeed, `resync({ discardPending: true })` drops them.
 
-### Downloads keep failing after I added a trigger
-
-A trigger on a synced table that raises an error can block downloads, or opening the database. Remove the trigger, or stop it from raising when Syncline changes rows.
-
 ### The web app works in one tab only
 
 Only one tab per site can open the database. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
 
-### Syncline's own tables were changed
+### Rare errors
 
-Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database with `delete()` to recover. Pending writes are lost.
+Some errors take a mistake or an unusual release sequence, so most apps never meet them, such as [downloads that keep failing after adding a trigger](edge-cases.md#a-trigger-that-raises-an-error-can-block-downloads) or [a change to Syncline's own tables](edge-cases.md#a-pending-write-that-cannot-be-read-back-stops-the-device). See [Edge cases](edge-cases.md).
 
 ## In the cloud
 

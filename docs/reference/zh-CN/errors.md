@@ -32,9 +32,25 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 | `token` 抛错、返回 `undefined` 或 `null`，或超过 30 秒 | 设置 `downloadError`，按退避间隔重试 |
 | 云端拒绝 token（HTTP 401） | 设置 `downloadError`，按退避间隔重试 |
 | token 过期 | 获取新 token 后重连 |
-| 云端关闭连接 | 取决于代码，见[连接错误](limits.md#连接错误) |
+| 云端关闭连接 | 取决于关闭码，见[连接错误](#连接错误) |
 
 对于这些情况，你可以把 `downloadError` 或 `uploadError` 显示给用户；代码里没有需要修的。例外是云端一直拒绝的 token：检查 `verify`。用户退出登录时，调用 `close()`，而不是让 `token` 抛错，否则设备会一直重试。
+
+### 连接错误
+
+云端会用下面这类关闭码关闭连接。设备会自行处理。除 4000、4002 和 4003 外，关闭码会显示在 `uploadError` 或 `downloadError` 中。
+
+| 关闭码 | 含义 | 设备怎么做 |
+|---|---|---|
+| 4000 | 设备需要先下载 | 下载后重连 |
+| 4001 | token 过期 | 获取新 token 后重连 |
+| 4002 | 应用和云端版本不一致 | 云端比应用新时停止（`updateNeeded`），否则重试 |
+| 4003 | 应用和云端表结构不一致 | 检查兼容性，然后连接、停止（`updateNeeded`）或重试 |
+| 1007 | 云端拒绝了一批上传的写入（无法解析，或超出限制） | 停止上传，见[`uploadError` 显示关闭码 1007](#uploaderror-显示关闭码-1007) |
+| 1008 | 连接过多 | 30 秒内重试 |
+| 1011 | 云端保存上传失败 | 重试 |
+| 1013 | 达到上传配额 | 稍后重试 |
+| 1003 | 收到二进制消息，或向共享空间上传 | 重试 |
 
 ### 写入抛错
 
@@ -88,21 +104,17 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 - 云端运行的 Syncline 版本比应用旧。用应用所用的版本部署云端。
 - 云端删掉了某张表或某一列却没有退役，所以等待永远不会结束。请在两边都把它写进 `retired`。云端和应用都回滚的情况，见[新增列之后把两端都回滚会停止同步](edge-cases.md#新增列之后把两端都回滚会停止同步)。
 
-### `uploadError` 显示代码 1007
+### `uploadError` 显示关闭码 1007
 
-云端拒绝了上传的一批写入：无法解析，或超出了限制。上传会暂停，直到应用重启或调用 `resync()`。如果这些写入永远无法成功，用 `resync({ discardPending: true })` 丢弃。
-
-### 加了触发器之后下载一直失败
-
-同步表上的触发器抛错，可能阻塞下载或打开数据库。删除这个触发器，或者让它在 Syncline 修改行时不抛错。
+云端拒绝了上传的一批写入：无法解析，或超出了限制。上传会停止，直到应用重启或调用 `resync()`。如果这些写入永远无法成功，用 `resync({ discardPending: true })` 丢弃。
 
 ### Web 应用只能在一个标签页里用
 
 每个站点只能有一个标签页打开数据库。第二个标签页会失败，报错以 `Local database is open in another tab` 开头：它的 `waitForReady()` 被拒绝，`downloadError` 显示这个错误。关闭另一个标签页，再刷新当前页。
 
-### Syncline 自己的表被修改了
+### 少见的错误
 
-Syncline 自己的表（`_syncline_*`）只能由 Syncline 修改。其中保存的待上传写入读不回来时，设备无法同步，也无法打开数据库。用 `delete()` 删除本地数据库即可恢复，但待上传的写入会丢失。
+有些错误要出了差错或用了不寻常的发布顺序才会遇到，大多数应用碰不到，比如[加了触发器之后下载一直失败](edge-cases.md#抛错的触发器可能阻塞下载)或[Syncline 自己的表被修改](edge-cases.md#读不回来的待上传写入会让设备停下)。见[边界情况](edge-cases.md)。
 
 ## 云端
 
@@ -119,9 +131,9 @@ Syncline 自己的表（`_syncline_*`）只能由 Syncline 修改。其中保存
 ### 云端代码中的错误
 
 - schema 违反[表结构](limits.md#表结构)中写明由云端检查的规则时，`SynclineSpace` 和 `SynclineSharedSpace` 抛错。
-- 没有名字，或名字对它的分片来说太长时，`SynclineSharedSpace` 也会抛错（见[共享空间](limits.md#共享空间)）。
+- 访问 `SynclineSharedSpace` 时没有用名字，或名字对它的分片来说太长，它也会抛错（见[共享空间](limits.md#共享空间)）。
 - 写入违反规则时，`mutate()` 抛错并回滚，比如超出[限制](limits.md#大小)或 `ValidationError`。
-- `verify` 返回它们无法使用的值时，`forward` 和 `forwardShared` 抛错，比如 `expiresAt` 不是有限数，或某个 bucket 违反了你的规则。设备的请求会失败：`downloadError` 显示它，设备按退避间隔重试。
+- `verify` 返回它们无法使用的值时，`forward` 和 `forwardShared` 抛错，比如 `expiresAt` 不是有限数，或某个桶违反了你的规则。设备的请求会失败：`downloadError` 显示它，设备按退避间隔重试。
 - 你的 `scheduled(name)` 抛出的错误会交给 `reportError`，这个任务不会再执行。要重试，在其中调用 `schedule`。
 - 你的任务反复导致对象重置时会被暂停，失败交给 `reportError`（见[反复导致对象重置的任务会暂停一天](edge-cases.md#反复导致对象重置的任务会暂停一天)）。
 
@@ -149,4 +161,4 @@ Syncline 自己的表（`_syncline_*`）只能由 Syncline 修改。其中保存
 | `schema.changed` | 对象启动时，有表或列进入或离开同步 |
 | `cookie.reset` | 一台设备的位置不在共享空间的历史中，所以它重新下载全部数据 |
 | `chunk.pulled` | 一台设备下载了一块数据行 |
-| `connection.closed` | 云端关闭了一个连接，附带代码和原因 |
+| `connection.closed` | 云端关闭了一个连接，附带关闭码和原因 |
