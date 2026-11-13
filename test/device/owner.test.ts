@@ -2,7 +2,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { AccountMismatchError, PendingWritesError } from '../../src/expo/errors.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, tables, workout, workouts, write } from '../support/test-schema.ts';
+import { createWorkbook, tables, workbook, workbooks, write } from '../support/test-schema.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
 // One app one database: private space belongs to the logged-in owner, shared spaces cleared by owner: switching owners clears
@@ -14,13 +14,13 @@ const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
 /** One device: private space receives a row and writes an unuploaded row; shared space (logged-in owner is admin) receives a program. */
 async function used() {
-  const storage = deviceStorage(createWorkout, createProgram);
+  const storage = deviceStorage(createWorkbook, createProgram);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.private.receive({
     ...synced,
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'from cloud' } }],
+    patch: [{ op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: 'from cloud' } }],
   });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'unuploaded' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'unuploaded' }));
   const catalog = device.shared('catalog', [program], 'admin');
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'program', key: { id: 'draft' }, row: { id: 'draft' } }] });
   device.close();
@@ -34,19 +34,19 @@ test('opened with different owner and previous owner has pending writes: throws 
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(expect.objectContaining({ userID: 'alice', count: 1 }));
   expect(() => new Device(storage, tables, { owner: 'bob' })).toThrow(PendingWritesError);
   const device = new Device(storage, tables, { owner: 'alice' });
-  expect(workouts(storage)).toHaveLength(2);
+  expect(workbooks(storage)).toHaveLength(2);
   expect(device.private.pendingCount()).toBe(1);
   expect(device.private.cookie()).toEqual({ version: 1, nonce: 1 });
   expect(storage.sql.exec('PRAGMA secure_delete').toArray()).toEqual([{ secure_delete: 0 }]);
   device.close();
   new Device(storage, tables, { owner: 'bob', discardPending: true }).close();
-  expect(workouts(storage)).toEqual([]);
+  expect(workbooks(storage)).toEqual([]);
 });
 
 test('opened with different owner and explicitly discard pending writes: clears previous owner private data, pending writes, and cookie, refetched entirely; shared space remains intact', async () => {
   const storage = await used();
   const device = new Device(storage, tables, { owner: 'bob', discardPending: true });
-  expect(workouts(storage)).toEqual([]);
+  expect(workbooks(storage)).toEqual([]);
   expect(device.private.pendingCount()).toBe(0);
   expect(device.private.cookie()).toBeNull();
   expect(programs(storage)).toEqual([{ id: 'draft' }]);
@@ -66,36 +66,36 @@ test('shared space switches logged-in owner: rows viewed by previous owner clear
 });
 
 test('cloud space differs from the one recorded on first sync (account switched on device, token belongs to another): throws AccountMismatchError, rejects message; re-recorded only after owner change', async () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.private.receive({
     ...synced,
     space: 'alice',
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'alice data' } }],
+    patch: [{ op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: 'alice data' } }],
   });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'unuploaded' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'unuploaded' }));
   await expect(
     device.private.receive({ base: device.private.cookie(), cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [], space: 'bob' }),
   ).rejects.toThrow(AccountMismatchError);
   await expect(device.private.notified({ hint: { version: 9, nonce: 9 }, space: 'bob' }, false)).rejects.toThrow(AccountMismatchError);
-  expect([workouts(storage).length, device.private.pendingCount(), device.private.cookie()]).toEqual([2, 1, { version: 1, nonce: 1 }]);
+  expect([workbooks(storage).length, device.private.pendingCount(), device.private.cookie()]).toEqual([2, 1, { version: 1, nonce: 1 }]);
   device.close();
 
   const bob = new Device(storage, tables, { owner: 'bob', discardPending: true });
   await bob.private.receive({
     ...synced,
     space: 'bob',
-    patch: [{ op: 'put', table: 'workout', key: { id: 'w3' }, row: { id: 'w3', note: 'bob data' } }],
+    patch: [{ op: 'put', table: 'workbook', key: { id: 'w3' }, row: { id: 'w3', note: 'bob data' } }],
   });
-  expect(workouts(storage)).toEqual([{ id: 'w3', note: 'bob data' }]);
+  expect(workbooks(storage)).toEqual([{ id: 'w3', note: 'bob data' }]);
 });
 
 test('opened with different owner: previous owner data wiped in db file (deleted row contents zeroed out, not left in freelist pages)', async () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const alice = new Device(storage, tables, { owner: 'alice' });
   const secret = 'alice secret payload'.repeat(20);
-  await alice.private.receive({ ...synced, patch: [{ op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: secret } }] });
-  await write(alice, (tx) => tx.insert(workout).values({ id: 'w2', note: secret }));
+  await alice.private.receive({ ...synced, patch: [{ op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: secret } }] });
+  await write(alice, (tx) => tx.insert(workbook).values({ id: 'w2', note: secret }));
   alice.close();
   new Device(storage, tables, { owner: 'bob', discardPending: true }).close();
   const image = new TextDecoder('utf-8', { fatal: false }).decode(storage.image());
@@ -116,7 +116,7 @@ const rows = (storage: ReturnType<typeof deviceStorage>, table: string) => stora
 
 /** Storage where shared space catalog (owner `owner`, admin by default) received a course row. */
 async function courseReceived(owner = 'admin') {
-  const storage = deviceStorage(createWorkout, createProgram, createCourse);
+  const storage = deviceStorage(createWorkbook, createProgram, createCourse);
   const device = new Device(storage, tables, { owner: 'alice' });
   const catalog = device.shared('catalog', [program, course], owner);
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'secret' }, row: { id: 'secret' } }] });
@@ -133,7 +133,7 @@ test('shared space that stops declaring a table wipes it right away: no later ow
 
 /** Storage where shared space catalog (owner admin) last declared program and course. */
 async function catalogWithCourse() {
-  const storage = deviceStorage(createWorkout, createProgram, createCourse);
+  const storage = deviceStorage(createWorkbook, createProgram, createCourse);
   const device = new Device(storage, tables, { owner: 'alice' });
   await device.shared('catalog', [program, course], 'admin').opened();
   device.close();
@@ -185,7 +185,7 @@ const privateCourse = sqliteTable('course', { id: text().primaryKey(), title: te
 
 /** Storage where alice's private space synced a course row, then a release dropped course from sync and bob signed in. */
 async function courseLeftByAlice() {
-  const storage = deviceStorage(createWorkout, 'CREATE TABLE course (id TEXT PRIMARY KEY, title TEXT)');
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE course (id TEXT PRIMARY KEY, title TEXT)');
   const alice = new Device(storage, [...tables, privateCourse], { owner: 'alice' });
   await alice.private.receive({
     ...synced,

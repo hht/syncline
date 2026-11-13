@@ -2,7 +2,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import type { Op } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, tables } from '../support/test-schema.ts';
+import { createWorkbook, tables } from '../support/test-schema.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
 // A shared space switching owner while a download for the previous owner is stopped mid-way, or with an open that then fails:
@@ -25,7 +25,7 @@ function holding(storage: ReturnType<typeof deviceStorage>) {
 
 /** Shared space catalog opened for admin, declaring program. */
 async function opened() {
-  const storage = deviceStorage(createWorkout, createProgram, createCourse);
+  const storage = deviceStorage(createWorkbook, createProgram, createCourse);
   const device = new Device(storage, tables, { owner: 'alice' });
   const catalog = device.shared('catalog', [program], 'admin');
   await catalog.opened();

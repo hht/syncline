@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, tables, write } from '../support/test-schema.ts';
+import { createWorkbook, tables, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Integer primary keys: the app gives the key of every synced row, since SQLite would give rows written on different devices the same
@@ -12,7 +12,7 @@ import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 const item = sqliteTable('item', { id: integer().primaryKey(), title: text() });
 const draft = sqliteTable('draft', { id: integer().primaryKey(), title: text() });
 const insertWithoutKey = (device: Device, table: string) =>
-  device.write(async (execute) => execute(`INSERT INTO ${table} (title) VALUES ('squat')`, []));
+  device.write(async (execute) => execute(`INSERT INTO ${table} (title) VALUES ('stamp')`, []));
 const refused = 'NOT NULL constraint failed: item.id';
 
 test('an insert leaving out a sole integer key fails on a synced table and gets a key from SQLite on a local-only table', async () => {
@@ -20,13 +20,13 @@ test('an insert leaving out a sole integer key fails on a synced table and gets 
   const device = new Device(storage, [item], { localOnly: [draft] });
   await expect(insertWithoutKey(device, 'item')).rejects.toThrow(refused);
   // As Drizzle writes it: a key left out of values() is inserted as NULL.
-  await expect(write(device, (tx) => tx.insert(item).values({ title: 'squat' }))).rejects.toMatchObject({
+  await expect(write(device, (tx) => tx.insert(item).values({ title: 'stamp' }))).rejects.toMatchObject({
     cause: expect.objectContaining({ message: expect.stringContaining(refused) }),
   });
   await insertWithoutKey(device, 'draft');
-  expect(storage.sql.exec('SELECT id, title FROM draft').toArray()).toEqual([{ id: 1, title: 'squat' }]);
-  await write(device, (tx) => tx.insert(item).values({ id: 7, title: 'bench' }));
-  expect(device.private.pending().map(({ changes }) => changes)).toEqual([[{ op: 'put', table: 'item', row: { id: 7, title: 'bench' } }]]);
+  expect(storage.sql.exec('SELECT id, title FROM draft').toArray()).toEqual([{ id: 1, title: 'stamp' }]);
+  await write(device, (tx) => tx.insert(item).values({ id: 7, title: 'brick' }));
+  expect(device.private.pending().map(({ changes }) => changes)).toEqual([[{ op: 'put', table: 'item', row: { id: 7, title: 'brick' } }]]);
 });
 
 test('a download in several chunks, which swaps the synced table for a copy, lands integer keys and leaves the table refusing an insert without one', async () => {
@@ -62,11 +62,11 @@ test('autoIncrement is refused on the synced tables of the cloud and still count
   expect(() => defineTables(cloudStorage(), [counted])).toThrow(message);
   const storage = deviceStorage();
   await insertWithoutKey(new Device(storage, [], { localOnly: [counted] }), 'counted');
-  expect(storage.sql.exec('SELECT id, title FROM counted').toArray()).toEqual([{ id: 1, title: 'squat' }]);
+  expect(storage.sql.exec('SELECT id, title FROM counted').toArray()).toEqual([{ id: 1, title: 'stamp' }]);
 });
 
 test('a table a shared space created refuses an insert leaving out its sole integer key once the private space declares it', async () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const before = new Device(storage, tables);
   before.shared('catalog', [item]);
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE name = 'item'").toArray()).toEqual([{ name: 'item' }]);
@@ -80,6 +80,6 @@ test('a table moving between synced and local-only keeps the way it was created:
   new Device(storage, [item], { localOnly: [draft] }).close();
   const device = new Device(storage, [draft], { localOnly: [item] });
   await insertWithoutKey(device, 'draft');
-  expect(device.private.pending().map(({ changes }) => changes)).toEqual([[{ op: 'put', table: 'draft', row: { id: 1, title: 'squat' } }]]);
+  expect(device.private.pending().map(({ changes }) => changes)).toEqual([[{ op: 'put', table: 'draft', row: { id: 1, title: 'stamp' } }]]);
   await expect(insertWithoutKey(device, 'item')).rejects.toThrow(refused);
 });

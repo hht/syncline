@@ -1,7 +1,7 @@
 import { type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, tables, workout } from '../support/test-schema.ts';
+import { createWorkbook, tables, workbook } from '../support/test-schema.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
 // Tables leaving sync are wiped where no later owner switch could reach them; whatever the app does with the name afterwards must not
@@ -13,7 +13,7 @@ const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
 /** Storage where shared space catalog (owner admin) declared program and course and received a course row. */
 async function catalogSynced() {
-  const storage = deviceStorage(createWorkout, 'CREATE TABLE program (id TEXT PRIMARY KEY)', 'CREATE TABLE course (id TEXT PRIMARY KEY)');
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE program (id TEXT PRIMARY KEY)', 'CREATE TABLE course (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables, { owner: 'alice' });
   const catalog = device.shared('catalog', [program, course], 'admin');
   await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'c1' }, row: { id: 'c1' } }] });
@@ -54,8 +54,8 @@ test.for([
   { left: 'undeclared mid full pull', pull: { base: null, next: 'n1', patch: [{ op: 'clear' } as const, planRow] }, options: {} },
   { left: 'retired', pull: { ...synced, patch: [planRow] }, options: { retired: ['plan'] } },
 ])('a table leaving sync on the open that switches owner ($left): previous owner rows zeroed in db file', async ({ pull, options }) => {
-  const storage = deviceStorage(createWorkout);
-  const alice = new Device(storage, [workout, plan], { owner: 'alice' });
+  const storage = deviceStorage(createWorkbook);
+  const alice = new Device(storage, [workbook, plan], { owner: 'alice' });
   await alice.private.receive(pull);
   alice.close();
   new Device(storage, tables, { owner: 'bob', discardPending: true, ...options }).close();
@@ -67,11 +67,11 @@ const planPut = (id: string, extra: Record<string, unknown> = {}) =>
   ({ op: 'put', table: 'plan', key: { id }, row: { id, note: null, ...extra } }) as const;
 
 test.for([
-  { dropped: 'while the private space declares it', before: [workout, plan], between: null, shared: false },
-  { dropped: 'after it left sync', before: [workout, plan], between: tables, shared: false },
+  { dropped: 'while the private space declares it', before: [workbook, plan], between: null, shared: false },
+  { dropped: 'after it left sync', before: [workbook, plan], between: tables, shared: false },
   { dropped: 'while a shared space declares it', before: tables, between: null, shared: true },
 ])('a synced table the app drops $dropped is pulled in full when declared again', async ({ before, between, shared }) => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const open = (declared: SQLiteTable[]) => {
     const device = new Device(storage, shared ? tables : declared, { owner: 'alice' });
     return { device, mirror: shared ? device.shared('team', [plan], 'admin') : device.private };
@@ -91,13 +91,13 @@ test.for([
 });
 
 test('a synced table the app renamed opens when declared under its new name, rows pulled again', async () => {
-  const storage = deviceStorage(createWorkout);
-  const first = new Device(storage, [workout, plan], { owner: 'alice' });
+  const storage = deviceStorage(createWorkbook);
+  const first = new Device(storage, [workbook, plan], { owner: 'alice' });
   await first.private.receive({ ...synced, patch: [planPut('p1')] });
   first.close();
   new Device(storage, tables, { owner: 'alice' }).close();
   storage.sql.exec('ALTER TABLE plan RENAME TO renamed');
-  const device = new Device(storage, [workout, sqliteTable('renamed', { id: text().primaryKey(), note: text() })], { owner: 'alice' });
+  const device = new Device(storage, [workbook, sqliteTable('renamed', { id: text().primaryKey(), note: text() })], { owner: 'alice' });
   expect(device.private.pullRequest().refetch).toBe(true);
   expect(storage.sql.exec('SELECT id FROM renamed').toArray()).toEqual([]);
 });

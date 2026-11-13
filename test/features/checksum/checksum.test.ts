@@ -11,10 +11,10 @@ import { cloudStorage, deviceStorage, failOnce, injectedError } from '../../supp
 // Checksum: A row hash only considers values visible to devices, independent of column order or null columns; the cloud computes on demand when requested, and the device requests once when idle or due, verifying against its local sum segment by segment.
 
 test('row hash depends only on table name and non-null columns: column order and null columns (extra columns across schema differences) do not affect it; different values or table names produce different hashes', () => {
-  const row = { id: 'w1', note: 'squat', reps: 8 };
-  expect(rowHash('workout', { reps: 8, id: 'w1', note: 'squat', extra: null })).toBe(rowHash('workout', row));
-  expect(rowHash('workout', { ...row, reps: 9 })).not.toBe(rowHash('workout', row));
-  expect(rowHash('program', row)).not.toBe(rowHash('workout', row));
+  const row = { id: 'w1', note: 'stamp', runs: 8 };
+  expect(rowHash('workbook', { runs: 8, id: 'w1', note: 'stamp', extra: null })).toBe(rowHash('workbook', row));
+  expect(rowHash('workbook', { ...row, runs: 9 })).not.toBe(rowHash('workbook', row));
+  expect(rowHash('program', row)).not.toBe(rowHash('workbook', row));
 });
 
 test('sum of a set of rows is order-independent, modulo 2^32', () => {
@@ -252,21 +252,21 @@ test('checksum request with concurrent open local write (pulls not queued): dail
 });
 
 test('device older than cloud (unrecognized columns stored in _extra, unrecognized table rows saved separately): checksum still matches, reconstructed from device-visible values', async () => {
-  const workout = sqliteTable('workout', { id: text().primaryKey(), note: text() });
-  const withReps = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
+  const workbook = sqliteTable('workbook', { id: text().primaryKey(), note: text() });
+  const withRuns = sqliteTable('workbook', { id: text().primaryKey(), note: text(), runs: integer() });
   const later = sqliteTable('later', { id: text().primaryKey() });
   const space = new Space(
-    cloudStorage('CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)', 'CREATE TABLE later (id TEXT PRIMARY KEY)'),
-    [withReps, later],
+    cloudStorage('CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER)', 'CREATE TABLE later (id TEXT PRIMARY KEY)'),
+    [withRuns, later],
   );
   space.mutate((tx) => {
-    tx.insert(withReps, { id: 'w1', note: 'squat', reps: 5 });
+    tx.insert(withRuns, { id: 'w1', note: 'stamp', runs: 5 });
     tx.insert(later, { id: 'l1' });
   });
-  const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT)');
-  const device = new Device(storage, [workout]);
+  const storage = deviceStorage('CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT)');
+  const device = new Device(storage, [workbook]);
   await device.private.receive(space.pull({ ...device.private.pullRequest(), checksum: '' }, 1_000_000));
-  expect(storage.sql.exec('SELECT _extra FROM workout').toArray()).toEqual([{ _extra: '{"reps":5}' }]);
+  expect(storage.sql.exec('SELECT _extra FROM workbook').toArray()).toEqual([{ _extra: '{"runs":5}' }]);
   expect(await device.private.verify()).toBe(true);
 });
 

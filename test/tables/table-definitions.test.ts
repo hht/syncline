@@ -18,28 +18,28 @@ import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Table creation matching Drizzle schemas: STRICT on device with indexes on declared fields and first foreign key column; WITHOUT ROWID on cloud with foreign key composite indexes; additive column migrations.
 
-const workout = sqliteTable('workout', {
+const workbook = sqliteTable('workbook', {
   id: text().primaryKey(),
   title: text().notNull(),
   done: integer({ mode: 'boolean' }).default(false),
 });
-const exercise = sqliteTable(
-  'exercise',
+const excerpt = sqliteTable(
+  'excerpt',
   {
     id: text().primaryKey(),
-    workout: text().references(() => workout.id),
+    workbook: text().references(() => workbook.id),
     position: integer(),
     settings: text({ mode: 'json' }).$type<{ rest: number }>().default({ rest: 90 }),
   },
-  (table) => [index('exercise.position').on(table.position)],
+  (table) => [index('excerpt.position').on(table.position)],
 );
 const pair = sqliteTable('pair', { left: text().notNull(), right: text().notNull() }, (table) => [
   primaryKey({ columns: [table.left, table.right] }),
 ]);
 
 // First column of primary key is also a foreign key.
-const set = sqliteTable('set', { exercise: text().references(() => exercise.id), position: integer() }, (table) => [
-  primaryKey({ columns: [table.exercise, table.position] }),
+const set = sqliteTable('set', { excerpt: text().references(() => excerpt.id), position: integer() }, (table) => [
+  primaryKey({ columns: [table.excerpt, table.position] }),
 ]);
 
 const schemaOf = (storage: { sql: { exec(query: string): { toArray(): Record<string, unknown>[] } } }) =>
@@ -48,11 +48,11 @@ const schemaOf = (storage: { sql: { exec(query: string): { toArray(): Record<str
     .toArray()
     .map(({ name, sql }) => [name, sql]);
 
-const withReps = (reps: ReturnType<typeof integer>) =>
-  sqliteTable('workout', { id: text().primaryKey(), title: text().notNull(), done: integer({ mode: 'boolean' }).default(false), reps });
-const workoutWithDone = [
-  'CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT',
-  "INSERT INTO workout VALUES ('w1', 'leg day', 0)",
+const withRuns = (runs: ReturnType<typeof integer>) =>
+  sqliteTable('workbook', { id: text().primaryKey(), title: text().notNull(), done: integer({ mode: 'boolean' }).default(false), runs });
+const workbookWithDone = [
+  'CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT',
+  "INSERT INTO workbook VALUES ('w1', 'leg day', 0)",
 ];
 
 // Opens a device SQLite database and executes definitions via Rust device core.
@@ -63,17 +63,17 @@ const open = (...schema: string[]) => {
 
 test('device: initializes STRICT table with incremental auto_vacuum, omitting NOT NULL and formatting static defaults', () => {
   const storage = open();
-  storage.define([workout, exercise, pair]);
+  storage.define([workbook, excerpt, pair]);
   expect(storage.sql.exec('PRAGMA auto_vacuum').toArray()).toEqual([{ auto_vacuum: 2 }]);
   expect(schemaOf(storage)).toEqual([
     [
-      'exercise',
-      `CREATE TABLE "exercise" ("id" TEXT, "workout" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rest":90}', PRIMARY KEY ("id")) STRICT`,
+      'excerpt',
+      `CREATE TABLE "excerpt" ("id" TEXT, "workbook" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rest":90}', PRIMARY KEY ("id")) STRICT`,
     ],
-    ['exercise.position', 'CREATE INDEX "exercise.position" ON "exercise" ("position")'],
-    ['exercise.workout', 'CREATE INDEX "exercise.workout" ON "exercise" ("workout")'],
+    ['excerpt.position', 'CREATE INDEX "excerpt.position" ON "excerpt" ("position")'],
+    ['excerpt.workbook', 'CREATE INDEX "excerpt.workbook" ON "excerpt" ("workbook")'],
     ['pair', 'CREATE TABLE "pair" ("left" TEXT, "right" TEXT, PRIMARY KEY ("left", "right")) STRICT'],
-    ['workout', 'CREATE TABLE "workout" ("id" TEXT, "title" TEXT, "done" INTEGER DEFAULT 0, PRIMARY KEY ("id")) STRICT'],
+    ['workbook', 'CREATE TABLE "workbook" ("id" TEXT, "title" TEXT, "done" INTEGER DEFAULT 0, PRIMARY KEY ("id")) STRICT'],
   ]);
 });
 
@@ -87,20 +87,20 @@ test('device: a custom column type whose driver value is a boolean stores its de
 
 test('device: skips redundant index creation when the first foreign key column matches the first primary key column', () => {
   const storage = open();
-  storage.define([workout, exercise, set]);
-  expect(schemaOf(storage).map(([name]) => name)).not.toContain('set.exercise');
-  expect(storage.sql.exec(`EXPLAIN QUERY PLAN SELECT * FROM "set" WHERE exercise = 'e1'`).toArray()).toEqual([
+  storage.define([workbook, excerpt, set]);
+  expect(schemaOf(storage).map(([name]) => name)).not.toContain('set.excerpt');
+  expect(storage.sql.exec(`EXPLAIN QUERY PLAN SELECT * FROM "set" WHERE excerpt = 'e1'`).toArray()).toEqual([
     expect.objectContaining({
-      detail: expect.stringMatching(/USING (COVERING )?INDEX sqlite_autoindex_set_1 \(exercise=\?\)/),
+      detail: expect.stringMatching(/USING (COVERING )?INDEX sqlite_autoindex_set_1 \(excerpt=\?\)/),
     }),
   ]);
 });
 
 test('device: adds missing columns to existing tables while preserving existing data and defaults', () => {
-  const storage = open('CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT', "INSERT INTO workout VALUES ('w1', 'leg day')");
-  storage.define([workout]);
-  storage.define([workout]);
-  expect(storage.sql.exec('SELECT * FROM workout').toArray()).toEqual([{ id: 'w1', title: 'leg day', done: 0 }]);
+  const storage = open('CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT) STRICT', "INSERT INTO workbook VALUES ('w1', 'leg day')");
+  storage.define([workbook]);
+  storage.define([workbook]);
+  expect(storage.sql.exec('SELECT * FROM workbook').toArray()).toEqual([{ id: 'w1', title: 'leg day', done: 0 }]);
 });
 
 test('device: rejects unsupported index and default configurations at schema initialization', () => {
@@ -124,8 +124,8 @@ test('device: throws when existing database primary key does not match declared 
 });
 
 test('device: throws when existing column storage type changes', () => {
-  const storage = open('CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)');
-  expect(() => storage.define([workout])).toThrow('workout.done');
+  const storage = open('CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, done TEXT)');
+  expect(() => storage.define([workbook])).toThrow('workbook.done');
 });
 
 test('device: normalizes text(n) to STRICT text storage affinity, allowing length extensions across migrations', () => {
@@ -142,40 +142,40 @@ test('device: normalizes text(n) to STRICT text storage affinity, allowing lengt
 test('device: STRICT tables reject NULL values in primary key columns', () => {
   const storage = open();
   storage.define([sqliteTable('memo', { id: text().primaryKey(), title: text({ length: 20 }) })]);
-  expect(() => storage.sql.exec("INSERT INTO memo (id, title) VALUES (NULL, 'squat')")).toThrow(/NOT NULL/);
+  expect(() => storage.sql.exec("INSERT INTO memo (id, title) VALUES (NULL, 'stamp')")).toThrow(/NOT NULL/);
 });
 
 test('device: throws descriptive error and creates no tables when schema table has no primary key', () => {
   const keyless = sqliteTable('keyless', { name: text() });
   const storage = open();
-  expect(() => storage.define([workout, keyless])).toThrow('keyless has no primary key');
+  expect(() => storage.define([workbook, keyless])).toThrow('keyless has no primary key');
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE type = 'table'").toArray()).toEqual([]);
 });
 
 test('device: rejects adding non-null columns without static defaults to existing tables, while allowing nullable or defaulted columns', () => {
   {
-    const storage = open(...workoutWithDone);
-    expect(() => storage.define([withReps(integer().notNull())])).toThrow('workout.reps');
+    const storage = open(...workbookWithDone);
+    expect(() => storage.define([withRuns(integer().notNull())])).toThrow('workbook.runs');
     expect(() =>
       storage.define([
-        withReps(
+        withRuns(
           integer()
             .notNull()
             .$defaultFn(() => 0),
         ),
       ]),
-    ).toThrow('workout.reps');
+    ).toThrow('workbook.runs');
     expect(() =>
       storage.define([
-        withReps(
+        withRuns(
           integer()
             .notNull()
             .default(null as never),
         ),
       ]),
-    ).toThrow('workout.reps');
-    storage.define([withReps(integer().notNull().default(5))]);
-    expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
+    ).toThrow('workbook.runs');
+    storage.define([withRuns(integer().notNull().default(5))]);
+    expect(storage.sql.exec('SELECT runs FROM workbook').toArray()).toEqual([{ runs: 5 }]);
   }
 });
 
@@ -188,31 +188,31 @@ const cloud = (...statements: string[]) => {
 
 test('cloud: creates WITHOUT ROWID tables and indexes foreign key columns without creating client-declared indexes', () => {
   const storage = cloud();
-  const rep = sqliteTable('rep', { id: text().primaryKey(), exercise: text(), position: integer() }, (table) => [
-    foreignKey({ columns: [table.exercise, table.position], foreignColumns: [set.exercise, set.position] }),
+  const rep = sqliteTable('rep', { id: text().primaryKey(), excerpt: text(), position: integer() }, (table) => [
+    foreignKey({ columns: [table.excerpt, table.position], foreignColumns: [set.excerpt, set.position] }),
   ]);
-  defineTables(storage, [exercise, set, rep]);
+  defineTables(storage, [excerpt, set, rep]);
   expect(schemaOf(storage)).toEqual([
     [
-      'exercise',
-      `CREATE TABLE "exercise" ("id" TEXT, "workout" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rest":90}', PRIMARY KEY ("id")) STRICT, WITHOUT ROWID`,
+      'excerpt',
+      `CREATE TABLE "excerpt" ("id" TEXT, "workbook" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rest":90}', PRIMARY KEY ("id")) STRICT, WITHOUT ROWID`,
     ],
-    ['exercise.workout', 'CREATE INDEX "exercise.workout" ON "exercise" ("workout")'],
-    ['rep', 'CREATE TABLE "rep" ("id" TEXT, "exercise" TEXT, "position" INTEGER, PRIMARY KEY ("id")) STRICT, WITHOUT ROWID'],
-    ['rep.exercise.position', 'CREATE INDEX "rep.exercise.position" ON "rep" ("exercise", "position")'],
-    ['set', 'CREATE TABLE "set" ("exercise" TEXT, "position" INTEGER, PRIMARY KEY ("exercise", "position")) STRICT, WITHOUT ROWID'],
+    ['excerpt.workbook', 'CREATE INDEX "excerpt.workbook" ON "excerpt" ("workbook")'],
+    ['rep', 'CREATE TABLE "rep" ("id" TEXT, "excerpt" TEXT, "position" INTEGER, PRIMARY KEY ("id")) STRICT, WITHOUT ROWID'],
+    ['rep.excerpt.position', 'CREATE INDEX "rep.excerpt.position" ON "rep" ("excerpt", "position")'],
+    ['set', 'CREATE TABLE "set" ("excerpt" TEXT, "position" INTEGER, PRIMARY KEY ("excerpt", "position")) STRICT, WITHOUT ROWID'],
   ]);
 });
 
 test('cloud: returns deferred index statements for missing foreign key indexes on existing tables, creating fresh indexes immediately', () => {
-  const storage = cloud('CREATE TABLE "exercise" ("id" TEXT, "workout" TEXT, PRIMARY KEY ("id")) STRICT, WITHOUT ROWID');
-  expect(defineTables(storage, [workout, exercise])).toEqual(['CREATE INDEX IF NOT EXISTS "exercise.workout" ON "exercise" ("workout")']);
-  expect(schemaOf(storage).map(([name]) => name)).toEqual(['exercise', 'workout']);
-  storage.sql.exec('CREATE INDEX "exercise.workout" ON "exercise" ("workout")');
-  expect(defineTables(storage, [workout, exercise])).toEqual([]);
+  const storage = cloud('CREATE TABLE "excerpt" ("id" TEXT, "workbook" TEXT, PRIMARY KEY ("id")) STRICT, WITHOUT ROWID');
+  expect(defineTables(storage, [workbook, excerpt])).toEqual(['CREATE INDEX IF NOT EXISTS "excerpt.workbook" ON "excerpt" ("workbook")']);
+  expect(schemaOf(storage).map(([name]) => name)).toEqual(['excerpt', 'workbook']);
+  storage.sql.exec('CREATE INDEX "excerpt.workbook" ON "excerpt" ("workbook")');
+  expect(defineTables(storage, [workbook, excerpt])).toEqual([]);
   const fresh = cloud();
-  expect(defineTables(fresh, [workout, exercise])).toEqual([]);
-  expect(schemaOf(fresh).map(([name]) => name)).toContain('exercise.workout');
+  expect(defineTables(fresh, [workbook, excerpt])).toEqual([]);
+  expect(schemaOf(fresh).map(([name]) => name)).toContain('excerpt.workbook');
 });
 
 test('cloud: an existing table defers creating the bucket indexes its rules now want and dropping the ones they no longer do', () => {
@@ -235,10 +235,10 @@ test('cloud: an existing table defers creating the bucket indexes its rules now 
 });
 
 test('cloud: rejects adding non-null columns without static defaults to existing tables', () => {
-  const storage = cloud(...workoutWithDone);
-  expect(() => defineTables(storage, [withReps(integer().notNull())])).toThrow('workout.reps is NOT NULL without a static default value');
-  defineTables(storage, [withReps(integer().notNull().default(5))]);
-  expect(storage.sql.exec('SELECT reps FROM workout').toArray()).toEqual([{ reps: 5 }]);
+  const storage = cloud(...workbookWithDone);
+  expect(() => defineTables(storage, [withRuns(integer().notNull())])).toThrow('workbook.runs is NOT NULL without a static default value');
+  defineTables(storage, [withRuns(integer().notNull().default(5))]);
+  expect(storage.sql.exec('SELECT runs FROM workbook').toArray()).toEqual([{ runs: 5 }]);
 });
 
 test('cloud: an existing table keeps its primary key, whatever order the stored columns are in, and the storage type of each synced column', () => {
@@ -248,17 +248,17 @@ test('cloud: an existing table keeps its primary key, whatever order the stored 
   expect(() => defineTables(storage, [single])).toThrow(
     'Primary key changed on table pair (database has left, right, schema declares left)',
   );
-  expect(() => defineTables(cloud(...workoutWithDone), [sqliteTable('workout', { id: text().primaryKey(), done: text() })])).toThrow(
-    'Table workout.done type mismatch',
+  expect(() => defineTables(cloud(...workbookWithDone), [sqliteTable('workbook', { id: text().primaryKey(), done: text() })])).toThrow(
+    'Table workbook.done type mismatch',
   );
 });
 
 test('cloud: a declaration must use the case its table is stored under, as table names ignore case', () => {
-  const storage = cloud(...workoutWithDone);
-  const Workout = sqliteTable('Workout', { id: text().primaryKey() });
-  expect(() => defineTables(storage, [Workout])).toThrow('Workout is stored as workout: table names ignore case');
+  const storage = cloud(...workbookWithDone);
+  const Workbook = sqliteTable('Workbook', { id: text().primaryKey() });
+  expect(() => defineTables(storage, [Workbook])).toThrow('Workbook is stored as workbook: table names ignore case');
   const fresh = cloud();
-  expect(() => defineTables(fresh, [workout, Workout])).toThrow('Table names workout and Workout differ only by case');
+  expect(() => defineTables(fresh, [workbook, Workbook])).toThrow('Table names workbook and Workbook differ only by case');
   expect(schemaOf(fresh)).toEqual([]);
 });
 
@@ -291,6 +291,6 @@ test('cloud: preserves declared types for cloud-only tables and columns while no
 test('cloud: rejects cloud-only tables without primary keys before creating tables', () => {
   const keyless = sqliteTable('audit', { name: text() });
   const storage = cloud();
-  expect(() => defineTables(storage, [workout, keyless], [workout])).toThrow('Table audit has no primary key');
+  expect(() => defineTables(storage, [workbook, keyless], [workbook])).toThrow('Table audit has no primary key');
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE type = 'table'").toArray()).toEqual([]);
 });

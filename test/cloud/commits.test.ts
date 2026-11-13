@@ -143,7 +143,7 @@ test('multi-segment commit updates only modified segments during revision, skipp
 test('compound primary keys are recorded in canonical order (sorted by column name) regardless of table definition order', () => {
   const { cloud } = filled();
   const [commit] = cloud.sql.exec('SELECT keys FROM _syncline_commit WHERE version = 1').toArray();
-  expect(String(commit?.keys)).toContain('["set",{"index":0,"workoutId":"w1"}]');
+  expect(String(commit?.keys)).toContain('["set",{"index":0,"workbookId":"w1"}]');
 });
 
 test('lmidsSince returns latest mutation ID for clients committing after cookie, omitting clients with commits only prior to cookie', () => {

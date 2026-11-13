@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Space } from '../src/cloud/space.ts';
 import { Device } from './support/test-device.ts';
-import { createWorkout, install, pulled, rename, tables, unchunked, upload, workout, workouts, write } from './support/test-schema.ts';
+import { createWorkbook, install, pulled, rename, tables, unchunked, upload, workbook, workbooks, write } from './support/test-schema.ts';
 import { cloudStorage, deviceStorage, restoredDeviceStorage, restoredStorage } from './support/test-storage.ts';
 
 // Device reconnection after cloud point-in-time recovery (PITR): cookies still on the restored history pull incrementally;
@@ -12,13 +12,13 @@ import { cloudStorage, deviceStorage, restoredDeviceStorage, restoredStorage } f
 function versions(space: Space, from: number, to: number) {
   for (let version = from; version <= to; version += 1)
     space.mutate((tx) =>
-      version === 1 ? tx.insert(workout, { id: 'w1', note: 'v1' }) : tx.update(workout, { id: 'w1', note: `v${version}` }),
+      version === 1 ? tx.insert(workbook, { id: 'w1', note: 'v1' }) : tx.update(workbook, { id: 'w1', note: `v${version}` }),
     );
 }
 
 /** Cloud writes up to version to. */
 function cloudAt(to: number) {
-  const cloud = cloudStorage(createWorkout);
+  const cloud = cloudStorage(createWorkbook);
   const space = new Space(cloud, tables);
   versions(space, 1, to);
   return { cloud, space };
@@ -52,10 +52,10 @@ async function pushedAs(
   storage: ReturnType<typeof deviceStorage>,
   rows: unknown[],
 ) {
-  expect(workouts(storage)).toEqual(rows);
+  expect(workbooks(storage)).toEqual(rows);
   await upload(restored, device, [device]);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(restoredCloud)).toEqual(rows);
+  expect(workbooks(restoredCloud)).toEqual(rows);
 }
 
 /** Device confirms one write, takes a backup image, then confirms later writes (which will be rolled back on restore). */
@@ -80,21 +80,21 @@ async function pullAll(space: Space, device: Device, limit = unchunked) {
 test('no new writes after restore point: device at head with pending writes reconnects and pushes cleanly', async () => {
   const { cloud, space } = cloudAt(1);
   const { device, storage } = await install(space);
-  await rename(device, 'front squat');
+  await rename(device, 'front stamp');
   const { restoredCloud, restored } = restoredFrom(cloud.image());
   expect(restored.head()).toEqual(space.head());
 
   await caughtUp(restored, device, 1);
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'front squat' }]);
+  expect(workbooks(storage)).toEqual([{ id: 'w1', note: 'front stamp' }]);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'front squat' }]);
+  expect(workbooks(restoredCloud)).toEqual([{ id: 'w1', note: 'front stamp' }]);
 });
 
 test('cookie still on restored history (v1..v10 restored to v5, offline device at v3 with 2 pending writes): incremental pull preserves writes', async () => {
   const { cloud, space } = cloudAt(3);
   const { device, storage } = await install(space);
   await rename(device, 'offline write 1');
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'offline write 2' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'offline write 2' }));
   versions(space, 4, 5);
   const image = cloud.image();
   versions(space, 6, 10);
@@ -117,20 +117,20 @@ test('device synced after restore and wrote offline: reconnects incrementally wi
   const image = cloud.image();
   versions(space, 2, 2);
   const { restoredCloud, restored } = restoredFrom(image);
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const device = new Device(storage, tables);
   await device.private.receive(pulled(restored, device));
-  await rename(device, 'box squat');
+  await rename(device, 'box stamp');
 
   await caughtUp(restored, device, 1);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'box squat' }]);
+  expect(workbooks(restoredCloud)).toEqual([{ id: 'w1', note: 'box stamp' }]);
 });
 
 test('cookie off restored history: refetches fully preserving pending writes, jumps lmid on push; rolled back writes drop, unconfirmed survive', async () => {
   const { device, storage, image } = await confirmedPastImage(['confirmed 2', 'confirmed 3']);
   expect(device.private.cookie()?.version).toBe(4);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'offline write A' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'offline write A' }));
   await rename(device, 'offline write B');
   const [client] = device.private.pending().map((mutation) => mutation.client);
   expect(device.private.pending().map(({ id }) => id)).toEqual([4, 5]);
@@ -157,7 +157,7 @@ test('cookie off restored history: refetches fully preserving pending writes, ju
   await rename(device, 'later write');
   expect(device.private.pending().map(({ id, client: from }) => [from, id])).toEqual([[client, 6]]);
   await upload(restored, device, [device]);
-  expect(workouts(restoredCloud)).toContainEqual({ id: 'w1', note: 'later write' });
+  expect(workbooks(restoredCloud)).toContainEqual({ id: 'w1', note: 'later write' });
 });
 
 test('no pending writes and confirmed writes rolled back: next write sequences after confirmed, cloud jumps without dropping', async () => {
@@ -169,16 +169,16 @@ test('no pending writes and confirmed writes rolled back: next write sequences a
   expect(device.private.pending().map(({ id }) => id)).toEqual([4]);
   await upload(restored, device, [device]);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written after restore' }]);
+  expect(workbooks(restoredCloud)).toEqual([{ id: 'w1', note: 'written after restore' }]);
 });
 
 test('cookie off history with multi-chunk refetch: intermediate chunks paginate without restart, final chunk lands and pushes cleanly', async () => {
   const { device, storage, image } = await confirmedPastImage();
   for (let index = 0; index < 6; index += 1)
-    await write(device, (tx) => tx.insert(workout).values({ id: `w${index + 2}`, note: 'offline write' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: `w${index + 2}`, note: 'offline write' }));
   const { restoredCloud, restored } = restoredFrom(image);
   restored.mutate((tx) => {
-    for (let index = 0; index < 6; index += 1) tx.insert(workout, { id: `c${index}`, note: 'x'.repeat(40) });
+    for (let index = 0; index < 6; index += 1) tx.insert(workbook, { id: `c${index}`, note: 'x'.repeat(40) });
   });
 
   const first = restored.pull(device.private.pullRequest(), 120);
@@ -194,8 +194,8 @@ test('cookie off history with multi-chunk refetch: intermediate chunks paginate 
   expect(device.private.pending().map(({ id }) => id)).toEqual([3, 4, 5, 6, 7, 8]);
   await upload(restored, device, [device]);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(storage)).toEqual(workouts(restoredCloud));
-  expect(workouts(restoredCloud)).toHaveLength(13);
+  expect(workbooks(storage)).toEqual(workbooks(restoredCloud));
+  expect(workbooks(restoredCloud)).toHaveLength(13);
 });
 
 test('local write commits while pull request is in flight with client omitted from request: write pushes cleanly without data loss', async () => {
@@ -206,13 +206,13 @@ test('local write commits while pull request is in flight with client omitted fr
   await device.private.receive(restored.pull(request, unchunked));
   await pushedAs(restored, restoredCloud, device, storage, [{ id: 'w1', note: 'written while in flight' }]);
   await device.private.receive(pulled(restored, device));
-  expect(workouts(storage)).toEqual([{ id: 'w1', note: 'written while in flight' }]);
+  expect(workbooks(storage)).toEqual([{ id: 'w1', note: 'written while in flight' }]);
 });
 
 test('reopened client write executes while prior session pending writes exist: incremental pull confirms both without leftover pending writes', async () => {
   const { space } = cloudAt(1);
   const { device, storage } = await install(space);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'written in previous session' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'written in previous session' }));
   device.close();
   const reopened = new Device(storage, tables);
   const request = reopened.private.pullRequest();
@@ -232,13 +232,13 @@ test('pushed write after PITR refetch: restoring device from earlier backup does
   const tablet = await install(restored);
   await rename(tablet.device, 'written on tablet later');
   await upload(restored, tablet.device, [tablet.device]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
+  expect(workbooks(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
 
   const fromBackup = new Device(restoredDeviceStorage(backup), tables);
   expect(fromBackup.private.pending()).toHaveLength(1);
   await pullAll(restored, fromBackup);
   await upload(restored, fromBackup, [fromBackup]);
-  expect(workouts(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
+  expect(workbooks(restoredCloud)).toEqual([{ id: 'w1', note: 'written on tablet later' }]);
 });
 
 // A rebuilt space (class deleted and recreated) starts from empty storage: confirmed rows go with it, but writes the device has not
@@ -248,8 +248,8 @@ test('rebuilt space: device downloads it from scratch and uploads its pending wr
   const { device, storage } = await install(space);
   await confirmed(space, device, 'confirmed before the rebuild');
   await rename(device, 'pending update of a row the rebuild removes');
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'pending at the rebuild' }));
-  const rebuiltCloud = cloudStorage(createWorkout);
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'pending at the rebuild' }));
+  const rebuiltCloud = cloudStorage(createWorkbook);
   const rebuilt = new Space(rebuiltCloud, tables);
 
   const result = await pullAll(rebuilt, device);

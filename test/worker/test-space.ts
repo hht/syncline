@@ -93,7 +93,7 @@ export async function online(count: number) {
 export const put = (table: string, row: Record<string, string>): Change => ({ op: 'put', table, row });
 
 /** Mutation 1 for client c1: inserts note n1. */
-export const squat = { id: 1, changes: [put('note', { id: 'n1', text: 'squat' })] };
+export const stamp = { id: 1, changes: [put('note', { id: 'n1', text: 'stamp' })] };
 
 /** Target stub: records every forwarded request and returns empty JSON responses. */
 export function recording() {

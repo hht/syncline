@@ -4,30 +4,30 @@ import { expect } from 'vitest';
 import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
 import type { Storage } from '../../src/sqlite/storage.ts';
 import { Device, Space } from './test-checksum.ts';
-import { createWorkout, workout } from './test-schema.ts';
+import { createWorkbook, workbook } from './test-schema.ts';
 import { cloudStorage, deviceStorage } from './test-storage.ts';
 
-// Pull test fixtures: workout and set (composite primary key) tables, 5-workout seeded space, chunked pull helpers.
+// Pull test fixtures: workbook and set (composite primary key) tables, 5-workbook seeded space, chunked pull helpers.
 
 /** Set table with composite primary key, used to verify pagination over composite keys. */
-export const set = sqliteTable('set', { workoutId: text().notNull(), index: integer().notNull(), reps: integer() }, (table) => [
-  primaryKey({ columns: [table.workoutId, table.index] }),
+export const set = sqliteTable('set', { workbookId: text().notNull(), index: integer().notNull(), runs: integer() }, (table) => [
+  primaryKey({ columns: [table.workbookId, table.index] }),
 ]);
 export const createSet =
-  'CREATE TABLE "set" ("workoutId" TEXT NOT NULL, "index" INTEGER NOT NULL, reps INTEGER, PRIMARY KEY ("workoutId", "index"))';
-export const tables = [workout, set];
+  'CREATE TABLE "set" ("workbookId" TEXT NOT NULL, "index" INTEGER NOT NULL, runs INTEGER, PRIMARY KEY ("workbookId", "index"))';
+export const tables = [workbook, set];
 
-/** Seeded space with 5 workouts and 2 sets each. */
+/** Seeded space with 5 workbooks and 2 sets each. */
 export function filled() {
-  const cloud = cloudStorage(createWorkout, createSet);
+  const cloud = cloudStorage(createWorkbook, createSet);
   const space = new Space(cloud, tables);
   space.mutate((tx) => {
     for (const id of ['w1', 'w2', 'w3', 'w4', 'w5']) {
-      tx.insert(workout, { id, note: id });
-      for (const index of [0, 1]) tx.insert(set, { workoutId: id, index, reps: 5 });
+      tx.insert(workbook, { id, note: id });
+      for (const index of [0, 1]) tx.insert(set, { workbookId: id, index, runs: 5 });
     }
   });
-  const storage = deviceStorage(createWorkout, createSet);
+  const storage = deviceStorage(createWorkbook, createSet);
   const device = new Device(storage, tables);
   /** Pulls chunks from space (defaults to self) to final chunk; verifies device matches cloud. */
   const pullToEqual = async (from = space) => {
@@ -58,7 +58,7 @@ export async function pullRest(space: Space, device: Device) {
 export const both = (storage: Storage) => {
   const db = drizzle(storage);
   return {
-    workouts: db.select().from(workout).orderBy(workout.id).all(),
-    sets: db.select().from(set).orderBy(set.workoutId, set.index).all(),
+    workbooks: db.select().from(workbook).orderBy(workbook.id).all(),
+    sets: db.select().from(set).orderBy(set.workbookId, set.index).all(),
   };
 };

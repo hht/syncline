@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 import { socketLimit } from '../../src/protocol/messages.ts';
 import { flush, withFakeTimers } from '../support/test-drive.ts';
 import { rustLimits } from '../support/test-rust.ts';
-import { workout, write } from '../support/test-schema.ts';
+import { workbook, write } from '../support/test-schema.ts';
 import { heartbeat, pingsAfterUpload, pingsIn, pullsBeforeReconnect, receiveTimesOut, reconnect } from './test-connection.ts';
 
 // Uploads and heartbeat: push batches bounded by byte size; ping suppressed during upload based on slowest rate estimate,
@@ -28,7 +28,7 @@ test('heartbeat: suppresses ping during large push batch upload based on slowest
 test('bounds the first push batch on a connection at half of WebSocket message byte limit: sends two of three ~8 KB mutations', async () => {
   const { device, connection, sockets, open } = await heartbeat();
   const third = '€'.repeat(Math.ceil(socketLimit / 9));
-  for (const id of ['n1', 'n2', 'n3']) await write(device, (tx) => tx.insert(workout).values({ id, note: third }));
+  for (const id of ['n1', 'n2', 'n3']) await write(device, (tx) => tx.insert(workbook).values({ id, note: third }));
   // Batches buffered mutations under limit when socket opens.
   open();
   await flush();
@@ -40,7 +40,7 @@ test('bounds the first push batch on a connection at half of WebSocket message b
 test('heartbeat: suppresses ping during initial upload of offline accumulated batch upon connection open', () =>
   withFakeTimers(async () => {
     const { device, connection, sockets, open, catchUp } = await heartbeat();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(100_000) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'big', note: '€'.repeat(100_000) }));
     open();
     catchUp();
     await flush();
@@ -52,8 +52,8 @@ test('heartbeat: recalculates ping suppression window when previous batch confir
   withFakeTimers(async () => {
     const { device, connection, sockets, open, catchUp, confirm } = await heartbeat();
     // Two large mutations each form a batch: first ~30 KB (~30s), second ~300 KB (~300s).
-    await write(device, (tx) => tx.insert(workout).values({ id: 'mid', note: '€'.repeat(10_000) }));
-    await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(100_000) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'mid', note: '€'.repeat(10_000) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'big', note: '€'.repeat(100_000) }));
     open();
     catchUp();
     await flush();
@@ -69,7 +69,7 @@ test('heartbeat: pushing small batch before catch-up does not cancel catch-up ti
     const harness = await heartbeat();
     const { device, connection, sockets, open } = harness;
     // ~5 KB, estimated ~5s upload time.
-    await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(1700) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'big', note: '€'.repeat(1700) }));
     open();
     await flush();
     expect(sockets[0]?.sent).toHaveLength(1);
@@ -93,10 +93,10 @@ test('heartbeat: confirms large push batch before estimate expires, pinging afte
 test('heartbeat: awaits upload estimate for retransmitted batch even if catch-up already confirmed it from prior connection', () =>
   withFakeTimers(async () => {
     const { device, connection, sockets, open, catchUp, executedElsewhere } = await heartbeat();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(100_000) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'big', note: '€'.repeat(100_000) }));
     executedElsewhere();
     open();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'small' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'small' }));
     catchUp();
     await flush();
     // Catch-up confirms prior execution; device pushes next small batch: pings suppressed until both finish.
@@ -128,7 +128,7 @@ test('heartbeat: confirmation of post-resync batch resets ping timer immediately
     sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: 1006 }));
     await device.private.resync(true);
     await reconnect(harness);
-    await write(device, (tx) => tx.insert(workout).values({ id: 'small' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'small' }));
     await flush();
     confirm(0);
     await flush();
@@ -173,7 +173,7 @@ test.each([
 ])('$name', ({ pending, caughtUp, closes }) =>
   withFakeTimers(async () => {
     const { device, connection, sockets, open, catchUp } = await heartbeat({ random: () => 1 });
-    if (pending) await write(device, (tx) => tx.insert(workout).values({ id: 'w1' }));
+    if (pending) await write(device, (tx) => tx.insert(workbook).values({ id: 'w1' }));
     for (const { code, wait } of closes) {
       open();
       if (caughtUp) catchUp();
@@ -200,7 +200,7 @@ test('heartbeat: a push an HTTP pull confirms while a ping awaits its pong keeps
     open();
     catchUp();
     await flush();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'small' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'small' }));
     await flush();
     executedElsewhere();
     message(JSON.stringify({ hint: space.head() }));

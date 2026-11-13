@@ -11,11 +11,11 @@ import { privateCloud } from './test-entry.ts';
 import { type CloudEnd, Network } from './test-network.ts';
 import { cloudStorage, deviceStorage } from './test-storage.ts';
 
-// Sync test schema fixtures: single workout table, local write helpers, upload and read helpers.
+// Sync test schema fixtures: single workbook table, local write helpers, upload and read helpers.
 
-export const workout = sqliteTable('workout', { id: text().primaryKey(), note: text() });
-export const tables = [workout];
-export const createWorkout = 'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT)';
+export const workbook = sqliteTable('workbook', { id: text().primaryKey(), note: text() });
+export const tables = [workbook];
+export const createWorkbook = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT)';
 
 /** Unchunked character limit large enough to avoid chunking in single-step tests. */
 export const unchunked = 1_000_000;
@@ -37,12 +37,12 @@ export async function upload(space: Space, from: Device, online: Device[]) {
   if (poke) for (const device of online) await device.private.receive(poke);
 }
 
-export const workouts = (storage: Storage) => drizzle(storage).select().from(workout).all();
+export const workbooks = (storage: Storage) => drizzle(storage).select().from(workbook).all();
 
-/** Formulates cloud put operation for workout row; extra specifies additional columns not declared locally. */
-export const putWorkout = (id: string, note: string | null, extra: Record<string, unknown> = {}): Op => ({
+/** Formulates cloud put operation for workbook row; extra specifies additional columns not declared locally. */
+export const putWorkbook = (id: string, note: string | null, extra: Record<string, unknown> = {}): Op => ({
   op: 'put',
-  table: 'workout',
+  table: 'workbook',
   key: { id },
   row: { id, note, ...extra },
 });
@@ -60,25 +60,26 @@ export function serving(space: Space, ...options: ServerOptions) {
 type ServerOptions = ConstructorParameters<typeof Server<CloudEnd>> extends [unknown, unknown, ...infer Rest] ? Rest : never;
 
 /** Initializes newly installed device: executes full initial pull into fresh storage. */
-export async function install(space: Space, deviceTables: SQLiteTable[] = tables, statements: string[] = [createWorkout]) {
+export async function install(space: Space, deviceTables: SQLiteTable[] = tables, statements: string[] = [createWorkbook]) {
   const storage = deviceStorage(...statements);
   const device = new Device(storage, deviceTables);
   await device.private.receive(pulled(space, device));
   return { device, storage };
 }
 
-export const rename = (device: Device, note: string) => write(device, (tx) => tx.update(workout).set({ note }).where(eq(workout.id, 'w1')));
+export const rename = (device: Device, note: string) =>
+  write(device, (tx) => tx.update(workbook).set({ note }).where(eq(workbook.id, 'w1')));
 
-/** Prepares count devices with workout w1 populated and synchronized across all. */
-export async function withWorkout(count: number) {
-  const cloud = cloudStorage(createWorkout);
+/** Prepares count devices with workbook w1 populated and synchronized across all. */
+export async function withWorkbook(count: number) {
+  const cloud = cloudStorage(createWorkbook);
   const space = new Space(cloud, tables);
   const installed: Awaited<ReturnType<typeof install>>[] = [];
   for (let index = 0; index < count; index += 1) installed.push(await install(space));
   const [phone = installed[0], tablet = installed[0]] = installed;
   if (!phone || !tablet) throw new Error('at least one device required');
   const devices = installed.map(({ device }) => device);
-  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
+  await write(phone.device, (tx) => tx.insert(workbook).values({ id: 'w1', note: 'stamp' }));
   await upload(space, phone.device, devices);
   return { cloud, space, phone, tablet, devices };
 }

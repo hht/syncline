@@ -18,12 +18,12 @@ test('holds pushed writes to read-only tables and rows failing validation, drops
   device.push(
     { id: 1, changes: [put('plan', { id: 'p1', text: 'upgrade' })] },
     { id: 2, changes: [put('note', { id: 'n1', text: 'forbidden' })] },
-    { id: 3, changes: [put('note', { id: 'n2', text: 'bench press', color: 'red' })] },
+    { id: 3, changes: [put('note', { id: 'n2', text: 'brick wall', color: 'red' })] },
   );
   expect(await device.next()).toMatchObject({
     message: {
       lmids: { c1: 3 },
-      patch: [{ op: 'put', table: 'note', row: { id: 'n2', text: 'bench press' } }],
+      patch: [{ op: 'put', table: 'note', row: { id: 'n2', text: 'brick wall' } }],
       held: [
         { id: 1, reason: expect.stringContaining('read-only') },
         { id: 2, reason: expect.stringContaining('forbidden text') },
@@ -40,7 +40,7 @@ test('resubmitting a held write after its parent exists commits it and notifies 
   const { name, phone: device } = await online(1);
   device.push({ id: 1, changes: [{ op: 'put', table: 'tag', row: { id: 't1', note_id: 'n1' } }] });
   expect(await device.next()).toMatchObject({ message: { lmids: { c1: 1 }, held: [{ id: 1 }] } });
-  await object(name).importNotes([{ id: 'n1', text: 'squat' }]);
+  await object(name).importNotes([{ id: 'n1', text: 'stamp' }]);
   expect(await device.next()).toMatchObject({ message: { patch: [{ op: 'put', table: 'note' }] } });
   await object(name).retryHeld('c1', 1);
   expect(await device.next()).toMatchObject({

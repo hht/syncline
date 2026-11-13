@@ -4,7 +4,7 @@ import { Space } from '../../src/cloud/space.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
 import { day, program, rules, schema } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, install, pulled, tables, upload, workout, workouts, write } from '../support/test-schema.ts';
+import { createWorkbook, install, pulled, tables, upload, workbook, workbooks, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage, restoredStorage } from '../support/test-storage.ts';
 
 // Log truncation (Truncate in TLA+ models): commit log is capped by byte size; upkeep chores trim oldest commits step-by-step
@@ -16,7 +16,7 @@ const commitFloor = 2_000;
 
 /** Creates space with reduced commit floor and executes count server writes (cycling across 20 rows so data size stays flat while log grows). */
 function written(count: number) {
-  const cloud = cloudStorage(createWorkout);
+  const cloud = cloudStorage(createWorkbook);
   const space = new Space(cloud, tables, { commitFloor });
   rewrite(space, 0, count);
   return { cloud, space };
@@ -24,7 +24,7 @@ function written(count: number) {
 
 /** Executes server writes from index from to to. */
 function rewrite(space: Space, from: number, to: number) {
-  for (let index = from; index < to; index += 1) space.mutate((tx) => tx.upsert(workout, { id: `w${index % 20}`, note: String(index) }));
+  for (let index = from; index < to; index += 1) space.mutate((tx) => tx.upsert(workbook, { id: `w${index % 20}`, note: String(index) }));
 }
 
 const query = (cloud: ReturnType<typeof cloudStorage>, sql: string) => cloud.sql.exec(sql).toArray();
@@ -65,15 +65,15 @@ test('cookie at or after floor receives incremental pull; cookie below floor ful
   const atLow = space.pull({ cookie: { version: Number(low?.version), nonce: Number(low?.nonce) } }, 1_000_000);
   expect(atLow.patch[0]).not.toEqual({ op: 'clear' });
 
-  await write(early.device, (tx) => tx.update(workout).set({ note: 'bench press' }));
+  await write(early.device, (tx) => tx.update(workbook).set({ note: 'brick wall' }));
   const behind = pulled(space, early.device);
   expect(behind.patch[0]).toEqual({ op: 'clear' });
   await early.device.private.receive(behind);
   expect(early.device.private.pending()).toHaveLength(1);
   await upload(space, early.device, [early.device]);
   expect(early.device.private.pending()).toEqual([]);
-  expect(workouts(early.storage)).toEqual(workouts(cloud));
-  expect(workouts(cloud).find(({ id }) => id === 'w0')?.note).toBe('bench press');
+  expect(workbooks(early.storage)).toEqual(workbooks(cloud));
+  expect(workbooks(cloud).find(({ id }) => id === 'w0')?.note).toBe('brick wall');
 });
 
 test('full pull progress estimate after truncation: total is based on database size minus remaining log bytes without counting truncated bytes', () => {
@@ -93,7 +93,7 @@ test('reopening object: floor is preserved and earlier cookies remain off histor
   truncateAll(space);
   const reopened = new Space(cloud, tables, { commitFloor });
   expect(reopened.onHistory(early)).toBe(false);
-  const device = new Device(deviceStorage(createWorkout), tables);
+  const device = new Device(deviceStorage(createWorkbook), tables);
   expect(pulled(reopened, device).patch).toHaveLength(21);
 });
 
@@ -105,7 +105,7 @@ test('cookie at the floor version of a history that point-in-time recovery aband
   truncateAll(recovered);
   const [low] = query(recoveredCloud, 'SELECT version, nonce FROM _syncline_low');
   // The abandoned history goes on to the version the recovered one later truncates to.
-  space.mutate((tx) => tx.insert(workout, { id: 'abandoned', note: 'squat' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'abandoned', note: 'stamp' }));
   rewrite(space, 11, Number(low?.version));
   const { device, storage } = await install(space);
   expect(device.private.cookie()?.version).toBe(Number(low?.version));
@@ -113,19 +113,19 @@ test('cookie at the floor version of a history that point-in-time recovery aband
   const behind = pulled(recovered, device);
   expect(behind.patch[0]).toEqual({ op: 'clear' });
   await device.private.receive(behind);
-  expect(workouts(storage)).toEqual(workouts(recoveredCloud));
+  expect(workbooks(storage)).toEqual(workbooks(recoveredCloud));
 });
 
 test('a write pushed again after its commit was truncated is not executed twice: the mutation ID a client reached outlives the log', () => {
   const { cloud, space } = written(0);
-  const retried = [{ client: 'c1', id: 1, changes: [{ op: 'put' as const, table: 'workout', row: { id: 'mine', note: 'first' } }] }];
+  const retried = [{ client: 'c1', id: 1, changes: [{ op: 'put' as const, table: 'workbook', row: { id: 'mine', note: 'first' } }] }];
   expect(space.push(retried)?.lmids).toEqual({ c1: 1 });
   rewrite(space, 0, 3000);
-  space.mutate((tx) => tx.update(workout, { id: 'mine', note: 'changed by the server' }));
+  space.mutate((tx) => tx.update(workbook, { id: 'mine', note: 'changed by the server' }));
   truncateAll(space);
   expect(range(cloud).first).toBeGreaterThan(1);
   expect(space.push(retried)).toBeUndefined();
-  expect(workouts(cloud).find(({ id }) => id === 'mine')?.note).toBe('changed by the server');
+  expect(workbooks(cloud).find(({ id }) => id === 'mine')?.note).toBe('changed by the server');
 });
 
 test('truncation step cuts at exact version reaching target without exceeding it, deleting all earlier commits; trims from version 0 when un-truncated; skips head', () => {

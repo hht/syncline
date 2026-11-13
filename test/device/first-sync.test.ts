@@ -1,7 +1,7 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, tables } from '../support/test-schema.ts';
+import { createWorkbook, tables } from '../support/test-schema.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
 // A table entering sync for the first time must hold only what its space pulls: rows already in it (written while it was local-only)
@@ -12,7 +12,7 @@ const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
 /** Storage where the private space holds a cookie (so nothing else would replace the table) and local-only table course holds a local row. */
 async function draftWritten() {
-  const storage = deviceStorage(createWorkout, 'CREATE TABLE course (id TEXT PRIMARY KEY)');
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE course (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
   await device.private.receive({ ...synced, patch: [] });
   await device.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));

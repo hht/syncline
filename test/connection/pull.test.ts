@@ -7,7 +7,7 @@ import type { Chunk, Poke, Progress, Reset } from '../../src/protocol/messages.t
 import { Device } from '../support/test-device.ts';
 import { flush } from '../support/test-drive.ts';
 import { both, createSet, filled, pullChunk, pullRest, set, tables } from '../support/test-pull.ts';
-import { createWorkout, serving, unchunked, workout, write } from '../support/test-schema.ts';
+import { createWorkbook, serving, unchunked, workbook, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 import { Connection } from '../support/test-sync.ts';
 
@@ -19,15 +19,15 @@ test('chunked full pull: delivers chunks by table and primary key, stages locall
   expect(first.result).toMatchObject({ base: null, next: expect.any(String) });
   expect((first.result as Chunk).patch[0]).toEqual({ op: 'clear' });
   expect(first.received).toBe(true);
-  expect(both(storage)).toEqual({ workouts: [], sets: [] });
+  expect(both(storage)).toEqual({ workbooks: [], sets: [] });
   expect(device.private.cookie()).toBeNull();
 
   // Modify w1, delete w2, insert w0 before previous cursor, delete one set.
   space.mutate((tx) => {
-    tx.update(workout, { id: 'w1', note: 'modified' });
-    tx.delete(workout, { id: 'w2' });
-    tx.insert(workout, { id: 'w0', note: 'added' });
-    tx.delete(set, { workoutId: 'w5', index: 1 });
+    tx.update(workbook, { id: 'w1', note: 'modified' });
+    tx.delete(workbook, { id: 'w2' });
+    tx.insert(workbook, { id: 'w0', note: 'added' });
+    tx.delete(set, { workbookId: 'w5', index: 1 });
   });
   const rest = await pullRest(space, device);
   expect(rest.length).toBeGreaterThan(2);
@@ -38,9 +38,9 @@ test('chunked full pull: delivers chunks by table and primary key, stages locall
 test('chunked incremental pull: delivers by version, final chunk lmids confirm writes uploaded during pull', async () => {
   const { cloud, space, storage, device } = filled();
   await pullRest(space, device);
-  await write(device, (tx) => tx.update(workout).set({ note: 'front squat' }).where(eq(workout.id, 'w3')));
+  await write(device, (tx) => tx.update(workbook).set({ note: 'front stamp' }).where(eq(workbook.id, 'w3')));
   space.push(device.private.pending());
-  for (const id of ['w1', 'w2', 'w4', 'w5']) space.mutate((tx) => tx.update(workout, { id, note: `${id} modified` }));
+  for (const id of ['w1', 'w2', 'w4', 'w5']) space.mutate((tx) => tx.update(workbook, { id, note: `${id} modified` }));
 
   const results = await pullRest(space, device);
   expect(results.length).toBeGreaterThan(1);
@@ -114,26 +114,26 @@ test('chunked pulls provide progress ratio: downloaded is non-decreasing and bou
   expect(full.length).toBeGreaterThan(2);
   expectProgress(full);
 
-  for (const id of ['w1', 'w2', 'w3', 'w4', 'w5']) space.mutate((tx) => tx.update(workout, { id, note: `${id}!` }));
+  for (const id of ['w1', 'w2', 'w3', 'w4', 'w5']) space.mutate((tx) => tx.update(workbook, { id, note: `${id}!` }));
   const incremental = await pullRest(space, device);
   expect(incremental.length).toBeGreaterThan(1);
   expectProgress(incremental);
 });
 
 test('row modified across multiple commits in incremental pull: reads current row value only once per chunk', async () => {
-  const cloud = cloudStorage(createWorkout, createSet);
+  const cloud = cloudStorage(createWorkbook, createSet);
   const space = new Space(cloud, tables);
-  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: '0' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w1', note: '0' }));
   const cookie = space.head();
-  for (let n = 1; n <= 5; n += 1) space.mutate((tx) => tx.update(workout, { id: 'w1', note: String(n) }));
+  for (let n = 1; n <= 5; n += 1) space.mutate((tx) => tx.update(workbook, { id: 'w1', note: String(n) }));
   let reads = 0;
   const exec = cloud.sql.exec.bind(cloud.sql);
   cloud.sql.exec = ((query: string, ...bindings: unknown[]) => {
-    if (query.startsWith('SELECT') && query.includes('FROM "workout" WHERE')) reads += 1;
+    if (query.startsWith('SELECT') && query.includes('FROM "workbook" WHERE')) reads += 1;
     return exec(query, ...bindings);
   }) as typeof cloud.sql.exec;
   expect((space.pull({ cookie }, unchunked) as Poke).patch).toEqual([
-    { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: '5' } },
+    { op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: '5' } },
   ]);
   expect(reads).toBe(1);
 });

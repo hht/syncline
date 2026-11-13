@@ -1,7 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
 import { defaultExportDelay, maxExportDelay } from '../../../src/features/exports.ts';
-import { alarmAfter, object, online, put, squat } from '../../worker/test-space.ts';
+import { alarmAfter, object, online, put, stamp } from '../../worker/test-space.ts';
 import type { TestSpace } from '../../worker/test-worker.ts';
 
 // Exports (cross-DO aggregation, analytics, etc.) wired to alarms: scheduled once after writes; exporters export independently, rescheduling with backoff on error; restarts full snapshot after cloud history is replaced (point-in-time recovery).
@@ -9,7 +9,7 @@ import type { TestSpace } from '../../worker/test-worker.ts';
 /** Received on first export after device c1 first write: full snapshot, starting with clear. */
 const firstExport = {
   reset: false,
-  patch: [{ op: 'clear' }, { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'squat' } }],
+  patch: [{ op: 'clear' }, { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'stamp' } }],
 };
 
 /** Runs alarm: exporter (stats unless received reads another) receives full snapshot of first write; no further runs scheduled without new writes. */
@@ -23,21 +23,21 @@ test('export: schedules an alarm after writes; exporter in alarm receives full s
   const { name, phone: device } = await online(1);
   await object(name).importNotes([]);
   expect(await object(name).alarmAt()).toBeNull();
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   await exportedOnce(name);
 });
 
 test('cloud history replaced after export (point-in-time recovery): exporter in alarm scheduled by next write receives full snapshot marked reset (starting with clear), purging rolled-back data from destination', async () => {
   const { name, phone: device } = await online(1);
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   await alarmAfter(object(name), defaultExportDelay);
   // Local storage lacks point-in-time recovery: mutates nonce of exported version, simulating write to same version after recovery.
   await runInDurableObject(object(name), (_: TestSpace, state) => {
     state.storage.sql.exec('UPDATE _syncline_commit SET nonce = nonce + 1');
   });
-  await object(name).importNotes([{ id: 'n2', text: 'deadlift' }]);
+  await object(name).importNotes([{ id: 'n2', text: 'doorbell' }]);
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);
   expect(await object(name).exported()).toEqual([
     firstExport,
@@ -45,8 +45,8 @@ test('cloud history replaced after export (point-in-time recovery): exporter in 
       reset: true,
       patch: [
         { op: 'clear' },
-        { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'squat' } },
-        { op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'deadlift' } },
+        { op: 'put', table: 'note', key: { id: 'n1' }, row: { id: 'n1', text: 'stamp' } },
+        { op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'doorbell' } },
       ],
     },
   ]);
@@ -55,7 +55,7 @@ test('cloud history replaced after export (point-in-time recovery): exporter in 
 /** Exports a first write, then restarts the object after `before` leaves storage as the previous release did (a deploy). */
 async function deployedAfterExport(before: (storage: DurableObjectStorage) => void) {
   const { name, phone: device } = await online(1);
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   await exportedOnce(name);
   await runInDurableObject(object(name), (_: TestSpace, state) => before(state.storage));
@@ -94,7 +94,7 @@ test('a table entering sync with a deploy is exported by the next actor start, w
 async function withFailingStats() {
   const { name, phone: device } = await online(1);
   await object(name).failExports(true);
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   return { name, device };
 }
@@ -114,7 +114,7 @@ test('exporter errors: does not block other exporters; caught error reschedules 
 test('repeatedly failing exporter: delays only itself; new writes trigger other exporters after normal exportDelay, avoiding one-hour backoff delays', async () => {
   const { name, device } = await withFailingStats();
   for (let attempt = 0; attempt < 6; attempt += 1) await alarmAfter(object(name), maxExportDelay);
-  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'bench press' })] });
+  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'brick wall' })] });
   await device.next();
   const at = await object(name).alarmAt();
   expect(at).not.toBeNull();
@@ -130,22 +130,22 @@ test('repeatedly failing exporter: delays only itself; new writes trigger other 
 
 test('host application deleted alarm: next write schedules export as normal, not suppressed by stale scheduled state', async () => {
   const { name, phone: device } = await online(1);
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   await object(name).clearAlarm();
-  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'bench press' })] });
+  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'brick wall' })] });
   await device.next();
   expect(await object(name).alarmAt()).not.toBeNull();
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);
   expect(await lastOf(object(name).exported())).toMatchObject({
-    patch: expect.arrayContaining([{ op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'bench press' } }]),
+    patch: expect.arrayContaining([{ op: 'put', table: 'note', key: { id: 'n2' }, row: { id: 'n2', text: 'brick wall' } }]),
   });
 });
 
 test('exporter hangs (destination stalled): fails attempt upon reaching time budget and reschedules with backoff; alarm ends normally and other exporters proceed', async () => {
   const { name, phone: device } = await online(1);
   await object(name).hangExports(true);
-  device.push(squat);
+  device.push(stamp);
   await device.next();
   // Test Worker time budget is 1 second.
   expect(await alarmAfter(object(name), defaultExportDelay)).toBe(true);

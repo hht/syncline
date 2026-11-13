@@ -3,7 +3,7 @@ import { Space } from '../../src/cloud/space.ts';
 import { Device } from '../support/test-device.ts';
 import { flush } from '../support/test-drive.ts';
 import { rustLimits } from '../support/test-rust.ts';
-import { createWorkout, tables, workout, write } from '../support/test-schema.ts';
+import { createWorkbook, tables, workbook, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 import { Connection } from '../support/test-sync.ts';
 
@@ -39,8 +39,8 @@ export async function heartbeat({
   beforeSocket?: () => void;
   respond?: (response: ReturnType<Space['pull']>) => unknown;
 } = {}) {
-  const space = new Space(cloudStorage(createWorkout), tables);
-  const storage = deviceStorage(createWorkout);
+  const space = new Space(cloudStorage(createWorkbook), tables);
+  const storage = deviceStorage(createWorkbook);
   const device = new Device(storage, tables);
   const pulled = space.pull(device.private.pullRequest(), 1_000_000);
   if (!('cookie' in pulled)) throw new Error('expected single chunk pull');
@@ -80,7 +80,7 @@ export async function heartbeat({
     open();
     catchUp();
     await flush();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'big', note: '€'.repeat(100_000) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'big', note: '€'.repeat(100_000) }));
     await flush();
   };
   return { space, storage, device, connection, sockets, fetched, open, message, catchUp, confirm, pushBig, executedElsewhere };

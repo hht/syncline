@@ -9,17 +9,17 @@ import { Device } from '../support/test-device.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Shared test fixtures for shared spaces on device: shared space with program table (public bucket),
-// device synced with private workouts, pulling chunk by chunk until staging empty.
+// device synced with private workbooks, pulling chunk by chunk until staging empty.
 
-export const workout = sqliteTable('workout', { id: text().primaryKey(), program_id: text() });
-export const createWorkout = 'CREATE TABLE workout (id TEXT PRIMARY KEY, program_id TEXT)';
+export const workbook = sqliteTable('workbook', { id: text().primaryKey(), program_id: text() });
+export const createWorkbook = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, program_id TEXT)';
 export const buckets = { public: { program: { where: "status = 'published'" } } };
 
-/** Shared space (no chunk boundaries: incremental watermark is the cookie) and a device: workouts in private space, programs in shared space. */
+/** Shared space (no chunk boundaries: incremental watermark is the cookie) and a device: workbooks in private space, programs in shared space. */
 export function setup() {
   const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets } });
-  const storage = deviceStorage(createWorkout, createProgram);
-  const device = new Device(storage, [workout]);
+  const storage = deviceStorage(createWorkbook, createProgram);
+  const device = new Device(storage, [workbook]);
   const catalog = device.shared('catalog', [program]);
   /** Server mutates a program, returns broadcast shard notice forwarded to device (filtered to device subscription in this round). */
   const publish = (id: string, status = 'published') => {

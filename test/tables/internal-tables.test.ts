@@ -3,7 +3,7 @@ import { Space } from '../../src/cloud/space.ts';
 import type { Storage } from '../../src/sqlite/storage.ts';
 import { steps } from '../../src/tables/internal-tables.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, pulled, tables, upload, workout, workouts, write } from '../support/test-schema.ts';
+import { createWorkbook, pulled, tables, upload, workbook, workbooks, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Internal schema migrations: databases modified by newer releases roll back via stored down statements when app or worker deployments are reverted.
@@ -15,11 +15,11 @@ function openedByNewer(storage: Storage, up: string[], down: string[]) {
 }
 
 test('rolls back device database schema via stored down statements when opened after an app rollback, preserving cookies and pending writes', async () => {
-  const space = new Space(cloudStorage(createWorkout), tables);
-  const storage = deviceStorage(createWorkout);
+  const space = new Space(cloudStorage(createWorkbook), tables);
+  const storage = deviceStorage(createWorkbook);
   const device = new Device(storage, tables);
   await device.private.receive(pulled(space, device));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', note: 'stamp' }));
   device.close();
   openedByNewer(
     storage,
@@ -37,11 +37,11 @@ test('rolls back device database schema via stored down statements when opened a
 
 // Pushes a single mutation w1 to set up cloud storage and device state.
 async function pushed() {
-  const cloud = cloudStorage(createWorkout);
+  const cloud = cloudStorage(createWorkbook);
   const space = new Space(cloud, tables);
-  const device = new Device(deviceStorage(createWorkout), tables);
+  const device = new Device(deviceStorage(createWorkbook), tables);
   await device.private.receive(pulled(space, device));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', note: 'stamp' }));
   await upload(space, device, [device]);
   return { cloud, device };
 }
@@ -51,14 +51,14 @@ test('rolls back cloud database schema via stored down statements when opened af
   openedByNewer(cloud, ['ALTER TABLE _syncline_commit RENAME TO _syncline_log'], ['ALTER TABLE _syncline_log RENAME TO _syncline_commit']);
 
   const reopened = new Space(cloud, tables);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench press' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'brick wall' }));
   await upload(reopened, device, [device]);
   expect(device.private.cookie()?.version).toBe(2);
-  expect(workouts(cloud)).toHaveLength(2);
+  expect(workbooks(cloud)).toHaveLength(2);
 });
 
 test('aborts migration rollback and preserves database state if a down statement fails', () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   new Device(storage, tables).close();
   const version = () => storage.sql.exec('SELECT max(version) AS version FROM _syncline_schema').toArray()[0]?.version;
   const current = version();

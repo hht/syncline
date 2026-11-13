@@ -2,7 +2,7 @@ import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
 import { type Cookie, expired, ping, pullNeeded, socketLimit } from '../../src/protocol/messages.ts';
 import { type Declaration, schemaFingerprint, schemaHeader, schemaMismatch, schemaPrefix } from '../../src/tables/declaration.ts';
-import { connect, connectAll, object, online, pull, pullResponse, put, space, squat, url } from '../worker/test-space.ts';
+import { connect, connectAll, object, online, pull, pullResponse, put, space, stamp, url } from '../worker/test-space.ts';
 import type { TestSpace } from '../worker/test-worker.ts';
 
 // Platform assumptions tested in the real Workers runtime via test Worker entries:
@@ -30,7 +30,7 @@ test('replies with syncline subprotocol and delivers catch-up on connect even wh
 async function expectNotified(devices: Awaited<ReturnType<typeof connect>>[], cookie: Cookie, lmids: Record<string, number>) {
   for (const device of devices)
     expect(await device.next()).toMatchObject({
-      message: { base: cookie, lmids, patch: [{ op: 'put', table: 'note', row: { id: 'n1', text: 'squat' } }] },
+      message: { base: cookie, lmids, patch: [{ op: 'put', table: 'note', row: { id: 'n1', text: 'stamp' } }] },
     });
 }
 
@@ -45,7 +45,7 @@ test('includes expiresIn in catch-up message so devices can refresh tokens befor
 
 test('delivers live notices to connected devices following catch-up after a pushed write', async () => {
   const { cookie, phone, tablet } = await online(2);
-  phone.push(squat);
+  phone.push(stamp);
   await expectNotified([phone, tablet], cookie, { c1: 1 });
 });
 
@@ -65,7 +65,7 @@ test('closes with 4001 and rejects pushed writes when token expires after connec
   const device = await connect(name, cookie, Date.now() + 200);
   await device.next();
   await elapse(300);
-  device.push(squat);
+  device.push(stamp);
   expect(await device.next()).toEqual({ close: expired });
   expect(await notes(name)).toEqual([]);
 });
@@ -79,31 +79,31 @@ test('closes expired connections during broadcast without dispatching and preser
   await tablet.next();
   await evictDurableObject(object(name));
   await elapse(300);
-  phone.push(squat);
+  phone.push(stamp);
   expect(await phone.next()).toMatchObject({ message: { lmids: { c1: 1 } } });
   expect(await tablet.next()).toEqual({ close: expired });
 });
 
 test('rolls back transaction on column mismatch, holds mutation for repair, advances lmid, and executes subsequent writes', async () => {
   const { name, phone: device } = await online(1);
-  device.push({ id: 1, changes: [...squat.changes, put('note', { id: 'n2', title: 'bench press' })] });
+  device.push({ id: 1, changes: [...stamp.changes, put('note', { id: 'n2', title: 'brick wall' })] });
   expect(await device.next()).toMatchObject({
     message: { lmids: { c1: 1 }, patch: [], held: [{ id: 1, reason: expect.stringContaining('title') }] },
   });
   expect(await notes(name)).toEqual([]);
-  device.push({ id: 2, changes: squat.changes });
-  expect(await device.next()).toMatchObject({ message: { lmids: { c1: 2 }, patch: [{ row: { text: 'squat' } }] } });
+  device.push({ id: 2, changes: stamp.changes });
+  expect(await device.next()).toMatchObject({ message: { lmids: { c1: 2 }, patch: [{ row: { text: 'stamp' } }] } });
 });
 
 test('holds mutation on foreign key violation while advancing lmid without persisting rows', async () => {
   const { phone: device } = await online(1);
-  device.push(squat, { id: 2, changes: [put('tag', { id: 't1', note_id: 'n9' })] });
-  expect(await device.next()).toMatchObject({ message: { lmids: { c1: 2 }, patch: [{ row: { text: 'squat' } }] } });
+  device.push(stamp, { id: 2, changes: [put('tag', { id: 't1', note_id: 'n9' })] });
+  expect(await device.next()).toMatchObject({ message: { lmids: { c1: 2 }, patch: [{ row: { text: 'stamp' } }] } });
 });
 
 test('cascades delete from note to referencing tags', async () => {
   const { name, phone: device } = await online(1);
-  device.push(squat, { id: 2, changes: [put('tag', { id: 't1', note_id: 'n1' }), put('tag', { id: 't2', note_id: 'n1' })] });
+  device.push(stamp, { id: 2, changes: [put('tag', { id: 't1', note_id: 'n1' }), put('tag', { id: 't2', note_id: 'n1' })] });
   await device.next();
   device.push({ id: 3, changes: [{ op: 'del', table: 'note', key: { id: 'n1' } }] });
   expect(await device.next()).toMatchObject({
@@ -143,14 +143,14 @@ test('serves multi-chunk HTTP pulls with next pagination token and returns curso
 
 test('broadcasts server writes to all connections with empty lmids', async () => {
   const { name, cookie, phone, tablet } = await online(2);
-  await object(name).importNotes([{ id: 'n1', text: 'squat' }]);
+  await object(name).importNotes([{ id: 'n1', text: 'stamp' }]);
   await expectNotified([phone, tablet], cookie, {});
 });
 
 test('rolls back transactionSync and rethrows error to caller on server write failure', async () => {
   const { name } = await online(1);
   await runInDurableObject(object(name), (instance: TestSpace) => {
-    expect(() => instance.importNotes([{ id: 'n1', text: 'squat' }], true)).toThrow('Import failed');
+    expect(() => instance.importNotes([{ id: 'n1', text: 'stamp' }], true)).toThrow('Import failed');
   });
   expect(await notes(name)).toEqual([]);
 });
@@ -165,7 +165,7 @@ test('sends hint without closing connection when live notice exceeds size budget
 test('retains connections across hibernation and broadcasts pushed writes normally', async () => {
   const { name, cookie, phone, tablet } = await online(2);
   await evictDurableObject(object(name));
-  phone.push(squat);
+  phone.push(stamp);
   expect(await tablet.next()).toMatchObject({ message: { base: cookie, lmids: { c1: 1 } } });
 });
 
@@ -184,7 +184,7 @@ test('excludes locally closed connections awaiting Close frames from broadcast a
     const [closing, open] = state.getWebSockets();
     if (!closing || !open) throw new Error('Expected two connections');
     closing.close(1012);
-    instance.webSocketMessage(open, JSON.stringify([{ client: 'c1', ...squat }]));
+    instance.webSocketMessage(open, JSON.stringify([{ client: 'c1', ...stamp }]));
   });
   const events = [await phone.next(), await tablet.next()];
   expect(events).toContainEqual({ close: 1012 });
@@ -202,7 +202,7 @@ test('closes with 4000 when cookie is off history, ignores pushed write, and ser
   // Cookie ahead of head version: off current history.
   const rewound = { version: cookie.version + 1, nonce: 1 };
   const stale = await connect(name, rewound);
-  stale.push(squat);
+  stale.push(stamp);
   expect(await stale.next()).toEqual({ close: pullNeeded });
   expect(await notes(name)).toEqual([]);
   expect(await pull(name, rewound)).toMatchObject({ base: rewound, cookie, lmids: {}, patch: [{ op: 'clear' }] });
@@ -237,7 +237,7 @@ test('held reason cut inside a surrogate pair reaches the device well-formed: st
 test('ignores mutations pushed on connect when connection is immediately closed with 4000', async () => {
   const name = space();
   const device = await connect(name, null);
-  device.push(squat);
+  device.push(stamp);
   expect(await device.next()).toEqual({ close: pullNeeded });
   expect(await notes(name)).toEqual([]);
 });
@@ -283,7 +283,7 @@ test('handles schema fingerprints: serves pull on match, returns 412 on mismatch
 
 test('tracks daily rowsWritten on commit log records and retains counts across hibernation', async () => {
   const { name, phone: device } = await online(1);
-  device.push(squat, { id: 2, changes: [put('note', { id: 'n2', text: 'bench press' })] });
+  device.push(stamp, { id: 2, changes: [put('note', { id: 'n2', text: 'brick wall' })] });
   await device.next();
   await evictDurableObject(object(name));
   const used = await runInDurableObject(object(name), (_: TestSpace, state) =>

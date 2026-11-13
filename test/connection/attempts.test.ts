@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 import { pullNeeded } from '../../src/protocol/messages.ts';
 import { flush, withFakeTimers } from '../support/test-drive.ts';
 import { captureReported } from '../support/test-errors.ts';
-import { workout, workouts, write } from '../support/test-schema.ts';
+import { workbook, workbooks, write } from '../support/test-schema.ts';
 import { failOnce, faultable, injectedError, isInjected } from '../support/test-storage.ts';
 import { heartbeat, linked, reconnect } from './test-connection.ts';
 
@@ -14,8 +14,8 @@ test('a poke that does not chain onto the local cookie breaks the link: reports,
     const harness = await linked();
     const { space, device, connection, sockets, message } = harness;
     const cookie = device.private.cookie();
-    space.mutate((tx) => tx.insert(workout, { id: 'skipped', note: 'squat' }));
-    message(JSON.stringify(space.mutate((tx) => tx.insert(workout, { id: 'gap', note: 'bench' }))));
+    space.mutate((tx) => tx.insert(workbook, { id: 'skipped', note: 'stamp' }));
+    message(JSON.stringify(space.mutate((tx) => tx.insert(workbook, { id: 'gap', note: 'brick' }))));
     await flush();
     expect(sockets[0]?.closed).toBe(true);
     expect(reported).toEqual(['poke does not match local cookie']);
@@ -32,7 +32,7 @@ test('a read error while checking whether a landed poke left the device behind b
     const harness = await linked();
     const { space, storage, device, connection, sockets, message } = harness;
     failOnce(storage, 'SELECT refetch FROM _syncline_cookie');
-    message(JSON.stringify(space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }))));
+    message(JSON.stringify(space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }))));
     await flush();
     expect(device.private.cookie()).toEqual(space.head());
     expect(sockets[0]?.closed).toBe(true);
@@ -48,7 +48,7 @@ test('a read error on the pending queue while pushing breaks the link: the write
     const harness = await linked();
     const { storage, device, connection, sockets, confirm } = harness;
     failOnce(storage, 'SELECT p.client, p.id, p.changes');
-    await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'brick' }));
     await flush();
     expect(sockets[0]?.closed).toBe(true);
     expect(reported).toEqual([expect.stringMatching(injectedError)]);
@@ -63,7 +63,7 @@ test('a read error pushing the next batch upon a confirmation breaks the link: t
   withFakeTimers(async () => {
     const reported = captureReported();
     const { storage, device, connection, sockets, confirm } = await linked();
-    await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'brick' }));
     await flush();
     failOnce(storage, 'SELECT p.client, p.id, p.changes');
     confirm(0);
@@ -99,7 +99,7 @@ test('a storage fault on any statement while reconnecting through a pull is repo
       };
       const { space, storage, device, connection, sockets, fetched, open, catchUp } = await linked({ respond });
       const before = reported.length;
-      space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
+      space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }));
       faultable(storage).arm(after);
       // The cloud closes the link asking for an HTTP pull before reconnecting
       sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: pullNeeded }));
@@ -176,7 +176,7 @@ test('a poke queued behind an open local write is dropped when its connection cl
     const open = write(device, () => gate);
     await flush();
     const before = space.head();
-    message(JSON.stringify(space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }))));
+    message(JSON.stringify(space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }))));
     await flush();
     sockets[0]?.socket.onclose?.(new CloseEvent('close', { code: 1006 }));
     resolve();
@@ -184,6 +184,6 @@ test('a poke queued behind an open local write is dropped when its connection cl
     await flush();
     expect(device.private.cookie()).toEqual(before);
     await reconnect(harness);
-    expect(workouts(storage)).toContainEqual({ id: 'w2', note: 'bench' });
+    expect(workbooks(storage)).toContainEqual({ id: 'w2', note: 'brick' });
     connection.stop();
   }));

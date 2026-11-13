@@ -4,11 +4,11 @@ import type { Poke } from '../../src/protocol/messages.ts';
 import type { Device } from '../support/test-device.ts';
 import type { deviceStorage } from '../support/test-storage.ts';
 
-// Shared test utilities for schema evolution: workout and tag tables (workout has an extended definition with reps), device catchUp, and row reader.
+// Shared test utilities for schema evolution: workbook and tag tables (workbook has an extended definition with runs), device catchUp, and row reader.
 
-export const workoutWithReps = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
+export const workbookWithRuns = sqliteTable('workbook', { id: text().primaryKey(), note: text(), runs: integer() });
 export const tag = sqliteTable('tag', { id: text().primaryKey(), name: text() });
-export const createWorkout = 'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)';
+export const createWorkbook = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER)';
 export const createTag = 'CREATE TABLE tag (id TEXT PRIMARY KEY, name TEXT)';
 
 /** Catches up device to head by streaming chunks until the final chunk (Poke), requesting a checksum on the final chunk. */

@@ -5,7 +5,7 @@ import { Space } from '../src/cloud/space.ts';
 import type { Op, PullRange } from '../src/protocol/messages.ts';
 import { Device } from './support/test-device.ts';
 import { both, createSet, filled, set, tables } from './support/test-pull.ts';
-import { createWorkout, unchunked, workout, write } from './support/test-schema.ts';
+import { createWorkbook, unchunked, workbook, write } from './support/test-schema.ts';
 import { cloudStorage, deviceStorage } from './support/test-storage.ts';
 
 // Range pulls (after checksum mismatch): pull requests specify primary-key ranges for tables; reader merges them into current scan round,
@@ -16,7 +16,7 @@ type Storage = ReturnType<typeof deviceStorage>;
 /** Directly mutates local tables bypassing sync (defect or corruption), unseen by the sync engine. */
 const corrupt = (storage: Storage, sql: string) => storage.sql.exec(sql);
 
-/** Fully synced device where the cloud holds 5 workouts and 10 sets from filled(). */
+/** Fully synced device where the cloud holds 5 workbooks and 10 sets from filled(). */
 async function synced() {
   const filledSpace = filled();
   await filledSpace.device.private.receive(filledSpace.space.pull(filledSpace.device.private.pullRequest(), unchunked));
@@ -39,15 +39,15 @@ async function refetch(space: Space, device: Device, ranges: PullRange[], limit 
 
 test('rows corrupted, added, or deleted within range are repaired from cloud while rows outside range remain untouched', async () => {
   const { space, device, storage } = await synced();
-  corrupt(storage, "UPDATE workout SET note = 'bad' WHERE id IN ('w2', 'w5')");
-  corrupt(storage, "DELETE FROM workout WHERE id = 'w3'");
-  corrupt(storage, "INSERT INTO workout VALUES ('w25', 'ghost', NULL)");
-  const [patch] = await refetch(space, device, [{ table: 'workout', after: { id: 'w1' }, until: { id: 'w4' } }]);
+  corrupt(storage, "UPDATE workbook SET note = 'bad' WHERE id IN ('w2', 'w5')");
+  corrupt(storage, "DELETE FROM workbook WHERE id = 'w3'");
+  corrupt(storage, "INSERT INTO workbook VALUES ('w25', 'ghost', NULL)");
+  const [patch] = await refetch(space, device, [{ table: 'workbook', after: { id: 'w1' }, until: { id: 'w4' } }]);
   expect(patch).toEqual([
-    { op: 'drop', table: 'workout', range: { key: ['id'], after: { id: 'w1' }, until: { id: 'w4' } } },
-    ...['w2', 'w3', 'w4'].map((id) => ({ op: 'put', table: 'workout', key: { id }, row: { id, note: id } })),
+    { op: 'drop', table: 'workbook', range: { key: ['id'], after: { id: 'w1' }, until: { id: 'w4' } } },
+    ...['w2', 'w3', 'w4'].map((id) => ({ op: 'put', table: 'workbook', key: { id }, row: { id, note: id } })),
   ]);
-  expect(both(storage).workouts).toEqual([
+  expect(both(storage).workbooks).toEqual([
     { id: 'w1', note: 'w1' },
     { id: 'w2', note: 'w2' },
     { id: 'w3', note: 'w3' },
@@ -59,36 +59,36 @@ test('rows corrupted, added, or deleted within range are repaired from cloud whi
 test('composite primary-key range and full-table range: unscoped table drops whole table then streams all rows', async () => {
   const { space, device, storage } = await synced();
   corrupt(storage, 'DELETE FROM "set"');
-  corrupt(storage, "UPDATE workout SET note = 'bad'");
-  const patches = await refetch(space, device, [{ table: 'set', after: { workoutId: 'w2', index: 0 } }, { table: 'workout' }]);
+  corrupt(storage, "UPDATE workbook SET note = 'bad'");
+  const patches = await refetch(space, device, [{ table: 'set', after: { workbookId: 'w2', index: 0 } }, { table: 'workbook' }]);
   expect(patches[0]?.slice(0, 1)).toEqual([
-    { op: 'drop', table: 'set', range: { key: ['workoutId', 'index'], after: { workoutId: 'w2', index: 0 } } },
+    { op: 'drop', table: 'set', range: { key: ['workbookId', 'index'], after: { workbookId: 'w2', index: 0 } } },
   ]);
-  expect(patches[0]).toContainEqual({ op: 'drop', table: 'workout' });
+  expect(patches[0]).toContainEqual({ op: 'drop', table: 'workbook' });
   expect(both(storage)).toEqual({
-    workouts: ['w1', 'w2', 'w3', 'w4', 'w5'].map((id) => ({ id, note: id })),
+    workbooks: ['w1', 'w2', 'w3', 'w4', 'w5'].map((id) => ({ id, note: id })),
     sets: ['w2', 'w3', 'w4', 'w5'].flatMap((id) =>
-      [0, 1].filter((index) => id !== 'w2' || index === 1).map((index) => ({ workoutId: id, index, reps: 5 })),
+      [0, 1].filter((index) => id !== 'w2' || index === 1).map((index) => ({ workbookId: id, index, runs: 5 })),
     ),
   });
 });
 
 test('multi-chunk range pull: intermediate chunks stage without landing; cloud mutations mid-pull apply accurately on land', async () => {
   const { space, device, storage } = await synced();
-  corrupt(storage, "UPDATE workout SET note = 'bad' WHERE id IN ('w2', 'w3', 'w4')");
-  corrupt(storage, "INSERT INTO workout VALUES ('w35', 'ghost', NULL)");
-  const ranges = [{ table: 'workout', after: { id: 'w1' }, until: { id: 'w4' } }];
+  corrupt(storage, "UPDATE workbook SET note = 'bad' WHERE id IN ('w2', 'w3', 'w4')");
+  corrupt(storage, "INSERT INTO workbook VALUES ('w35', 'ghost', NULL)");
+  const ranges = [{ table: 'workbook', after: { id: 'w1' }, until: { id: 'w4' } }];
   const first = space.pull({ ...device.private.pullRequest(), ranges }, 1);
   expect(await device.private.receive(first)).toBe(true);
   expect('next' in first && !('cookie' in first)).toBe(true);
   // First chunk is staged only; local database remains corrupted.
-  expect(both(storage).workouts.filter(({ note }) => note === 'bad')).toHaveLength(3);
+  expect(both(storage).workbooks.filter(({ note }) => note === 'bad')).toHaveLength(3);
   space.mutate((tx) => {
-    tx.upsert(workout, { id: 'w3', note: 'modified' });
-    tx.upsert(workout, { id: 'w5', note: 'outside range' });
+    tx.upsert(workbook, { id: 'w3', note: 'modified' });
+    tx.upsert(workbook, { id: 'w5', note: 'outside range' });
   });
   await refetch(space, device, [], 1);
-  expect(both(storage).workouts).toEqual([
+  expect(both(storage).workbooks).toEqual([
     { id: 'w1', note: 'w1' },
     { id: 'w2', note: 'w2' },
     { id: 'w3', note: 'modified' },
@@ -99,10 +99,10 @@ test('multi-chunk range pull: intermediate chunks stage without landing; cloud m
 
 test('range pull with local pending writes: reverts, applies cloud patch, and replays pending writes on land', async () => {
   const { space, device, storage } = await synced();
-  corrupt(storage, "UPDATE workout SET note = 'bad' WHERE id = 'w2'");
-  await write(device, (tx) => tx.update(workout).set({ note: 'local write' }).where(eq(workout.id, 'w3')));
-  await refetch(space, device, [{ table: 'workout', after: { id: 'w1' }, until: { id: 'w4' } }]);
-  expect(both(storage).workouts.slice(1, 3)).toEqual([
+  corrupt(storage, "UPDATE workbook SET note = 'bad' WHERE id = 'w2'");
+  await write(device, (tx) => tx.update(workbook).set({ note: 'local write' }).where(eq(workbook.id, 'w3')));
+  await refetch(space, device, [{ table: 'workbook', after: { id: 'w1' }, until: { id: 'w4' } }]);
+  expect(both(storage).workbooks.slice(1, 3)).toEqual([
     { id: 'w2', note: 'w2' },
     { id: 'w3', note: 'local write' },
   ]);
@@ -110,46 +110,46 @@ test('range pull with local pending writes: reverts, applies cloud patch, and re
 });
 
 test('table entering sync during round is fully scanned without separate range drop; full pull ignores ranges', async () => {
-  const cloud = cloudStorage(createWorkout, createSet);
-  new Space(cloud, [workout]).mutate((tx) => tx.insert(workout, { id: 'w1', note: 'one' }));
-  const storage = deviceStorage(createWorkout, createSet);
+  const cloud = cloudStorage(createWorkbook, createSet);
+  new Space(cloud, [workbook]).mutate((tx) => tx.insert(workbook, { id: 'w1', note: 'one' }));
+  const storage = deviceStorage(createWorkbook, createSet);
   const device = new Device(storage, tables);
-  const before = new Space(cloud, [workout]);
+  const before = new Space(cloud, [workbook]);
   await device.private.receive(before.pull(device.private.pullRequest(), unchunked));
   const space = new Space(cloud, tables);
-  space.mutate((tx) => tx.insert(set, { workoutId: 'w1', index: 0, reps: 5 }));
-  const [patch] = await refetch(space, device, [{ table: 'set', after: { workoutId: 'w0', index: 0 } }]);
+  space.mutate((tx) => tx.insert(set, { workbookId: 'w1', index: 0, runs: 5 }));
+  const [patch] = await refetch(space, device, [{ table: 'set', after: { workbookId: 'w0', index: 0 } }]);
   expect(patch?.filter((op) => op.op === 'drop')).toEqual([{ op: 'drop', table: 'set' }]);
-  const full = space.pull({ cookie: null, ranges: [{ table: 'workout', after: { id: 'w0' } }] }, unchunked);
+  const full = space.pull({ cookie: null, ranges: [{ table: 'workbook', after: { id: 'w0' } }] }, unchunked);
   expect(full.patch[0]).toEqual({ op: 'clear' });
   expect(full.patch.some((op) => op.op === 'drop')).toBe(false);
 });
 
 test('missing primary-key columns in range falls back to full table rescan; un-synced cloud tables emit drop', async () => {
   const { space, device, storage } = await synced();
-  corrupt(storage, "UPDATE workout SET note = 'bad' WHERE id = 'w5'");
+  corrupt(storage, "UPDATE workbook SET note = 'bad' WHERE id = 'w5'");
   const [patch] = await refetch(space, device, [
-    { table: 'set', after: { workoutId: 'w1' } },
-    { table: 'workout', until: { note: 'w2' } },
+    { table: 'set', after: { workbookId: 'w1' } },
+    { table: 'workbook', until: { note: 'w2' } },
     { table: 'gone', after: { id: 'g1' } },
   ]);
   expect(patch?.filter((op) => op.op === 'drop')).toEqual([
     { op: 'drop', table: 'gone' },
     { op: 'drop', table: 'set' },
-    { op: 'drop', table: 'workout' },
+    { op: 'drop', table: 'workbook' },
   ]);
-  expect(both(storage).workouts.at(-1)).toEqual({ id: 'w5', note: 'w5' });
+  expect(both(storage).workbooks.at(-1)).toEqual({ id: 'w5', note: 'w5' });
 });
 
 test('unknown rows table: replaces saved rows within range with fresh cloud rows while leaving outside rows intact', async () => {
   const plan = sqliteTable('plan', { id: text().primaryKey(), name: text() });
-  const cloud = cloudStorage(createWorkout, 'CREATE TABLE plan (id TEXT PRIMARY KEY, name TEXT)');
-  const space = new Space(cloud, [workout, plan]);
+  const cloud = cloudStorage(createWorkbook, 'CREATE TABLE plan (id TEXT PRIMARY KEY, name TEXT)');
+  const space = new Space(cloud, [workbook, plan]);
   space.mutate((tx) => {
     for (const id of ['p1', 'p2', 'p3']) tx.insert(plan, { id, name: id });
   });
-  const storage = deviceStorage(createWorkout);
-  const device = new Device(storage, [workout]);
+  const storage = deviceStorage(createWorkbook);
+  const device = new Device(storage, [workbook]);
   await device.private.receive(space.pull(device.private.pullRequest(), unchunked));
   corrupt(storage, "UPDATE _syncline_unknown SET row = json_set(row, '$.name', 'bad')");
   corrupt(

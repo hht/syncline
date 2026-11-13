@@ -17,25 +17,25 @@ import { cloudStorage, deviceStorage, failOnce, injectedError } from '../support
 
 // Held writes (pending remediation): non-executable writes advance lmid and persist raw payload; subsequent writes push normally; resubmission recovers data without loss.
 
-const workout = sqliteTable('workout', { id: text().primaryKey(), note: text() });
-const exercise = sqliteTable('exercise', { id: text().primaryKey(), workout_id: text().references(() => workout.id) });
-const tables = [workout, exercise];
+const workbook = sqliteTable('workbook', { id: text().primaryKey(), note: text() });
+const excerpt = sqliteTable('excerpt', { id: text().primaryKey(), workbook_id: text().references(() => workbook.id) });
+const tables = [workbook, excerpt];
 const statements = [
-  'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT)',
-  'CREATE TABLE exercise (id TEXT PRIMARY KEY, workout_id TEXT)',
+  'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT)',
+  'CREATE TABLE excerpt (id TEXT PRIMARY KEY, workbook_id TEXT)',
 ];
 
-/** Held write notice received by phone: exercise e1 references deleted workout w1. */
+/** Held write notice received by phone: excerpt e1 references deleted workbook w1. */
 const heldE1 = [
-  { reason: expect.stringContaining('missing parent'), changes: [{ op: 'put', table: 'exercise', row: { id: 'e1', workout_id: 'w1' } }] },
+  { reason: expect.stringContaining('missing parent'), changes: [{ op: 'put', table: 'excerpt', row: { id: 'e1', workbook_id: 'w1' } }] },
 ];
 
-/** Sets up cloud and two synced devices with existing workout w1 on cloud. */
+/** Sets up cloud and two synced devices with existing workbook w1 on cloud. */
 async function setup() {
   const cloud = cloudStorage(...statements);
   const events: SynclineEvent[] = [];
   const space = new Space(cloud, tables, { events: (event) => events.push(event) });
-  space.mutate((tx) => tx.insert(workout, { id: 'w1' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
   const install = async () => {
     const storage = deviceStorage('PRAGMA auto_vacuum = INCREMENTAL', ...statements);
     const device = new Device(storage, tables);
@@ -46,12 +46,12 @@ async function setup() {
   };
   const phone = await install();
   const tablet = await install();
-  const exercises = (storage: Parameters<typeof drizzle>[0]) => drizzle(storage).select().from(exercise).orderBy(exercise.id).all();
+  const excerpts = (storage: Parameters<typeof drizzle>[0]) => drizzle(storage).select().from(excerpt).orderBy(excerpt.id).all();
   const devices = [phone.device, tablet.device];
-  /** Phone adds exercise referencing w1 (present locally), tablet deletes w1 before phone uploads (both receive deletion); phone subsequently uploads and cloud holds the write. */
+  /** Phone adds excerpt referencing w1 (present locally), tablet deletes w1 before phone uploads (both receive deletion); phone subsequently uploads and cloud holds the write. */
   const holdOne = async () => {
-    await write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e1', workout_id: 'w1' }));
-    await write(tablet.device, (tx) => tx.delete(workout));
+    await write(phone.device, (tx) => tx.insert(excerpt).values({ id: 'e1', workbook_id: 'w1' }));
+    await write(tablet.device, (tx) => tx.delete(workbook));
     await upload(space, tablet.device, devices);
   };
   /** Uploads phone mutation after holdOne and returns held write record. */
@@ -66,15 +66,15 @@ async function setup() {
   const pullAll = async () => {
     for (const device of devices) await device.private.receive(space.pull({ cookie: device.private.cookie() }, 1_000_000) as never);
   };
-  return { cloud, space, phone, tablet, devices, exercises, holdOne, uploadHeld, pullAll, events };
+  return { cloud, space, phone, tablet, devices, excerpts, holdOne, uploadHeld, pullAll, events };
 }
 
 test('write committed after pull request dispatched (current client) is pushed and held, confirmed in final chunk: notices held write', async () => {
   const { space, phone, tablet } = await setup();
-  await write(tablet.device, (tx) => tx.delete(workout));
+  await write(tablet.device, (tx) => tx.delete(workbook));
   await upload(space, tablet.device, [tablet.device]);
   const request = phone.device.private.pullRequest();
-  await write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e1', workout_id: 'w1' }));
+  await write(phone.device, (tx) => tx.insert(excerpt).values({ id: 'e1', workbook_id: 'w1' }));
   // Push poke failed to deliver (or could not chain cookie), so write is confirmed in final chunk of pull.
   space.push(phone.device.private.pending());
   await phone.device.private.receive(space.pull(request, 1_000_000));
@@ -83,19 +83,19 @@ test('write committed after pull request dispatched (current client) is pushed a
 });
 
 test('referenced row deleted by another device: mutation is held, reverted locally, onHeld receives reason and raw changes; subsequent writes upload normally', async () => {
-  const { cloud, space, phone, tablet, devices, exercises, holdOne } = await setup();
+  const { cloud, space, phone, tablet, devices, excerpts, holdOne } = await setup();
   await holdOne();
   await write(phone.device, async (tx) => {
-    await tx.insert(workout).values({ id: 'w2' });
-    await tx.insert(exercise).values({ id: 'e2', workout_id: 'w2' });
+    await tx.insert(workbook).values({ id: 'w2' });
+    await tx.insert(excerpt).values({ id: 'e2', workbook_id: 'w2' });
   });
   await upload(space, phone.device, devices);
 
   expect(phone.device.private.pending()).toEqual([]);
   expect(phone.held).toEqual(heldE1);
   expect(tablet.held).toEqual([]);
-  expect(exercises(cloud)).toEqual([{ id: 'e2', workout_id: 'w2' }]);
-  expect(exercises(phone.storage)).toEqual(exercises(cloud));
+  expect(excerpts(cloud)).toEqual([{ id: 'e2', workbook_id: 'w2' }]);
+  expect(excerpts(phone.storage)).toEqual(excerpts(cloud));
   expect(space.held()).toEqual([
     {
       client: expect.any(String),
@@ -130,28 +130,28 @@ test('push held and connection drops before poke arrives: reconnect catch-up con
 });
 
 test('resubmit after remediation: re-executing held write after restoring parent row succeeds, unholds write, and syncs to both devices; throwing (including on replacement text with a lone surrogate) continues hold', async () => {
-  const { cloud, space, phone, tablet, exercises, uploadHeld, pullAll, events } = await setup();
+  const { cloud, space, phone, tablet, excerpts, uploadHeld, pullAll, events } = await setup();
   const { client, id } = await uploadHeld();
   expect(events).toContainEqual({ type: 'write.held', client, id, reason: expect.stringContaining('missing parent') });
 
   expect(() => space.resubmit(client, id)).toThrow('missing parent');
-  expect(() => space.resubmit(client, id, [{ op: 'put', table: 'exercise', row: { id: 'e\uD800', workout_id: null } }])).toThrow(
+  expect(() => space.resubmit(client, id, [{ op: 'put', table: 'excerpt', row: { id: 'e\uD800', workbook_id: null } }])).toThrow(
     'Malformed',
   );
   expect(space.held()).toHaveLength(1);
-  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'restored' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w1', note: 'restored' }));
   const poke = space.resubmit(client, id);
   await pullAll();
-  expect(poke.patch).toEqual([{ op: 'put', table: 'exercise', key: { id: 'e1' }, row: { id: 'e1', workout_id: 'w1' } }]);
+  expect(poke.patch).toEqual([{ op: 'put', table: 'excerpt', key: { id: 'e1' }, row: { id: 'e1', workbook_id: 'w1' } }]);
   expect(space.held()).toEqual([]);
   expect(events).toContainEqual({ type: 'write.resubmitted', client, id });
-  expect(exercises(cloud)).toEqual([{ id: 'e1', workout_id: 'w1' }]);
-  expect(exercises(phone.storage)).toEqual(exercises(cloud));
-  expect(exercises(tablet.storage)).toEqual(exercises(cloud));
+  expect(excerpts(cloud)).toEqual([{ id: 'e1', workbook_id: 'w1' }]);
+  expect(excerpts(phone.storage)).toEqual(excerpts(cloud));
+  expect(excerpts(tablet.storage)).toEqual(excerpts(cloud));
 });
 
 test('discard held write: resubmitting with empty changes clears held write without altering data, sync proceeds normally', async () => {
-  const { cloud, space, phone, tablet, devices, exercises, uploadHeld, pullAll, events } = await setup();
+  const { cloud, space, phone, tablet, devices, excerpts, uploadHeld, pullAll, events } = await setup();
   const { client, id } = await uploadHeld();
   const poke = space.resubmit(client, id, []);
   await pullAll();
@@ -160,16 +160,16 @@ test('discard held write: resubmitting with empty changes clears held write with
   expect(poke.patch).toEqual([]);
   expect(space.held()).toEqual([]);
   expect(events).toContainEqual({ type: 'write.resubmitted', client, id });
-  expect(exercises(cloud)).toEqual([]);
-  expect(exercises(phone.storage)).toEqual([]);
-  expect(exercises(tablet.storage)).toEqual([]);
+  expect(excerpts(cloud)).toEqual([]);
+  expect(excerpts(phone.storage)).toEqual([]);
+  expect(excerpts(tablet.storage)).toEqual([]);
   expect(() => space.resubmit(client, id)).toThrow('Held write not found');
   await write(tablet.device, async (tx) => {
-    await tx.insert(workout).values({ id: 'w2' });
-    await tx.insert(exercise).values({ id: 'e2', workout_id: 'w2' });
+    await tx.insert(workbook).values({ id: 'w2' });
+    await tx.insert(excerpt).values({ id: 'e2', workbook_id: 'w2' });
   });
   await upload(space, tablet.device, devices);
-  expect(exercises(phone.storage)).toEqual([{ id: 'e2', workout_id: 'w2' }]);
+  expect(excerpts(phone.storage)).toEqual([{ id: 'e2', workbook_id: 'w2' }]);
 });
 
 test('held write with large payload exceeding 2 MB DO value limit: stores across multiple rows and retrieves intact', async () => {
@@ -178,9 +178,9 @@ test('held write with large payload exceeding 2 MB DO value limit: stores across
   const note = 'x'.repeat(490);
   await write(phone.device, async (tx) => {
     for (let start = 0; start < 4500; start += 500)
-      await tx.insert(exercise).values(Array.from({ length: 500 }, (_, e) => ({ id: `e${start + e}${note}`, workout_id: 'w1' })));
+      await tx.insert(excerpt).values(Array.from({ length: 500 }, (_, e) => ({ id: `e${start + e}${note}`, workbook_id: 'w1' })));
   });
-  await write(tablet.device, (tx) => tx.delete(workout));
+  await write(tablet.device, (tx) => tx.delete(workbook));
   await upload(space, tablet.device, devices);
   const [mutation] = phone.device.private.pending();
   await upload(space, phone.device, devices);
@@ -196,7 +196,7 @@ test('integrator events callback throws (logging error): still holds write and c
       throw new Error('Logging error');
     },
   });
-  const poke = space.push([{ client: 'c1', id: 1, changes: [{ op: 'put', table: 'exercise', row: { id: 'e1', workout_id: 'gone' } }] }]);
+  const poke = space.push([{ client: 'c1', id: 1, changes: [{ op: 'put', table: 'excerpt', row: { id: 'e1', workbook_id: 'gone' } }] }]);
   expect(poke).toMatchObject({ lmids: { c1: 1 }, held: [{ client: 'c1', id: 1 }] });
   expect(reported).toContain('Logging error');
 });
@@ -206,8 +206,8 @@ test('incremental vacuum failure (e.g. disk full): held notice still emitted; va
   await holdOne();
   space.push(phone.device.private.pending());
   // Two additional cloud writes: pull splits into two chunks; vacuum runs when final chunk arrives.
-  space.mutate((tx) => tx.insert(workout, { id: 'w2' }));
-  space.mutate((tx) => tx.insert(workout, { id: 'w3' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w2' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w3' }));
   failOnce(phone.storage, 'PRAGMA incremental_vacuum');
   const reported = captureReported();
   const first = space.pull(phone.device.private.pullRequest(), 1);
@@ -252,10 +252,10 @@ test('held write with 4-byte surrogate pair spanning across chunk boundary: retr
   new Space(cloud, tables);
   const query = queryOf(cloud);
   const writes = new HeldWrites(query);
-  // JSON starts with [{"op":"put","table":"exercise","row":{"id":", followed by emoji positioned across 500,000th code unit boundary.
-  const prefix = JSON.stringify([{ op: 'put', table: 'exercise', row: { id: '' } }]).indexOf('""') + 1;
+  // JSON starts with [{"op":"put","table":"excerpt","row":{"id":", followed by emoji positioned across 500,000th code unit boundary.
+  const prefix = JSON.stringify([{ op: 'put', table: 'excerpt', row: { id: '' } }]).indexOf('""') + 1;
   const id = `${'x'.repeat(500_000 - prefix - 1)}${'😀'.repeat(10)}`;
-  const changes = [{ op: 'put' as const, table: 'exercise', row: { id } }];
+  const changes = [{ op: 'put' as const, table: 'excerpt', row: { id } }];
   writes.add(1, { client: 'c1', id: 1, reason: 'test' }, changes);
   expect(writes.changes('c1', 1)).toEqual(changes);
 });
@@ -265,10 +265,10 @@ test('resubmitting an unheld write (already resubmitted or never held): throws w
   await holdOne();
   await upload(space, phone.device, devices);
   const [{ client, id } = { client: '', id: 0 }] = space.held();
-  space.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'restored' }));
+  space.mutate((tx) => tx.insert(workbook, { id: 'w1', note: 'restored' }));
   space.resubmit(client, id);
-  expect(() => space.resubmit(client, id, [{ op: 'put', table: 'workout', row: { id: 'w9' } }])).toThrow('Held write not found');
-  expect(() => space.resubmit('nobody', 1, [{ op: 'put', table: 'workout', row: { id: 'w9' } }])).toThrow('Held write not found');
+  expect(() => space.resubmit(client, id, [{ op: 'put', table: 'workbook', row: { id: 'w9' } }])).toThrow('Held write not found');
+  expect(() => space.resubmit('nobody', 1, [{ op: 'put', table: 'workbook', row: { id: 'w9' } }])).toThrow('Held write not found');
   expect(space.held({ limit: 1 })).toEqual([]);
 });
 
@@ -276,7 +276,7 @@ test('list held writes paginates by bytes: large entries yield fewer items per p
   const cloud = cloudStorage(...statements);
   new Space(cloud, tables);
   const writes = new HeldWrites(queryOf(cloud));
-  const big = (index: number) => [{ op: 'put' as const, table: 'workout', row: { id: `w${index}`, note: 'x'.repeat(readBytes / 2) } }];
+  const big = (index: number) => [{ op: 'put' as const, table: 'workbook', row: { id: `w${index}`, note: 'x'.repeat(readBytes / 2) } }];
   for (let index = 1; index <= 5; index += 1) writes.add(index, { client: 'c1', id: index, reason: 'test' }, big(index));
   const first = writes.list();
   expect(first.map(({ id }) => id)).toEqual([1, 2]);
@@ -285,9 +285,9 @@ test('list held writes paginates by bytes: large entries yield fewer items per p
 });
 
 test('held reasons are bounded and well-formed: an oversized name or a cut surrogate pair still holds the write', () => {
-  // Malformed change whose 200-character excerpt ends inside an emoji's surrogate pair.
-  const prefix = JSON.stringify({ op: 'put', table: 'workout', row: { id: '' } }).indexOf('""') + 1;
-  const cut = { op: 'put', table: 'workout', row: { id: `${'x'.repeat(199 - prefix)}${'😀'.repeat(5)}`, note: {} } };
+  // Malformed change whose 200-character snippet ends inside an emoji's surrogate pair.
+  const prefix = JSON.stringify({ op: 'put', table: 'workbook', row: { id: '' } }).indexOf('""') + 1;
+  const cut = { op: 'put', table: 'workbook', row: { id: `${'x'.repeat(199 - prefix)}${'😀'.repeat(5)}`, note: {} } };
   for (const change of [{ op: 'put', table: 'x'.repeat(2_100_000), row: { id: 'a' } }, cut]) {
     const space = new Space(cloudStorage(...statements), tables);
     space.push(parseMutations(JSON.stringify([{ client: 'c1', id: 1, changes: [change] }])));

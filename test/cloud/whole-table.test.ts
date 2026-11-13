@@ -3,10 +3,10 @@ import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
-import { workout } from '../support/test-schema.ts';
+import { workbook } from '../support/test-schema.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
-import { catchUp, createTag, createWorkout, rows, tag, workoutWithReps } from './test-evolution.ts';
+import { catchUp, createTag, createWorkbook, rows, tag, workbookWithRuns } from './test-evolution.ts';
 
 // Sync scope evolution records table entry in scope table: on pull, devices drop the table and stage current rows in bounded chunks.
 
@@ -24,14 +24,14 @@ test('sync scope emptied by deployment then restored: delivers whole table as re
 });
 
 test('concurrent cloud writes/deletes/inserts across scanned and unscanned keys mid-rescan: incremental pull completes normally, device converges with cloud', async () => {
-  const cloud = cloudStorage(createWorkout, createTag);
-  const before = new Space(cloud, [workout]);
-  before.mutate((tx) => tx.insert(workout, { id: 'w1' }));
+  const cloud = cloudStorage(createWorkbook, createTag);
+  const before = new Space(cloud, [workbook]);
+  before.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
   for (let index = 0; index < 60; index += 1) cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', `t${String(index).padStart(2, '0')}`, 'Legs');
-  const storage = deviceStorage(createWorkout, createTag);
-  const device = new Device(storage, [workout, tag]);
+  const storage = deviceStorage(createWorkbook, createTag);
+  const device = new Device(storage, [workbook, tag]);
   await catchUp(before, device);
-  const space = new Space(cloud, [workout, tag]);
+  const space = new Space(cloud, [workbook, tag]);
   const first = space.pull(device.private.pullRequest(), 400);
   expect(first).toHaveProperty('next');
   await device.private.receive(first);
@@ -53,41 +53,41 @@ test('concurrent cloud writes/deletes/inserts across scanned and unscanned keys 
 });
 
 test('a table leaving sync mid incremental pull drops only its own rows from those sent: a synced row touched again after the drop is sent once', () => {
-  const cloud = cloudStorage(createWorkout, createTag);
-  const both = new Space(cloud, [workout, tag]);
+  const cloud = cloudStorage(createWorkbook, createTag);
+  const both = new Space(cloud, [workbook, tag]);
   const base = both.head();
-  both.mutate((tx) => tx.insert(workout, { id: 'w1', note: 'a' }));
-  const space = new Space(cloud, [workout]);
-  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'b' }));
+  both.mutate((tx) => tx.insert(workbook, { id: 'w1', note: 'a' }));
+  const space = new Space(cloud, [workbook]);
+  space.mutate((tx) => tx.update(workbook, { id: 'w1', note: 'b' }));
   expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
-    { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } },
+    { op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } },
     { op: 'drop', table: 'tag' },
   ]);
 });
 
 test('a column leaving sync mid incremental pull sends rows of its table sent before the drop again after it: the drop invalidates them', () => {
-  const cloud = cloudStorage(createWorkout);
-  const before = new Space(cloud, [workoutWithReps]);
+  const cloud = cloudStorage(createWorkbook);
+  const before = new Space(cloud, [workbookWithRuns]);
   const base = before.head();
-  before.mutate((tx) => tx.insert(workoutWithReps, { id: 'w1', note: 'a', reps: 5 }));
-  const space = new Space(cloud, [workout]);
-  space.mutate((tx) => tx.update(workout, { id: 'w1', note: 'b' }));
-  const put = { op: 'put', table: 'workout', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } };
+  before.mutate((tx) => tx.insert(workbookWithRuns, { id: 'w1', note: 'a', runs: 5 }));
+  const space = new Space(cloud, [workbook]);
+  space.mutate((tx) => tx.update(workbook, { id: 'w1', note: 'b' }));
+  const put = { op: 'put', table: 'workbook', key: { id: 'w1' }, row: { id: 'w1', note: 'b' } };
   expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
     put,
-    { op: 'drop', table: 'workout', columns: ['reps'] },
+    { op: 'drop', table: 'workbook', columns: ['runs'] },
     put,
   ]);
 });
 
 test('a table leaving sync and returning within one incremental pull: the drop recorded when it left is not sent after its rows', () => {
-  const cloud = cloudStorage(createWorkout, createTag);
-  const both = new Space(cloud, [workout, tag]);
+  const cloud = cloudStorage(createWorkbook, createTag);
+  const both = new Space(cloud, [workbook, tag]);
   both.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Legs' }));
   const base = both.head();
   // A release rolled back and deployed again while the device was away
-  new Space(cloud, [workout]);
-  const space = new Space(cloud, [workout, tag]);
+  new Space(cloud, [workbook]);
+  const space = new Space(cloud, [workbook, tag]);
   expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
     { op: 'drop', table: 'tag' },
     { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Legs' } },
@@ -95,10 +95,10 @@ test('a table leaving sync and returning within one incremental pull: the drop r
 });
 
 test('a device connecting with a cookie from before a table entered sync receives the table in the catch-up of its connection', () => {
-  const cloud = cloudStorage(createWorkout, createTag);
+  const cloud = cloudStorage(createWorkbook, createTag);
   cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', 't1', 'Legs');
-  const base = new Space(cloud, [workout]).head();
-  const space = new Space(cloud, [workout, tag]);
+  const base = new Space(cloud, [workbook]).head();
+  const space = new Space(cloud, [workbook, tag]);
   const server = new Server({ acceptWebSocket: () => undefined, getWebSockets: (): RecordingSocket[] => [] }, space);
   const end = new RecordingSocket();
   server.accept(end, base, Number.POSITIVE_INFINITY);

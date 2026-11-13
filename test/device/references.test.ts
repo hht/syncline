@@ -6,122 +6,122 @@ import type { remoteDatabase } from '../../src/expo/remote-database.ts';
 import type { Poke } from '../../src/protocol/messages.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { Device } from '../support/test-device.ts';
-import { createWorkout, pulled, tables, upload, workout as workoutRow, workouts, write } from '../support/test-schema.ts';
+import { createWorkbook, pulled, tables, upload, workbook as workbookRow, workbooks, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
-import { exercise, read, set, withWorkout, workout } from './test-workout.ts';
+import { excerpt, read, set, withWorkbook, workbook } from './test-workbook.ts';
 
 // Foreign keys: local writes, replay, and cloud cascade deletes and reject orphan rows according to foreign keys.
 
-/** Phone deletes child rows first (deleteChildren), then deletes workout w1, uploading to cloud and online devices. */
+/** Phone deletes child rows first (deleteChildren), then deletes workbook w1, uploading to cloud and online devices. */
 async function phoneDeletesParent(
-  { space, phone, devices }: Awaited<ReturnType<typeof withWorkout>>,
+  { space, phone, devices }: Awaited<ReturnType<typeof withWorkbook>>,
   deleteChildren: (tx: ReturnType<typeof remoteDatabase>) => Promise<unknown>,
 ) {
   await write(phone.device, async (tx) => {
     await deleteChildren(tx);
-    await tx.delete(workout).where(eq(workout.id, 'w1'));
+    await tx.delete(workbook).where(eq(workbook.id, 'w1'));
   });
   await upload(space, phone.device, devices);
 }
 
 test('deleting parent cascades to child rows added concurrently by other devices', async () => {
-  const workouts = await withWorkout();
-  const { cloud, space, tablet } = workouts;
-  await write(tablet.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: 'box squat' }));
+  const workbooks = await withWorkbook();
+  const { cloud, space, tablet } = workbooks;
+  await write(tablet.device, (tx) => tx.insert(excerpt).values({ id: 'e2', workbook_id: 'w1', name: 'box stamp' }));
   await upload(space, tablet.device, [tablet.device]);
-  await phoneDeletesParent(workouts, (tx) => tx.delete(exercise).where(eq(exercise.workout_id, 'w1')));
+  await phoneDeletesParent(workbooks, (tx) => tx.delete(excerpt).where(eq(excerpt.workbook_id, 'w1')));
 
-  expect(read(cloud)).toEqual({ workouts: [], exercises: [], sets: [] });
+  expect(read(cloud)).toEqual({ workbooks: [], excerpts: [], sets: [] });
   expect(read(tablet.storage)).toEqual(read(cloud));
 });
 
 test('cascade delete descends level by level, only deleting rows referencing deleted parents', async () => {
-  const workouts = await withWorkout();
-  const { cloud, space, phone, tablet, devices } = workouts;
+  const workbooks = await withWorkbook();
+  const { cloud, space, phone, tablet, devices } = workbooks;
   await write(tablet.device, async (tx) => {
-    await tx.insert(workout).values({ id: 'w2' });
-    await tx.insert(exercise).values([
-      { id: 'e2', workout_id: 'w1', name: 'front squat' },
-      { id: 'e3', workout_id: 'w2', name: 'bench press' },
+    await tx.insert(workbook).values({ id: 'w2' });
+    await tx.insert(excerpt).values([
+      { id: 'e2', workbook_id: 'w1', name: 'front stamp' },
+      { id: 'e3', workbook_id: 'w2', name: 'brick wall' },
     ]);
     await tx.insert(set).values([
-      { id: 's1', exercise_id: 'e1' },
-      { id: 's2', exercise_id: 'e2' },
-      { id: 's3', exercise_id: 'e3' },
+      { id: 's1', excerpt_id: 'e1' },
+      { id: 's2', excerpt_id: 'e2' },
+      { id: 's3', excerpt_id: 'e3' },
     ]);
   });
   await upload(space, tablet.device, devices);
-  await phoneDeletesParent(workouts, (tx) => tx.delete(exercise).where(eq(exercise.id, 'e1')));
+  await phoneDeletesParent(workbooks, (tx) => tx.delete(excerpt).where(eq(excerpt.id, 'e1')));
 
-  expect(read(cloud)).toMatchObject({ workouts: [{ id: 'w2' }], exercises: [{ id: 'e3' }], sets: [{ id: 's3' }] });
+  expect(read(cloud)).toMatchObject({ workbooks: [{ id: 'w2' }], excerpts: [{ id: 'e3' }], sets: [{ id: 's3' }] });
   for (const { storage } of [phone, tablet]) expect(read(storage)).toEqual(read(cloud));
 });
 
 test('a write that moves a child to another parent and deletes the old parent keeps the child on the device, the cloud, and another device', async () => {
-  const { cloud, space, phone, tablet, devices } = await withWorkout();
-  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w2' }));
+  const { cloud, space, phone, tablet, devices } = await withWorkbook();
+  await write(phone.device, (tx) => tx.insert(workbook).values({ id: 'w2' }));
   await upload(space, phone.device, devices);
 
   await write(phone.device, async (tx) => {
-    await tx.update(exercise).set({ workout_id: 'w2' }).where(eq(exercise.id, 'e1'));
-    await tx.delete(workout).where(eq(workout.id, 'w1'));
+    await tx.update(excerpt).set({ workbook_id: 'w2' }).where(eq(excerpt.id, 'e1'));
+    await tx.delete(workbook).where(eq(workbook.id, 'w1'));
   });
-  const moved = [{ id: 'e1', workout_id: 'w2', name: 'squat' }];
-  expect(read(phone.storage).exercises).toEqual(moved);
+  const moved = [{ id: 'e1', workbook_id: 'w2', name: 'stamp' }];
+  expect(read(phone.storage).excerpts).toEqual(moved);
   // The write lists the delete first: applied in that order, its cascade would take the moved child.
   expect(phone.device.private.pending().at(-1)?.changes).toEqual([
-    { op: 'del', table: 'workout', key: { id: 'w1' } },
-    { op: 'patch', table: 'exercise', row: { id: 'e1', workout_id: 'w2' } },
+    { op: 'del', table: 'workbook', key: { id: 'w1' } },
+    { op: 'patch', table: 'excerpt', row: { id: 'e1', workbook_id: 'w2' } },
   ]);
 
   await upload(space, phone.device, devices);
   expect(space.held()).toEqual([]);
   for (const storage of [cloud, phone.storage, tablet.storage]) {
-    expect(read(storage).exercises).toEqual(moved);
-    expect(read(storage).workouts.map(({ id }) => id)).toEqual(['w2']);
+    expect(read(storage).excerpts).toEqual(moved);
+    expect(read(storage).workbooks.map(({ id }) => id)).toEqual(['w2']);
   }
 });
 
 test('server mutations also respect foreign keys: deleting parent cascades to children, online devices delete together; referencing missing rows rolls back and throws (children before parent in same mutation is allowed)', async () => {
-  const { cloud, space, devices, phone } = await withWorkout();
+  const { cloud, space, devices, phone } = await withWorkbook();
   const online = async (poke: Poke) => {
     for (const device of devices) await device.private.receive(poke);
   };
-  await online(space.mutate((tx) => tx.insert(set, { id: 's1', exercise_id: 'e1' })));
-  await online(space.mutate((tx) => tx.delete(workout, { id: 'w1' })));
-  expect(read(cloud)).toEqual({ workouts: [], exercises: [], sets: [] });
+  await online(space.mutate((tx) => tx.insert(set, { id: 's1', excerpt_id: 'e1' })));
+  await online(space.mutate((tx) => tx.delete(workbook, { id: 'w1' })));
+  expect(read(cloud)).toEqual({ workbooks: [], excerpts: [], sets: [] });
   expect(read(phone.storage)).toEqual(read(cloud));
 
-  expect(() => space.mutate((tx) => tx.insert(exercise, { id: 'e2', workout_id: 'gone', name: 'bench press' }))).toThrow('missing parent');
-  expect(read(cloud).exercises).toEqual([]);
+  expect(() => space.mutate((tx) => tx.insert(excerpt, { id: 'e2', workbook_id: 'gone', name: 'brick wall' }))).toThrow('missing parent');
+  expect(read(cloud).excerpts).toEqual([]);
   await online(
     space.mutate((tx) => {
-      tx.insert(exercise, { id: 'e3', workout_id: 'w2', name: 'deadlift' });
-      tx.insert(workout, { id: 'w2' });
+      tx.insert(excerpt, { id: 'e3', workbook_id: 'w2', name: 'doorbell' });
+      tx.insert(workbook, { id: 'w2' });
     }),
   );
   expect(read(phone.storage)).toEqual(read(cloud));
-  expect(read(cloud).exercises).toHaveLength(1);
+  expect(read(cloud).excerpts).toHaveLength(1);
 });
 
 test('referenced row deleted by another device: rejected early during local replay, rejected completely by cloud, consistent after ack', async () => {
-  const { cloud, space, phone, tablet, devices } = await withWorkout();
+  const { cloud, space, phone, tablet, devices } = await withWorkbook();
   await write(tablet.device, async (tx) => {
-    await tx.delete(exercise).where(eq(exercise.workout_id, 'w1'));
-    await tx.delete(workout).where(eq(workout.id, 'w1'));
+    await tx.delete(excerpt).where(eq(excerpt.workbook_id, 'w1'));
+    await tx.delete(workbook).where(eq(workbook.id, 'w1'));
   });
-  await write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e2', workout_id: 'w1', name: 'box squat' }));
-  await write(phone.device, (tx) => tx.update(exercise).set({ name: 'front squat' }).where(eq(exercise.id, 'e2')));
-  expect(read(phone.storage).exercises).toEqual([
-    { id: 'e1', workout_id: 'w1', name: 'squat' },
-    { id: 'e2', workout_id: 'w1', name: 'front squat' },
+  await write(phone.device, (tx) => tx.insert(excerpt).values({ id: 'e2', workbook_id: 'w1', name: 'box stamp' }));
+  await write(phone.device, (tx) => tx.update(excerpt).set({ name: 'front stamp' }).where(eq(excerpt.id, 'e2')));
+  expect(read(phone.storage).excerpts).toEqual([
+    { id: 'e1', workbook_id: 'w1', name: 'stamp' },
+    { id: 'e2', workbook_id: 'w1', name: 'front stamp' },
   ]);
   await upload(space, tablet.device, devices);
-  expect(read(phone.storage).exercises).toEqual([]);
+  expect(read(phone.storage).excerpts).toEqual([]);
   expect(phone.device.private.pending()).toHaveLength(2);
   await upload(space, phone.device, devices);
 
-  expect(read(cloud)).toEqual({ workouts: [], exercises: [], sets: [] });
+  expect(read(cloud)).toEqual({ workbooks: [], excerpts: [], sets: [] });
   for (const { device, storage } of [phone, tablet]) {
     expect(device.private.pending()).toEqual([]);
     expect(read(storage)).toEqual(read(cloud));
@@ -225,17 +225,17 @@ test('composite foreign key modifies only one column (patch carries only changed
 });
 
 test('local write, replay, and cloud share row mutation logic: deleting parent offline cascades locally immediately; referencing missing parent rejected and rolled back', async () => {
-  const { phone } = await withWorkout();
-  await write(phone.device, (tx) => tx.insert(set).values({ id: 's1', exercise_id: 'e1' }));
-  await write(phone.device, (tx) => tx.delete(workout).where(eq(workout.id, 'w1')));
-  expect(read(phone.storage)).toEqual({ workouts: [], exercises: [], sets: [] });
-  expect(phone.device.private.pending().at(-1)?.changes).toEqual([{ op: 'del', table: 'workout', key: { id: 'w1' } }]);
+  const { phone } = await withWorkbook();
+  await write(phone.device, (tx) => tx.insert(set).values({ id: 's1', excerpt_id: 'e1' }));
+  await write(phone.device, (tx) => tx.delete(workbook).where(eq(workbook.id, 'w1')));
+  expect(read(phone.storage)).toEqual({ workbooks: [], excerpts: [], sets: [] });
+  expect(phone.device.private.pending().at(-1)?.changes).toEqual([{ op: 'del', table: 'workbook', key: { id: 'w1' } }]);
 
   const pending = phone.device.private.pending();
   await expect(
-    write(phone.device, (tx) => tx.insert(exercise).values({ id: 'e9', workout_id: 'gone', name: 'bench press' })),
-  ).rejects.toThrow('workout');
-  expect(read(phone.storage).exercises).toEqual([]);
+    write(phone.device, (tx) => tx.insert(excerpt).values({ id: 'e9', workbook_id: 'gone', name: 'brick wall' })),
+  ).rejects.toThrow('workbook');
+  expect(read(phone.storage).excerpts).toEqual([]);
   expect(phone.device.private.pending()).toEqual(pending);
 });
 
@@ -257,13 +257,13 @@ test('deep chain of self-references (one row per level, 20,000 levels): deleting
 });
 
 test('an app table referencing a synced row (REFERENCES) does not stop a pull deleting that row, and keeps its reference', async () => {
-  const space = new Space(cloudStorage(createWorkout), tables);
-  space.mutate((tx) => tx.insert(workoutRow, { id: 'w1', note: 'squat' }));
-  const storage = deviceStorage(createWorkout, 'CREATE TABLE remark (id TEXT PRIMARY KEY, workout_id TEXT REFERENCES workout (id))');
+  const space = new Space(cloudStorage(createWorkbook), tables);
+  space.mutate((tx) => tx.insert(workbookRow, { id: 'w1', note: 'stamp' }));
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE remark (id TEXT PRIMARY KEY, workbook_id TEXT REFERENCES workbook (id))');
   const device = new Device(storage, tables);
   await device.private.receive(pulled(space, device));
   storage.sql.exec("INSERT INTO remark VALUES ('r1', 'w1')");
-  space.mutate((tx) => tx.delete(workoutRow, { id: 'w1' }));
+  space.mutate((tx) => tx.delete(workbookRow, { id: 'w1' }));
   await device.private.receive(pulled(space, device));
-  expect([workouts(storage), storage.sql.exec('SELECT * FROM remark').toArray()]).toEqual([[], [{ id: 'r1', workout_id: 'w1' }]]);
+  expect([workbooks(storage), storage.sql.exec('SELECT * FROM remark').toArray()]).toEqual([[], [{ id: 'r1', workbook_id: 'w1' }]]);
 });

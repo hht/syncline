@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
 import { lease, Schedule } from '../../src/cloudflare/schedule.ts';
 import { fannedOut } from '../worker/test-shared.ts';
-import { alarmAfter, object, online, space, squat } from '../worker/test-space.ts';
+import { alarmAfter, object, online, space, stamp } from '../worker/test-space.ts';
 
 test('executes scheduled callback when due, multiplexes with exports, skips cancelled tasks, and rejects syncline: prefix and lone surrogates', async () => {
   const { name, phone } = await online(1);
@@ -14,7 +14,7 @@ test('executes scheduled callback when due, multiplexes with exports, skips canc
   await expect(() => object(name).remind('syncline:export:stats', Date.now())).rejects.toThrow('syncline:');
   // Stored as-is and read back replaced, such a name would never match its own row again.
   await expect(() => object(name).remind('cut\uD800', Date.now())).rejects.toThrow('well-formed');
-  phone.push(squat);
+  phone.push(stamp);
   await phone.next();
   expect(Number(await object(name).alarmAt()) - Date.now()).toBeLessThanOrEqual(60_000);
   await alarmAfter(object(name), 60_000);
@@ -92,7 +92,7 @@ test('unscheduling a task and scheduling it again for the same time in one turn 
 test('an actor reset during a chore keeps it scheduled: once the lease expires, the alarm runs it to completion', async () => {
   const { name, phone } = await online(1);
   await object(name).hangExports(true);
-  phone.push(squat);
+  phone.push(stamp);
   await phone.next();
   const running = alarmAfter(object(name), 60_000).catch(() => undefined);
   await new Promise((resolve) => setTimeout(resolve, 200));

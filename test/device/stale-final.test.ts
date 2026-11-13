@@ -4,7 +4,7 @@ import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import { program, pullOne, pullRest } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { failOnce, injectedError } from '../support/test-storage.ts';
-import { setup, workout } from './test-shared-mirror.ts';
+import { setup, workbook } from './test-shared-mirror.ts';
 
 // Shared pulls answered from cache may end in a stale final chunk, computed at a version earlier than the staged chunks: the device
 // stages it as an intermediate chunk and keeps pulling with a lower bound until it lands at a valid cloud version.
@@ -92,7 +92,7 @@ test('stale final chunk staged, a hint of a newer version, then a restart: the t
   await catalog.notified({ hint: space.head(), incarnation: space.round(0).incarnation }, false);
   expect(catalog.pullRequest()).toMatchObject({ cursor: boundary, atLeast: 6 });
   device.close();
-  const reopened = new Device(storage, [workout]).shared('catalog', [program]);
+  const reopened = new Device(storage, [workbook]).shared('catalog', [program]);
   await reopened.opened();
   expect(reopened.pullRequest()).toMatchObject({ cursor: boundary, atLeast: 5 });
   await reopened.notified({ hint: { version: 2, nonce: 1 }, incarnation: space.round(0).incarnation + 1 }, false);

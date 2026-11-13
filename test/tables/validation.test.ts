@@ -15,13 +15,13 @@ import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 type Settings = { unit: 'kg' | 'lb'; rest: number };
 
-const workout = sqliteTable('workout', {
+const workbook = sqliteTable('workbook', {
   id: text().primaryKey(),
   title: text().notNull(),
   kind: text({ enum: ['strength', 'cardio'] }),
   code: text({ length: 4 }),
   settings: text({ mode: 'json' }).$type<Settings>(),
-  reps: integer(),
+  runs: integer(),
   done: integer({ mode: 'boolean' }),
   startedAt: integer('started_at', { mode: 'timestamp' }),
   endedAt: integer('ended_at', { mode: 'timestamp_ms' }),
@@ -29,20 +29,20 @@ const workout = sqliteTable('workout', {
 });
 // Table in SQLite does not declare NOT NULL constraints: Drizzle schema is the source of truth.
 const create =
-  'CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, kind TEXT, code TEXT, settings TEXT, reps INTEGER, done INTEGER, started_at INTEGER, ended_at INTEGER, weight REAL)';
+  'CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, kind TEXT, code TEXT, settings TEXT, runs INTEGER, done INTEGER, started_at INTEGER, ended_at INTEGER, weight REAL)';
 
 // Integrator schema generated via Drizzle with customized JSON shape.
 const validation = new Map([
-  [workout, createSelectSchema(workout, { settings: z.object({ unit: z.enum(['kg', 'lb']), rest: z.int().nonnegative() }).nullable() })],
+  [workbook, createSelectSchema(workbook, { settings: z.object({ unit: z.enum(['kg', 'lb']), rest: z.int().nonnegative() }).nullable() })],
 ]);
 
 // Sets up cloud storage and two connected devices; cloud, phone, and optionally tablet carry validation schemas.
 async function withDevices({ schemaOnTablet = true } = {}) {
   const cloud = cloudStorage(create);
-  const space = new Space(cloud, [workout], { validation });
+  const space = new Space(cloud, [workbook], { validation });
   const install = async (deviceValidation: typeof validation | undefined) => {
     const storage = deviceStorage(create);
-    const device = new Device(storage, [workout], deviceValidation ? { validation: deviceValidation } : {});
+    const device = new Device(storage, [workbook], deviceValidation ? { validation: deviceValidation } : {});
     await device.private.receive(pulled(space, device));
     return { device, storage };
   };
@@ -51,7 +51,7 @@ async function withDevices({ schemaOnTablet = true } = {}) {
   return { cloud, space, phone, tablet, devices: [phone.device, tablet.device] };
 }
 
-const read = (storage: Storage) => drizzle(storage).select().from(workout).orderBy(workout.id).all();
+const read = (storage: Storage) => drizzle(storage).select().from(workbook).orderBy(workbook.id).all();
 
 const issuesOf = async (promise: Promise<unknown>) => {
   const error = await promise.then(
@@ -66,18 +66,18 @@ test('syncs every column type: round-trips values with matching decoded represen
   const { cloud, space, phone, tablet, devices } = await withDevices();
   const full = {
     id: 'w1',
-    title: 'squat',
+    title: 'stamp',
     kind: 'strength',
     code: 'SQ01',
     settings: { unit: 'kg', rest: 90 },
-    reps: 5,
+    runs: 5,
     done: true,
     startedAt: new Date('2026-10-18T03:00:00Z'),
     endedAt: new Date('2026-10-18T03:45:12.345Z'),
     weight: 102.5,
-  } satisfies typeof workout.$inferInsert;
-  const empty = { id: 'w2', title: 'bench press' };
-  await write(phone.device, (tx) => tx.insert(workout).values([full, empty]));
+  } satisfies typeof workbook.$inferInsert;
+  const empty = { id: 'w2', title: 'brick wall' };
+  await write(phone.device, (tx) => tx.insert(workbook).values([full, empty]));
   await upload(space, phone.device, devices);
 
   const expected = [
@@ -87,7 +87,7 @@ test('syncs every column type: round-trips values with matching decoded represen
       kind: null,
       code: null,
       settings: null,
-      reps: null,
+      runs: null,
       done: null,
       startedAt: null,
       endedAt: null,
@@ -103,27 +103,27 @@ test('rejects local writes violating column definitions and rolls back mutations
   const { phone } = await withDevices();
   const insert = phone.device.write(async (execute) =>
     execute(
-      "INSERT INTO workout (id, title, kind, code, settings, reps, done, weight) VALUES ('w1', NULL, 'yoga', 'SQUAT', '{bad', 'five', 2, 'heavy')",
+      "INSERT INTO workbook (id, title, kind, code, settings, runs, done, weight) VALUES ('w1', NULL, 'yoga', 'STAMP', '{bad', 'five', 2, 'heavy')",
       [],
     ),
   );
-  expect(await issuesOf(insert)).toEqual([['title'], ['kind'], ['code'], ['settings'], ['reps'], ['done'], ['weight']]);
+  expect(await issuesOf(insert)).toEqual([['title'], ['kind'], ['code'], ['settings'], ['runs'], ['done'], ['weight']]);
   expect(read(phone.storage)).toEqual([]);
   expect(phone.device.private.pending()).toEqual([]);
 });
 
 test('validates the complete row when updating a single column', async () => {
   const { phone } = await withDevices();
-  await write(phone.device, (tx) => tx.insert(workout).values({ id: 'w1', title: 'squat' }));
-  const update = phone.device.write(async (execute) => execute("UPDATE workout SET title = NULL WHERE id = 'w1'", []));
+  await write(phone.device, (tx) => tx.insert(workbook).values({ id: 'w1', title: 'stamp' }));
+  const update = phone.device.write(async (execute) => execute("UPDATE workbook SET title = NULL WHERE id = 'w1'", []));
   expect(await issuesOf(update)).toEqual([['title']]);
-  expect(read(phone.storage)).toMatchObject([{ title: 'squat' }]);
+  expect(read(phone.storage)).toMatchObject([{ title: 'stamp' }]);
 });
 
 test('validates rows against integrator Standard Schema, attaching field paths to validation issues', async () => {
   const { phone } = await withDevices();
   const insert = write(phone.device, (tx) =>
-    tx.insert(workout).values({ id: 'w1', title: 'squat', settings: { unit: 'st', rest: -1 } as unknown as Settings }),
+    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'st', rest: -1 } as unknown as Settings }),
   );
   expect(await issuesOf(insert)).toEqual([
     ['settings', 'unit'],
@@ -135,7 +135,7 @@ test('validates rows against integrator Standard Schema, attaching field paths t
 test('cloud re-validates pushes: rejects invalid mutations and advances client sequence number while device reverts local write', async () => {
   const { cloud, space, phone, tablet, devices } = await withDevices({ schemaOnTablet: false });
   await write(tablet.device, (tx) =>
-    tx.insert(workout).values({ id: 'w1', title: 'squat', settings: { unit: 'st' } as unknown as Settings }),
+    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'st' } as unknown as Settings }),
   );
   expect(read(tablet.storage)).toHaveLength(1);
   await upload(space, tablet.device, devices);
@@ -150,7 +150,7 @@ test('cloud re-validates pushes: rejects invalid mutations and advances client s
 test('cloud re-validates pushes: rejects mutations violating column definitions', async () => {
   const { cloud, space } = await withDevices();
   const poke = space.push([
-    { client: 'c1', id: 1, changes: [{ op: 'put', table: 'workout', row: { id: 'w1', title: 'squat', reps: 'five' } }] },
+    { client: 'c1', id: 1, changes: [{ op: 'put', table: 'workbook', row: { id: 'w1', title: 'stamp', runs: 'five' } }] },
   ]);
   expect(poke?.lmids).toEqual({ c1: 1 });
   expect(read(cloud)).toEqual([]);
@@ -160,12 +160,12 @@ test('rejects invalid server writes and rolls back transaction without committin
   const { cloud, space } = await withDevices();
   const mutate = async () =>
     space.mutate((tx) => {
-      tx.insert(workout, { id: 'w1', title: 'squat' });
-      tx.insert(workout, { id: 'w2', title: 'bench press', kind: 'yoga' as 'cardio' });
+      tx.insert(workbook, { id: 'w1', title: 'stamp' });
+      tx.insert(workbook, { id: 'w2', title: 'brick wall', kind: 'yoga' as 'cardio' });
     });
   expect(await issuesOf(mutate())).toEqual([['kind']]);
   expect(read(cloud)).toEqual([]);
-  expect(space.mutate((tx) => tx.insert(workout, { id: 'w3', title: 'deadlift' })).base?.version).toBe(0);
+  expect(space.mutate((tx) => tx.insert(workbook, { id: 'w3', title: 'doorbell' })).base?.version).toBe(0);
 });
 
 test('rejects unsyncable column types at device opening and cloud table creation', () => {
@@ -215,8 +215,8 @@ test('rejects foreign keys referencing tables outside this space sync definition
 
 test('requires Standard Schema validators to execute synchronously, rejecting Promises', async () => {
   const later = { '~standard': { version: 1 as const, vendor: 'test', validate: async (value: unknown) => ({ value }) } };
-  const device = new Device(deviceStorage(create), [workout], { validation: new Map([[workout, later]]) });
-  await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w1', title: 'squat' }))).rejects.toThrow('Promise');
+  const device = new Device(deviceStorage(create), [workbook], { validation: new Map([[workbook, later]]) });
+  await expect(write(device, (tx) => tx.insert(workbook).values({ id: 'w1', title: 'stamp' }))).rejects.toThrow('Promise');
 });
 
 // Test validator failing when title equals "bad".
@@ -240,9 +240,9 @@ test.each([
   ['Standard Schema issue contains isolated surrogate', () => ({ issues: [{ message: 'bad\uD800' }] }), undefined],
 ])('%s: aborts mutation and rolls back while allowing subsequent mutations', async (_, fail, message) => {
   const storage = deviceStorage(create);
-  const device = new Device(storage, [workout], { validation: new Map([[workout, failingOn(fail)]]) });
-  await expect(write(device, (tx) => tx.insert(workout).values({ id: 'w1', title: 'bad' }))).rejects.toThrow(message);
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w2', title: 'good' }));
+  const device = new Device(storage, [workbook], { validation: new Map([[workbook, failingOn(fail)]]) });
+  await expect(write(device, (tx) => tx.insert(workbook).values({ id: 'w1', title: 'bad' }))).rejects.toThrow(message);
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', title: 'good' }));
   expect(read(storage)).toMatchObject([{ id: 'w2' }]);
 });
 
@@ -254,17 +254,17 @@ test('converts Symbol keys in Standard Schema paths to string representations fo
       validate: () => ({ issues: [{ message: 'invalid', path: [Symbol('tag'), { key: 0 }] }] }),
     },
   };
-  const device = new Device(deviceStorage(create), [workout], { validation: new Map([[workout, symbolic]]) });
-  const error = await write(device, (tx) => tx.insert(workout).values({ id: 'w1', title: 'squat' })).catch((caught: unknown) => caught);
+  const device = new Device(deviceStorage(create), [workbook], { validation: new Map([[workbook, symbolic]]) });
+  const error = await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', title: 'stamp' })).catch((caught: unknown) => caught);
   expect(structuredClone((error as ValidationError).issues)).toEqual([{ path: ['Symbol(tag)', 0], message: 'invalid' }]);
 });
 
 test('rejects non-finite real numbers in local and server writes and rolls back mutations', async () => {
   const { phone, cloud, space } = await withDevices();
-  const insert = write(phone.device, (tx) => tx.insert(workout).values({ id: 'w9', title: 'squat', weight: Number.POSITIVE_INFINITY }));
+  const insert = write(phone.device, (tx) => tx.insert(workbook).values({ id: 'w9', title: 'stamp', weight: Number.POSITIVE_INFINITY }));
   expect(await issuesOf(insert)).toEqual([['weight']]);
   expect(read(phone.storage)).toEqual([]);
-  const mutate = async () => space.mutate((tx) => tx.insert(workout, { id: 'w9', title: 'squat', weight: Number.NEGATIVE_INFINITY }));
+  const mutate = async () => space.mutate((tx) => tx.insert(workbook, { id: 'w9', title: 'stamp', weight: Number.NEGATIVE_INFINITY }));
   expect(await issuesOf(mutate())).toEqual([['weight']]);
   expect(read(cloud)).toEqual([]);
 });

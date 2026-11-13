@@ -7,7 +7,7 @@ import { setup as catalog } from './device/test-shared-mirror.ts';
 import { program, pullRest } from './support/test-catalog.ts';
 import { snapshot, synced } from './support/test-counter.ts';
 import { Device } from './support/test-device.ts';
-import { pulled, putWorkout, unchunked, upload } from './support/test-schema.ts';
+import { pulled, putWorkbook, unchunked, upload } from './support/test-schema.ts';
 import { everyStatementFailing, type Scenario } from './support/test-statement-faults.ts';
 import { cloudStorage, deviceStorage } from './support/test-storage.ts';
 
@@ -17,7 +17,7 @@ import { cloudStorage, deviceStorage } from './support/test-storage.ts';
 // reported; a step that throws is retried, and every run ends where the run without faults ends: a fault leaves no partial effects, loses
 // nothing, and stalls nothing.
 
-const workout = sqliteTable('workout', { id: text().primaryKey(), note: text(), reps: integer() });
+const workbook = sqliteTable('workbook', { id: text().primaryKey(), note: text(), runs: integer() });
 const later = sqliteTable('later', { id: text().primaryKey(), n: integer() });
 const putLater = (id: string, n: unknown): Op => ({ op: 'put', table: 'later', key: { id }, row: { id, n } });
 const rows = (storage: { sql: Scenario['storage']['sql'] }, table: string) =>
@@ -28,13 +28,18 @@ const unknown = (storage: Scenario['storage']) =>
 test('a chunked pull dropping columns, ranges, and whole tables, staged and into shadow tables, with values that fit no local column', async () => {
   const { failed, landed } = await everyStatementFailing(async () => {
     const storage = deviceStorage(
-      'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT',
+      'CREATE TABLE workbook (id TEXT PRIMARY KEY NOT NULL, note TEXT, runs INTEGER) STRICT',
       'CREATE TABLE later (id TEXT PRIMARY KEY, n INTEGER) STRICT',
       'CREATE INDEX later_n ON later (n)',
     );
-    const mirror = new Device(storage, [workout, later]).private;
+    const mirror = new Device(storage, [workbook, later]).private;
     const base = { version: 1, nonce: 1 };
-    const first = [putWorkout('a', 'one', { reps: 'bad' }), putWorkout('b', 'two', { x: 1 }), putWorkout('c', 'three'), putLater('a', 1)];
+    const first = [
+      putWorkbook('a', 'one', { runs: 'bad' }),
+      putWorkbook('b', 'two', { x: 1 }),
+      putWorkbook('c', 'three'),
+      putLater('a', 1),
+    ];
     await mirror.receive({ base: null, cookie: base, lmids: {}, patch: [{ op: 'clear' }, ...first, putLater('b', 2)] });
     const range = (after?: string, until?: string) => ({
       key: ['id'],
@@ -42,11 +47,11 @@ test('a chunked pull dropping columns, ranges, and whole tables, staged and into
       ...(until && { until: { id: until } }),
     });
     const chunks: Op[][] = [
-      [putWorkout('d', 'four', { reps: 'bad', x: 2 }), { op: 'drop', table: 'workout', columns: ['reps', 'x'] }, putLater('c', 3)],
-      [{ op: 'drop', table: 'workout', range: range('a', 'c') }, putWorkout('b', 'two again', { reps: 'bad' })],
+      [putWorkbook('d', 'four', { runs: 'bad', x: 2 }), { op: 'drop', table: 'workbook', columns: ['runs', 'x'] }, putLater('c', 3)],
+      [{ op: 'drop', table: 'workbook', range: range('a', 'c') }, putWorkbook('b', 'two again', { runs: 'bad' })],
       [{ op: 'drop', table: 'later', columns: ['n'] }, { op: 'drop', table: 'later', range: range(undefined, 'b') }, putLater('a', 9)],
       // Dropping the whole table moves the rest of the pull into a shadow table.
-      [{ op: 'drop', table: 'later' }, putLater('z', 5), { op: 'del', table: 'workout', key: { id: 'c' } }],
+      [{ op: 'drop', table: 'later' }, putLater('z', 5), { op: 'del', table: 'workbook', key: { id: 'c' } }],
       [putLater('y', 'bad'), putLater('x', 4), putLater('w', 6), { op: 'del', table: 'later', key: { id: 'w' } }],
       [{ op: 'drop', table: 'later', range: range('x') }, { op: 'drop', table: 'later', columns: ['n'] }, putLater('v', 'bad')],
     ];
@@ -57,14 +62,14 @@ test('a chunked pull dropping columns, ranges, and whole tables, staged and into
       () =>
         mirror.receive({ base, cursor: `n${chunks.length - 1}`, cookie: { version: 2, nonce: 2 }, lmids: {}, patch: [putLater('u', 7)] }),
     ];
-    return { storage, steps, state: () => [rows(storage, 'workout'), rows(storage, 'later'), unknown(storage), mirror.cookie()] };
+    return { storage, steps, state: () => [rows(storage, 'workbook'), rows(storage, 'later'), unknown(storage), mirror.cookie()] };
   });
   expect(failed).toBeGreaterThan(0);
   // Dropped columns end null, rows put again after a drop land, and values no local column fits wait in unknown rows.
   expect(landed).toEqual([
     [
-      { id: 'a', note: 'one', reps: null, _extra: null },
-      { id: 'd', note: 'four', reps: null, _extra: null },
+      { id: 'a', note: 'one', runs: null, _extra: null },
+      { id: 'd', note: 'four', runs: null, _extra: null },
     ],
     [
       { id: 'u', n: 7, _extra: null },
@@ -72,7 +77,7 @@ test('a chunked pull dropping columns, ranges, and whole tables, staged and into
     ],
     [
       { name: 'later', key: '{"id":"v"}', row: '{"id":"v","n":"bad"}' },
-      { name: 'workout', key: '{"id":"b"}', row: '{"id":"b","note":"two again","reps":"bad"}' },
+      { name: 'workbook', key: '{"id":"b"}', row: '{"id":"b","note":"two again","runs":"bad"}' },
     ],
     { version: 2, nonce: 2 },
   ]);
@@ -80,34 +85,34 @@ test('a chunked pull dropping columns, ranges, and whole tables, staged and into
 
 const plan = sqliteTable('plan', { id: text().primaryKey(), title: text() });
 const tag = sqliteTable('tag', { id: text().primaryKey() });
-const lagging = sqliteTable('workout', { id: text().primaryKey(), note: text() });
+const lagging = sqliteTable('workbook', { id: text().primaryKey(), note: text() });
 
-/** A device on a release without reps and plan, holding a pending write, opened by the release declaring them and turning tag local-only. */
+/** A device on a release without runs and plan, holding a pending write, opened by the release declaring them and turning tag local-only. */
 async function upgrading(): Promise<Scenario> {
   const cloud = cloudStorage(
-    'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)',
+    'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER)',
     'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
     'CREATE TABLE tag (id TEXT PRIMARY KEY)',
   );
   // 'heavy' fits no INTEGER column of a STRICT table: it stays in _extra when the column arrives.
-  cloud.sql.exec("INSERT INTO workout VALUES ('w1', 'squat', 5), ('w2', 'bench', 'heavy')");
+  cloud.sql.exec("INSERT INTO workbook VALUES ('w1', 'stamp', 5), ('w2', 'brick', 'heavy')");
   cloud.sql.exec("INSERT INTO plan VALUES ('p1', 'base')");
   cloud.sql.exec("INSERT INTO tag VALUES ('t1')");
-  const space = new Space(cloud, [workout, plan, tag]);
+  const space = new Space(cloud, [workbook, plan, tag]);
   const storage = deviceStorage(
-    'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT) STRICT',
+    'CREATE TABLE workbook (id TEXT PRIMARY KEY NOT NULL, note TEXT) STRICT',
     'CREATE TABLE tag (id TEXT PRIMARY KEY)',
   );
   const older = new Device(storage, [lagging, tag]);
   await older.private.receive(pulled(space, older));
-  await older.write(async (execute) => execute("UPDATE workout SET note = 'deep squat' WHERE id = 'w1'", []));
+  await older.write(async (execute) => execute("UPDATE workbook SET note = 'deep stamp' WHERE id = 'w1'", []));
   older.close();
-  storage.sql.exec('ALTER TABLE workout ADD COLUMN reps INTEGER');
+  storage.sql.exec('ALTER TABLE workbook ADD COLUMN runs INTEGER');
   storage.sql.exec('CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)');
   let device: Device | undefined;
   const steps = [
     async () => {
-      device = new Device(storage, [workout, plan], { owner: 'u1', localOnly: [tag] });
+      device = new Device(storage, [workbook, plan], { owner: 'u1', localOnly: [tag] });
     },
     async () => {
       const opened = device as Device;
@@ -116,10 +121,10 @@ async function upgrading(): Promise<Scenario> {
     },
   ];
   const state = () => [
-    ...['workout', 'plan', 'tag', '_syncline_owner'].map((table) => rows(storage, table)),
+    ...['workbook', 'plan', 'tag', '_syncline_owner'].map((table) => rows(storage, table)),
     unknown(storage),
     device?.private.pendingCount(),
-    rows(cloud, 'workout'),
+    rows(cloud, 'workbook'),
   ];
   return { storage, steps, state };
 }
@@ -127,11 +132,11 @@ async function upgrading(): Promise<Scenario> {
 test('opening a new release over a lagging device with a pending write: columns restored from _extra, tables restored from unknown rows, a synced table turned local-only, and a first owner', async () => {
   const { failed, landed } = await everyStatementFailing(upgrading);
   expect(failed).toBeGreaterThan(0);
-  // The pending write uploads; reps returns from _extra unless it fits no INTEGER column; plan returns from unknown rows.
+  // The pending write uploads; runs returns from _extra unless it fits no INTEGER column; plan returns from unknown rows.
   expect(landed).toEqual([
     [
-      { id: 'w1', note: 'deep squat', _extra: null, reps: 5 },
-      { id: 'w2', note: 'bench', _extra: '{"reps":"heavy"}', reps: null },
+      { id: 'w1', note: 'deep stamp', _extra: null, runs: 5 },
+      { id: 'w2', note: 'brick', _extra: '{"runs":"heavy"}', runs: null },
     ],
     [{ id: 'p1', title: 'base', _extra: null }],
     [{ id: 't1', _extra: null }],
@@ -139,42 +144,42 @@ test('opening a new release over a lagging device with a pending write: columns 
     [],
     0,
     [
-      { id: 'w1', note: 'deep squat', reps: 5 },
-      { id: 'w2', note: 'bench', reps: 'heavy' },
+      { id: 'w1', note: 'deep stamp', runs: 5 },
+      { id: 'w2', note: 'brick', runs: 'heavy' },
     ],
   ]);
 });
 
 test('a local write updating a synced row and inserting another', async () => {
   const { failed, landed } = await everyStatementFailing(async () => {
-    const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT');
-    const device = new Device(storage, [workout]);
+    const storage = deviceStorage('CREATE TABLE workbook (id TEXT PRIMARY KEY NOT NULL, note TEXT, runs INTEGER) STRICT');
+    const device = new Device(storage, [workbook]);
     await device.private.receive({
       base: null,
       cookie: { version: 1, nonce: 1 },
       lmids: {},
-      patch: [{ op: 'clear' }, putWorkout('a', 'one')],
+      patch: [{ op: 'clear' }, putWorkbook('a', 'one')],
     });
     const steps = [
       () =>
         device.write(async (execute) => {
-          execute("UPDATE workout SET reps = 5 WHERE id = 'a'", []);
-          execute("INSERT INTO workout (id, note) VALUES ('b', 'two')", []);
+          execute("UPDATE workbook SET runs = 5 WHERE id = 'a'", []);
+          execute("INSERT INTO workbook (id, note) VALUES ('b', 'two')", []);
         }),
     ];
-    const state = () => ({ workouts: rows(storage, 'workout'), pending: device.private.pending().map(({ changes }) => changes) });
+    const state = () => ({ workbooks: rows(storage, 'workbook'), pending: device.private.pending().map(({ changes }) => changes) });
     return { storage, steps, state };
   });
   expect(failed).toBeGreaterThan(0);
   expect(landed).toEqual({
-    workouts: [
-      { id: 'a', note: 'one', reps: 5, _extra: null },
-      { id: 'b', note: 'two', reps: null, _extra: null },
+    workbooks: [
+      { id: 'a', note: 'one', runs: 5, _extra: null },
+      { id: 'b', note: 'two', runs: null, _extra: null },
     ],
     pending: [
       [
-        { op: 'put', table: 'workout', row: { id: 'b', note: 'two', reps: null } },
-        { op: 'patch', table: 'workout', row: { id: 'a', reps: 5 } },
+        { op: 'put', table: 'workbook', row: { id: 'b', note: 'two', runs: null } },
+        { op: 'patch', table: 'workbook', row: { id: 'a', runs: 5 } },
       ],
     ],
   });
@@ -183,38 +188,38 @@ test('a local write updating a synced row and inserting another', async () => {
 /** A device holding rows pulled for one user, a table no release declares any more, and a local-only row, opened for another user. */
 async function switching(): Promise<Scenario> {
   const cloud = cloudStorage(
-    'CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER)',
+    'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER)',
     'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
   );
-  cloud.sql.exec("INSERT INTO workout VALUES ('w1', 'squat', 5)");
+  cloud.sql.exec("INSERT INTO workbook VALUES ('w1', 'stamp', 5)");
   cloud.sql.exec("INSERT INTO plan VALUES ('p1', 'base')");
   const storage = deviceStorage(
-    'CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT',
+    'CREATE TABLE workbook (id TEXT PRIMARY KEY NOT NULL, note TEXT, runs INTEGER) STRICT',
     'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
     'CREATE TABLE tag (id TEXT PRIMARY KEY)',
   );
-  const first = new Device(storage, [workout, plan], { owner: 'u1', localOnly: [tag] });
-  await first.private.receive(pulled(new Space(cloud, [workout, plan]), first));
+  const first = new Device(storage, [workbook, plan], { owner: 'u1', localOnly: [tag] });
+  await first.private.receive(pulled(new Space(cloud, [workbook, plan]), first));
   storage.sql.exec("INSERT INTO tag VALUES ('t1')");
   first.close();
   let device: Device | undefined;
   const steps = [
     async () => {
-      device = new Device(storage, [workout], { owner: 'u2', localOnly: [tag] });
+      device = new Device(storage, [workbook], { owner: 'u2', localOnly: [tag] });
     },
     async () => {
       const opened = device as Device;
-      await opened.private.receive(pulled(new Space(cloud, [workout]), opened));
+      await opened.private.receive(pulled(new Space(cloud, [workbook]), opened));
     },
   ];
-  const state = () => ['workout', 'plan', 'tag', '_syncline_owner'].map((table) => rows(storage, table));
+  const state = () => ['workbook', 'plan', 'tag', '_syncline_owner'].map((table) => rows(storage, table));
   return { storage, steps, state };
 }
 
 test('opening for another user: rows pulled for the previous one, a table no release declares any more, and local-only rows wiped', async () => {
   const { failed, landed } = await everyStatementFailing(switching);
   expect(failed).toBeGreaterThan(0);
-  expect(landed).toEqual([[{ id: 'w1', note: 'squat', reps: 5, _extra: null }], [], [], [{ space: '', owner: 'u2' }]]);
+  expect(landed).toEqual([[{ id: 'w1', note: 'stamp', runs: 5, _extra: null }], [], [], [{ space: '', owner: 'u2' }]]);
 });
 
 /** Verifies, pulling the ranges a mismatch asks for, until a verification passes. */
@@ -259,16 +264,16 @@ test('a shared space downloading, then landing a published row', async () => {
 
 test('reading which tables a query reads', async () => {
   const { failed, landed } = await everyStatementFailing(async () => {
-    const storage = deviceStorage('CREATE TABLE workout (id TEXT PRIMARY KEY NOT NULL, note TEXT, reps INTEGER) STRICT');
-    const device = new Device(storage, [workout]);
+    const storage = deviceStorage('CREATE TABLE workbook (id TEXT PRIMARY KEY NOT NULL, note TEXT, runs INTEGER) STRICT');
+    const device = new Device(storage, [workbook]);
     let tables: string[] = [];
     const steps = [
       async () => {
-        tables = device.tablesOf('SELECT note FROM workout');
+        tables = device.tablesOf('SELECT note FROM workbook');
       },
     ];
     return { storage, steps, state: () => tables };
   });
   expect(failed).toBeGreaterThan(0);
-  expect(landed).toEqual(['workout']);
+  expect(landed).toEqual(['workbook']);
 });

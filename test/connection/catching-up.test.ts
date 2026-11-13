@@ -3,7 +3,7 @@ import { receiveTimeout } from '../../src/expo/shell.ts';
 import type { SyncStatus } from '../../src/expo/status.ts';
 import { flush, withFakeTimers } from '../support/test-drive.ts';
 import { captureReported } from '../support/test-errors.ts';
-import { workout, write } from '../support/test-schema.ts';
+import { workbook, write } from '../support/test-schema.ts';
 import { failOnce, injectedError } from '../support/test-storage.ts';
 import { linked, reconnect } from './test-connection.ts';
 
@@ -17,7 +17,7 @@ async function hinted({
   const harness = await linked(options);
   const seen: SyncStatus[] = [];
   harness.connection.onStatus((status) => seen.push(status));
-  harness.space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
+  harness.space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }));
   arm?.(harness);
   harness.message(JSON.stringify({ hint: harness.space.head() }));
   await flush();
@@ -112,7 +112,7 @@ test('a poke landing while a pull is in flight leaves its response stale: discar
     const seen: SyncStatus[] = [];
     connection.onStatus((status) => seen.push(status));
     // Once the pull request is answered, a write on the cloud reaches the device as a poke chaining onto its cookie
-    during = () => message(JSON.stringify(space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }))));
+    during = () => message(JSON.stringify(space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }))));
     // A hint at the version the device holds still makes it pull
     message(JSON.stringify({ hint: space.head() }));
     await flush();
@@ -129,7 +129,7 @@ test('a link closing while its pull waits for a token leaves no timer behind onc
     const { tokens, token } = hanging();
     const harness = await linked({ token });
     const steady = vi.getTimerCount();
-    harness.space.mutate((tx) => tx.insert(workout, { id: 'w2', note: 'bench' }));
+    harness.space.mutate((tx) => tx.insert(workbook, { id: 'w2', note: 'brick' }));
     harness.message(JSON.stringify({ hint: harness.space.head() }));
     await flush();
     vi.advanceTimersByTime(0);
@@ -153,7 +153,7 @@ test.for([
       const harness = await linked();
       const { space, storage, device, connection, sockets, message } = harness;
       const reported = captureReported();
-      await write(device, (tx) => tx.insert(workout).values({ id: 'w2', note: 'bench' }));
+      await write(device, (tx) => tx.insert(workbook).values({ id: 'w2', note: 'brick' }));
       await flush();
       // The cloud executes the push but its confirmation reaches the device only through a pull
       harness.executedElsewhere();

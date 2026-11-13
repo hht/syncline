@@ -4,7 +4,7 @@ import { parsePullBody, parsePullRequest, pullURL } from '../../src/protocol/pul
 // Pull requests: shared space requests are encoded in the URL, private space requests in POST bodies, both validated at cloud boundaries.
 
 test('parses private space pull bodies and rejects duplicate tables, non-objects, empty table names, or unrepresentable bounds in ranges', () => {
-  const ranges = [{ table: 'set', after: { workoutId: 'w1', index: 0 } }, { table: 'workout', until: { id: 'w4' } }, { table: 'gone' }];
+  const ranges = [{ table: 'set', after: { workbookId: 'w1', index: 0 } }, { table: 'workbook', until: { id: 'w4' } }, { table: 'gone' }];
   const request = {
     cookie: { version: 3, nonce: 7 },
     cursor: 'c',

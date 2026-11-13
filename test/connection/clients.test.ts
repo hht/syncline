@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import { Device } from '../support/test-device.ts';
 import { drain, flush } from '../support/test-drive.ts';
-import { createWorkout, serving, tables, workout, workouts, write } from '../support/test-schema.ts';
+import { createWorkbook, serving, tables, workbook, workbooks, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 import { Connection } from '../support/test-sync.ts';
 
@@ -12,7 +12,7 @@ import { Connection } from '../support/test-sync.ts';
 
 /** Connects a device to a space with an optional limit per chunk and message, tracking connection URLs. */
 function connected(device: Device, limit?: number) {
-  const cloud = cloudStorage(createWorkout);
+  const cloud = cloudStorage(createWorkbook);
   const space = new Space(cloud, tables);
   const { network } = serving(space, limit);
   const addresses: string[] = [];
@@ -26,43 +26,43 @@ function connected(device: Device, limit?: number) {
 }
 
 test('handles 200 launches with pending writes (200 clients): pulls and connects, pushes and confirms all, URL has version and cookie', async () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   let device = new Device(storage, tables);
   for (let launch = 0; launch < 200; launch += 1) {
     device = new Device(storage, tables);
-    await write(device, (tx) => tx.insert(workout).values({ id: `w${launch}`, note: String(launch) }));
+    await write(device, (tx) => tx.insert(workbook).values({ id: `w${launch}`, note: String(launch) }));
   }
   expect(device.private.pullRequest().clients).toHaveLength(200);
   const { cloud, network, connection, addresses } = connected(device);
   connection.start();
   await drain(network, { advance: false });
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(cloud)).toHaveLength(200);
+  expect(workbooks(cloud)).toHaveLength(200);
   expect(addresses.length).toBeGreaterThan(0);
   for (const address of addresses) expect([...new URL(address).searchParams.keys()]).toEqual(['v', 'cookie']);
   connection.stop();
 });
 
 test('reconnect catch-up confirms applied mutations by cookie without re-executing when disconnected before poke delivery', async () => {
-  const device = new Device(deviceStorage(createWorkout), tables);
+  const device = new Device(deviceStorage(createWorkbook), tables);
   const { cloud, network, connection } = connected(device);
   connection.start();
   await drain(network, { advance: false });
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', note: 'squat' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', note: 'stamp' }));
   await flush();
   // Mutation applied on server; disconnect while confirmation poke is in flight.
   network.deliver();
-  expect(workouts(cloud)).toHaveLength(1);
+  expect(workbooks(cloud)).toHaveLength(1);
   network.disconnect(0);
   expect(device.private.pending()).toHaveLength(1);
   await drain(network);
   expect(device.private.pending()).toEqual([]);
-  expect(workouts(cloud)).toEqual([expect.objectContaining({ id: 'w1', note: 'squat' })]);
+  expect(workbooks(cloud)).toEqual([expect.objectContaining({ id: 'w1', note: 'stamp' })]);
   connection.stop();
 });
 
 test('falls back to hint and HTTP pull when catch-up poke exceeds message size limit due to 200 client confirmations', async () => {
-  const storage = deviceStorage(createWorkout);
+  const storage = deviceStorage(createWorkbook);
   const device = new Device(storage, tables);
   const limit = 4000;
   const { space, network, connection } = connected(device, limit);
@@ -71,11 +71,11 @@ test('falls back to hint and HTTP pull when catch-up poke exceeds message size l
   connection.stop();
   const cookie = device.private.cookie();
   for (let index = 0; index < 200; index += 1)
-    space.push([{ client: crypto.randomUUID(), id: 1, changes: [{ op: 'put', table: 'workout', row: { id: `w${index}`, note: null } }] }]);
+    space.push([{ client: crypto.randomUUID(), id: 1, changes: [{ op: 'put', table: 'workbook', row: { id: `w${index}`, note: null } }] }]);
   expect(JSON.stringify(space.pull({ cookie }, limit, true)).length).toBeGreaterThan(limit);
   connection.start();
   await drain(network);
   expect(device.private.cookie()).toEqual(space.head());
-  expect(workouts(storage)).toHaveLength(200);
+  expect(workbooks(storage)).toHaveLength(200);
   connection.stop();
 });

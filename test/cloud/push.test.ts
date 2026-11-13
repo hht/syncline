@@ -62,7 +62,7 @@ test('value cannot fit cloud table (type mismatch across ends, single value exce
     changes: [{ op: 'put', table: 'note', row: { id: client, body: value } }],
   });
 
-  const poke = space.push([body('c1', 'squat'), body('c2', '1'.repeat(3_000_000)), put('c3', 1)]);
+  const poke = space.push([body('c1', 'stamp'), body('c2', '1'.repeat(3_000_000)), put('c3', 1)]);
   expect(poke?.lmids).toEqual({ c1: 1, c2: 1, c3: 1 });
   expect(space.held().map(({ client, reason }) => [client, reason])).toEqual([
     ['c1', expect.stringContaining('cannot store TEXT value in INTEGER column')],

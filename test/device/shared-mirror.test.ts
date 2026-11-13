@@ -8,7 +8,7 @@ import { createProgram, program, pullOne, pullRest, viewer } from '../support/te
 import { Device } from '../support/test-device.ts';
 import { write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage, failOnce, injectedError } from '../support/test-storage.ts';
-import { buckets, createWorkout, setup, workout } from './test-shared-mirror.ts';
+import { buckets, createWorkbook, setup, workbook } from './test-shared-mirror.ts';
 
 // Shared spaces on device: same database and queue as private space, read-only; pulled chunks may be stale copies from cache,
 // final chunk takes effect only if seen is no earlier than staged chunks.
@@ -131,15 +131,15 @@ test('no interference with private space: shared space does not touch pending wr
   await pullRest(catalog, space);
   const changed: string[][] = [];
   device.onChange((tables) => changed.push([...tables]));
-  await write(device, (tx) => tx.insert(workout).values({ id: 'w1', program_id: 'p1' }));
+  await write(device, (tx) => tx.insert(workbook).values({ id: 'w1', program_id: 'p1' }));
   await catalog.receive(publish('p2'));
   expect(device.private.pending()).toHaveLength(1);
-  expect(changed).toEqual([['workout'], ['program']]);
+  expect(changed).toEqual([['workbook'], ['program']]);
 
   await catalog.resync();
   expect(programs()).toHaveLength(2);
   expect(catalog.behind()).toBe(true);
-  expect(drizzle(storage).select().from(workout).all()).toEqual([{ id: 'w1', program_id: 'p1' }]);
+  expect(drizzle(storage).select().from(workbook).all()).toEqual([{ id: 'w1', program_id: 'p1' }]);
   expect(device.private.pending()).toHaveLength(1);
   expect(() => device.shared('again', [program])).toThrow('same name as an existing synced');
 });
@@ -157,12 +157,12 @@ test('error mid-write when staging a chunk: intermediate chunk completely droppe
 });
 
 test('opening shared space while local write in progress: table creation and migration queued after it, table persists even if write rolls back', async () => {
-  const storage = deviceStorage(createWorkout);
-  const device = new Device(storage, [workout]);
+  const storage = deviceStorage(createWorkbook);
+  const device = new Device(storage, [workbook]);
   const { promise: failing, resolve: fail } = Promise.withResolvers<void>();
   const { promise: started, resolve: start } = Promise.withResolvers<void>();
   const writing = device.write(async (execute) => {
-    await execute("INSERT INTO workout (id) VALUES ('w1')", []);
+    await execute("INSERT INTO workbook (id) VALUES ('w1')", []);
     start();
     await failing;
     throw new Error('write failed');
@@ -176,7 +176,7 @@ test('opening shared space while local write in progress: table creation and mig
 });
 
 test('opening duplicate instances of same shared space: throws (both write to same cookie and stage, two connections corrupt each other)', async () => {
-  const device = new Device(deviceStorage(createWorkout), [workout]);
+  const device = new Device(deviceStorage(createWorkbook), [workbook]);
   await device.shared('catalog', [program]).opened();
   expect(() => device.shared('catalog', [sqliteTable('plan', { id: text().primaryKey() })])).toThrow('already open');
 });
@@ -275,13 +275,13 @@ test('an app update adding a column to a shared table mid-download discards the 
     shared: { buckets },
   });
   for (const id of ['p1', 'p2', 'p3']) space.mutate((tx) => tx.upsert(noted, { id, status: 'published', note: `${id} note` }), 0);
-  const storage = deviceStorage(createWorkout);
-  const older = new Device(storage, [workout]);
+  const storage = deviceStorage(createWorkbook);
+  const older = new Device(storage, [workbook]);
   const catalog = older.shared('catalog', [program]);
   expect(await catalog.receive(pullOne(space, catalog.pullRequest()))).toBe(true);
   expect(catalog.staging()).toBe(true);
   older.close();
-  const updated = new Device(storage, [workout]).shared('catalog', [noted]);
+  const updated = new Device(storage, [workbook]).shared('catalog', [noted]);
   await updated.opened();
   expect(updated.staging()).toBe(false);
   await pullRest(updated, space);

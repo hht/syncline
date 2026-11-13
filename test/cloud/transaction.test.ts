@@ -15,17 +15,17 @@ const item = sqliteTable('item', { id: integer().primaryKey(), name: text() });
 test('server write passes string to integer primary key: records stored number in commits, update matches by number, and poke emits single row', () => {
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
   const base = space.head();
-  space.mutate((tx) => tx.insert(item, { id: '5' as never, name: 'squat' }));
-  space.mutate((tx) => tx.update(item, { id: 5, name: 'deadlift' }));
+  space.mutate((tx) => tx.insert(item, { id: '5' as never, name: 'stamp' }));
+  space.mutate((tx) => tx.update(item, { id: 5, name: 'doorbell' }));
   const { patch } = pushedSince(space, base);
-  expect(patch).toEqual([{ op: 'put', table: 'item', key: { id: 5 }, row: { id: 5, name: 'deadlift' } }]);
+  expect(patch).toEqual([{ op: 'put', table: 'item', key: { id: 5 }, row: { id: 5, name: 'doorbell' } }]);
 });
 
 test('server write reuses the same object across deletions: queued deletions snapshot keys at call time and delete all rows', () => {
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
   space.mutate((tx) => {
-    tx.insert(item, { id: 1, name: 'squat' });
-    tx.insert(item, { id: 2, name: 'deadlift' });
+    tx.insert(item, { id: 1, name: 'stamp' });
+    tx.insert(item, { id: 2, name: 'doorbell' });
   });
   const base = space.head();
   space.mutate((tx) => {
@@ -43,13 +43,13 @@ test('server write reuses the same object across deletions: queued deletions sna
 
 test.for(['update', 'upsert'] as const)('a server %s giving only the primary key touches the row, so devices receive it again', (write) => {
   const space = new Space(cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)'), [item]);
-  space.mutate((tx) => tx.insert(item, { id: 1, name: 'squat' }));
+  space.mutate((tx) => tx.insert(item, { id: 1, name: 'stamp' }));
   const base = space.head();
   space.mutate((tx) => tx[write](item, { id: 1 }));
-  expect(pushedSince(space, base).patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, name: 'squat' } }]);
+  expect(pushedSince(space, base).patch).toEqual([{ op: 'put', table: 'item', key: { id: 1 }, row: { id: 1, name: 'stamp' } }]);
 });
 
-test.for([{ name: 'squat' }, { id: null, name: 'squat' }])(
+test.for([{ name: 'stamp' }, { id: null, name: 'stamp' }])(
   'a server write without its primary key (%o) throws and writes nothing, rather than letting SQLite assign a rowid devices never learn',
   (row) => {
     const storage = cloudStorage('CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT)');
