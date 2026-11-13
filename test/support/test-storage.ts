@@ -1,5 +1,5 @@
 import sqlite3InitModule, { type Database } from '@sqlite.org/sqlite-wasm';
-import { valueBytes } from '../../src/protocol/limits.ts';
+import { valueBytes } from '../../src/sqlite/storage.ts';
 import { restoredRustStorage, rustStorage } from './test-rust.ts';
 import { sqliteWasmStorage } from './test-sqlite-wasm.ts';
 

@@ -2,8 +2,8 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import type { BucketRules } from '../../src/cloud/buckets.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { valueBytes, valueChars } from '../../src/protocol/limits.ts';
 import { type Cookie, chunkLimit, socketLimit } from '../../src/protocol/messages.ts';
+import { valueBytes, valueChars } from '../../src/sqlite/storage.ts';
 import { subscribed } from '../support/test-cabinet.ts';
 import { cloudStorage, measureReads } from '../support/test-storage.ts';
 

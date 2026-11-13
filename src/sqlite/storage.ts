@@ -16,6 +16,17 @@ export type Storage = {
 export type CloudStorage = Storage & { sql: { readonly databaseSize: number } };
 
 /**
+ * Maximum byte length of a single string, BLOB, or table row in Durable Object SQL storage.
+ * Values stored by Syncline (a row, parameter, or commit log entry) derive from this ceiling; devices hold the same number and reject a
+ * local write whose synced columns approach it, before upload rather than being held on the server.
+ * @see https://developers.cloudflare.com/durable-objects/platform/limits/
+ */
+export const valueBytes = 2_000_000;
+
+/** Maximum chunk size in UTF-16 code units when slicing values, leaving headroom below valueBytes. */
+export const valueChars = valueBytes / 4;
+
+/**
  * Permanent write rejection error.
  * Signals that a mutation failed validation, foreign-key constraints, or schema checks,
  * distinguishing application write rejections from transient database failures.

@@ -1,17 +1,6 @@
+import { valueBytes } from '../sqlite/storage.ts';
+
 // Resource and payload limits shared across device and cloud, bounding per-request and per-space work.
-
-/**
- * Maximum SQL storage value size in a Durable Object.
- * Values stored by Syncline (a row, parameter, or commit log entry) derive from this ceiling.
- * Shared between device and cloud so local writes reject oversized values before upload rather than being held on the server.
- * @see https://developers.cloudflare.com/durable-objects/platform/limits/
- */
-
-/** Maximum byte length of a single string, BLOB, or table row. */
-export const valueBytes = 2_000_000;
-
-/** Maximum chunk size in UTF-16 code units when slicing values, leaving headroom below valueBytes. */
-export const valueChars = valueBytes / 4;
 
 /**
  * Maximum UTF-8 byte length of a synced table primary key serialized as JSON.

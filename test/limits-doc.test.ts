@@ -16,8 +16,6 @@ import {
   sharedWriteRows,
   subscriptionBytes,
   tableNameChars,
-  valueBytes,
-  valueChars,
   writeBytes,
   writeKeyBytes,
   writeRows,
@@ -34,6 +32,7 @@ import {
   unsupportedMessage,
 } from '../src/protocol/messages.ts';
 import { versionMismatch } from '../src/protocol/version.ts';
+import { valueBytes, valueChars } from '../src/sqlite/storage.ts';
 import { schemaMismatch } from '../src/tables/declaration.ts';
 import { rustLimits } from './support/test-rust.ts';
 import { cloudStorage } from './support/test-storage.ts';

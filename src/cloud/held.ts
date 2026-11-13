@@ -1,6 +1,6 @@
-import { readBytes, valueChars } from '../protocol/limits.ts';
+import { readBytes } from '../protocol/limits.ts';
 import type { Poke } from '../protocol/messages.ts';
-import type { Query } from '../sqlite/storage.ts';
+import { type Query, valueChars } from '../sqlite/storage.ts';
 import { within } from './batches.ts';
 
 /**

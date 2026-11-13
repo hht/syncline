@@ -1,5 +1,4 @@
-import { valueChars } from '../protocol/limits.ts';
-import type { Query } from './storage.ts';
+import { type Query, valueChars } from './storage.ts';
 
 /**
  * Shared SQL building helpers.
