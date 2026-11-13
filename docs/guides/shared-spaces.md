@@ -197,7 +197,7 @@ Call `reconnect()` on the shared space when a user's access changes, for example
   });
 ```
 
-Downloads check the token every time. A live connection keeps the old buckets until it reconnects. Without `reconnect()`, live updates follow the old access until at most a minute after the old token expires.
+Downloads check the token every time. A live connection keeps the old buckets until it reconnects. Without `reconnect()`, live updates follow the old access until the device's next download, at the latest a minute after the old token expires.
 
 Adding buckets downloads only the new buckets; removing buckets [downloads everything again](../reference/edge-cases.md#removing-buckets-downloads-everything-again).
 

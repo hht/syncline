@@ -135,10 +135,6 @@ The rows stay only when the declaration itself is refused, such as a table name 
 
 Adding buckets to a subscription downloads only the new buckets. Removing buckets downloads everything again; old rows stay visible until it lands.
 
-### Without a reconnect, live updates follow the old token
-
-Without `reconnect()`, a connection keeps filtering live updates by the old token until the next download.
-
 ### Changing the shard count makes every device download once
 
 Changing `shards` makes every connected device download once. When lowering it, devices on a removed shard get no live updates until up to a minute after their token expires.
