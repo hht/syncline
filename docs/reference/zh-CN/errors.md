@@ -110,7 +110,7 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 
 ### Web 应用只能在一个标签页里用
 
-每个站点只能有一个标签页打开数据库。第二个标签页会失败，报错以 `Local database is open in another tab` 开头：它的 `waitForReady()` 被拒绝，`downloadError` 显示这个错误。关闭另一个标签页，再刷新当前页。
+每个站点只能有一个标签页打开数据库，这个标签页关闭或刷新前会一直占用它。第二个标签页会失败，报错以 `Local database is open in another tab` 开头：它的 `waitForReady()` 被拒绝，`downloadError` 显示这个错误。关闭另一个标签页，再刷新当前页。
 
 ### 少见的错误
 

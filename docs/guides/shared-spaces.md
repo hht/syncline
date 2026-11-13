@@ -163,7 +163,7 @@ Workers Cache sits in front of every entrypoint once enabled, including the defa
 | If you leave out | What happens |
 |---|---|
 | `cache` | Nothing is cached. Every download reaches the shared space Durable Object, and is billed as such. |
-| `"default"` with `enabled: false` | Every request to your Worker first looks up the cache. `forwardShared` marks its own responses `no-store`, so they are not kept, but any other route of yours answering 200 without `Cache-Control` is cached for 2 hours and served without running your code. |
+| `"default"` with `enabled: false` | Every `GET` request to your Worker first looks up the cache. `forwardShared` marks its own responses `no-store`, so they are not kept, but your other `GET` routes answering without `Cache-Control` are cached ([a 200 for 2 hours, a 404 for 3 minutes, and others](https://developers.cloudflare.com/workers/cache/configuration/)) and served without running your code, unless the request has `Authorization` or the response sets `Set-Cookie`. Mark them `no-store` if they must not be cached. |
 
 Workers Cache needs Wrangler 4.69.0 or later; per-entrypoint `exports` need 4.107.0 or later ([configuration](https://developers.cloudflare.com/workers/cache/configuration/)).
 
@@ -199,7 +199,7 @@ Call `reconnect()` on the shared space when a user's access changes, for example
 
 Downloads check the token every time. A live connection keeps the old buckets until it reconnects. Without `reconnect()`, live updates follow the old access until at most a minute after the old token expires.
 
-Adding buckets downloads only the new buckets. Removing buckets downloads everything again; the old rows stay visible until that lands.
+Adding buckets downloads only the new buckets; removing buckets [downloads everything again](../reference/edge-cases.md#removing-buckets-downloads-everything-again).
 
 ## 7. Develop locally
 

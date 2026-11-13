@@ -53,7 +53,7 @@ No. Syncline needs a [development build](https://docs.expo.dev/develop/developme
 
 ### How do I connect to `wrangler dev`?
 
-Pass `allowCleartext: true` to `openSyncline`, and use `http://localhost:8787` from the iOS simulator or a browser, or `http://10.0.2.2:8787` from the Android emulator. From a phone, start `npx wrangler dev --ip 0.0.0.0` and use your computer's LAN address. Use `https://` everywhere else.
+Pass `allowCleartext: true` to `openSyncline`, and use the addresses in [Use it in your app](../../README.md#4-use-it-in-your-app). Use `https://` everywhere else.
 
 ## Errors
 

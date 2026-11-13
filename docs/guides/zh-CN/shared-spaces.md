@@ -165,7 +165,7 @@ export default {
 | 如果漏掉 | 会发生什么 |
 |---|---|
 | `cache` | 什么都不缓存。每次下载都打到共享空间 Durable Object，并按此计费。 |
-| `"default"` 的 `enabled: false` | 每个发往 Worker 的请求都先查缓存。`forwardShared` 把自己的响应标为 `no-store`，所以不会被缓存；但你的其他路由只要返回 200 且没有 `Cache-Control`，就会被缓存 2 小时，之后直接返回缓存而不执行你的代码。 |
+| `"default"` 的 `enabled: false` | 每个发往 Worker 的 `GET` 请求都先查缓存。`forwardShared` 把自己的响应标为 `no-store`，所以不会被缓存；但你的其他 `GET` 路由只要响应没有 `Cache-Control`，就会被缓存（[200 缓存 2 小时，404 缓存 3 分钟，还有其他状态码](https://developers.cloudflare.com/workers/cache/configuration/)），之后直接返回缓存而不执行你的代码，除非请求带 `Authorization` 或响应设置了 `Set-Cookie`。不能缓存的路由请标为 `no-store`。 |
 
 Workers Cache 需要 Wrangler 4.69.0 或更高版本；按入口配置的 `exports` 需要 4.107.0 或更高版本（[配置](https://developers.cloudflare.com/workers/cache/configuration/)）。
 
@@ -201,7 +201,7 @@ Workers Cache 需要 Wrangler 4.69.0 或更高版本；按入口配置的 `expor
 
 下载每次都会检查 token。实时连接在重连前一直沿用旧的桶。不调用 `reconnect()` 时，实时更新按旧权限过滤，直到旧 token 过期后最多一分钟。
 
-给订阅增加桶只下载新增的桶。去掉桶会重新下载全部数据；在下载完成前，旧的行仍然可见。
+给订阅增加桶只下载新增的桶；去掉桶会[重新下载全部数据](../../reference/zh-CN/edge-cases.md#从订阅去掉桶会重新下载全部内容)。
 
 ## 7. 本地开发
 

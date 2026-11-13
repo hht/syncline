@@ -108,7 +108,7 @@ The cloud rejected a batch of uploaded writes: it could not read it, or the batc
 
 ### The web app works in one tab only
 
-Only one tab per site can open the database. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
+Only one tab per site can open the database, and it keeps it until it closes or reloads. A second tab fails with an error starting with `Local database is open in another tab`: its `waitForReady()` rejects and `downloadError` shows the error. Close the other tab, then reload this one.
 
 ### Rare errors
 

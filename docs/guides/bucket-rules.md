@@ -81,7 +81,7 @@ One write changes at most 10,000 rows, so publishing a document whose revisions 
 
 ### Give admins both buckets
 
-`bucketsOf` gives admins `public` as well as `admin`. Adding buckets to a token downloads only the new buckets, but removing one downloads everything again. With `public` always present, promoting a user only adds `admin`.
+`bucketsOf` gives admins `public` as well as `admin`. Adding buckets to a token downloads only the new buckets, but removing one [downloads everything again](../reference/edge-cases.md#removing-buckets-downloads-everything-again). With `public` always present, promoting a user only adds `admin`.
 
 ## Parameters
 
@@ -113,8 +113,8 @@ Changing which rules cover a table makes every device download that whole table 
 
 - Whitespace and letter case outside string literals don't count as a change.
 - Adding or removing a rule on a table counts: the table is downloaded again.
-- After the deploy, the cloud recounts the table in steps of up to 20,000 rows.
-- Online devices hear about the change within 1 hour.
-- A row that a new rule places in a bucket over 256 bytes stays in the space, but no device can subscribe to that bucket.
+- After the deploy, the cloud [recounts the table](../reference/limits.md#shared-spaces).
+- Online devices [hear about the change late](../reference/edge-cases.md#online-devices-hear-about-changed-rules-late).
+- Rows a new rule places in [an oversized bucket](../reference/edge-cases.md#no-device-can-subscribe-to-an-oversized-bucket) reach no device.
 
 So for a large table, each rule change costs every device a full download of it, and costs you the rows read. Settle rules before launch where you can, and group changes into one deploy.

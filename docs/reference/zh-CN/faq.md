@@ -55,7 +55,7 @@ iOS 和 Android 可以。使用 `syncline/expo/background` 中的 `defineBackgro
 
 ### 怎么连接 `wrangler dev`？
 
-给 `openSyncline` 传入 `allowCleartext: true`。iOS 模拟器或浏览器用 `http://localhost:8787`，Android 模拟器用 `http://10.0.2.2:8787`。手机要先用 `npx wrangler dev --ip 0.0.0.0` 启动，再用电脑的局域网地址。其他场合一律用 `https://`。
+给 `openSyncline` 传入 `allowCleartext: true`，地址用[在应用中使用](../../../README.zh-CN.md#4-在应用中使用)中给出的。其他场合一律用 `https://`。
 
 ## 报错
 

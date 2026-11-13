@@ -73,4 +73,4 @@ export async function importAll(space: DurableObjectStub<SharedSpace>, job: stri
 - 导入期间从头开始下载的设备，可能拿到最多 60 秒前缓存的起点，之后再下载那之后的改动。
 - 新设备从最近的保存点开始，默认每改动 1,000 行记录一个（`chunkRows`）。
 
-共享空间重建后，设备可能先从缓存拿到旧数据，之后云端会让它们重新下载。
+共享空间重建后，设备[可能先从缓存拿到旧数据](../../reference/zh-CN/edge-cases.md#重建之后设备可能先从缓存拿到旧数据)。

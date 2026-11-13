@@ -152,7 +152,7 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 - **Billed rows.** An uploaded write is billed 2 row writes besides the rows it changes, index rows included. One `write` of 100 rows costs 102; 100 writes of one row each cost 300.
 - **Foreign keys on your own tables.** SQLite does not enforce them. A synced row your table points at can be deleted.
 - **Changing tokens.** Call `reconnect()` when a user's permissions change. In shared spaces, live updates follow the old access until at most a minute after the old token expires; downloads check the token every time.
-- **Web.** Only one browser tab per site can open the database. The tab keeps it until it closes or reloads.
+- **Web.** Only one browser tab per site [can open the database](errors.md#the-web-app-works-in-one-tab-only).
 - **Download progress** is an estimate.
 
 ## Requirements
