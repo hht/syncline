@@ -162,7 +162,7 @@ Workers Cache sits in front of every entrypoint once enabled, including the defa
 
 | If you leave out | What happens |
 |---|---|
-| `cache` | Nothing is cached. Every download reaches the shared space Durable Object, and is billed as such. |
+| `cache` and `exports` | Nothing is cached. Every download reaches the shared space Durable Object, and is billed as such. |
 | `"default"` with `enabled: false` | Every `GET` request to your Worker first looks up the cache. `forwardShared` marks its own responses `no-store`, so they are not kept, but your other `GET` routes answering without `Cache-Control` are cached ([a 200 for 2 hours, a 404 for 3 minutes, and others](https://developers.cloudflare.com/workers/cache/configuration/)) and served without running your code, unless the request has `Authorization` or the response sets `Set-Cookie`. Mark them `no-store` if they must not be cached. |
 
 Workers Cache needs Wrangler 4.69.0 or later; per-entrypoint `exports` need 4.107.0 or later ([configuration](https://developers.cloudflare.com/workers/cache/configuration/)).
