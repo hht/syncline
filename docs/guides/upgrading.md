@@ -31,7 +31,7 @@ A shared space is reached by name, so a new name is a new, empty space:
 1. Change `space` in `forwardShared`, and the name your server writes use, for example from `'shared'` to `'shared-2'`.
 2. Deploy, then write the data into the new space.
 
-Devices connected during the deploy move to the new space once their connection ends, at the latest a minute after their token expires. The old object keeps its storage until you empty it.
+Devices connected during the deploy move to the new space once their connection ends, at the latest a minute after their token expires. A device that reaches the new space before you write the data clears its rows of the space, which fill again once you write it. The old object keeps its storage until you empty it.
 
 ### A whole class: two deploys
 
