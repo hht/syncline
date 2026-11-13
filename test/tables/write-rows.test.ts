@@ -171,15 +171,15 @@ test('aborts and rolls back server writes when cascade deletes across multiple c
 });
 
 test('reads only primary keys and bucket identifiers during cascade deletes in shared spaces without loading full row payloads', () => {
-  const cloud = cloudStorage(...schema.slice(0, 1), 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT, audience TEXT)');
-  const audienced = sqliteTable('child', { id: text().primaryKey(), parent_id: text().references(() => parent.id), audience: text() });
-  const buckets = { public: { parent: {}, child: { where: "audience = 'public'" } }, all: { parent: {}, child: {} } };
-  const space = new Space(cloud, [parent, audienced], { shared: { buckets } });
+  const cloud = cloudStorage(...schema.slice(0, 1), 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT, exposure TEXT)');
+  const exposable = sqliteTable('child', { id: text().primaryKey(), parent_id: text().references(() => parent.id), exposure: text() });
+  const buckets = { public: { parent: {}, child: { where: "exposure = 'public'" } }, all: { parent: {}, child: {} } };
+  const space = new Space(cloud, [parent, exposable], { shared: { buckets } });
   const body = 'x'.repeat(10_000);
   space.mutate((tx) => {
     tx.insert(parent, { id: 'p1' });
-    tx.insert(audienced, { id: 'open', parent_id: 'p1', audience: 'public' });
-    for (let index = 0; index < 50; index += 1) tx.insert(audienced, { id: `c${index}`, parent_id: 'p1', audience: `admin${body}` });
+    tx.insert(exposable, { id: 'open', parent_id: 'p1', exposure: 'public' });
+    for (let index = 0; index < 50; index += 1) tx.insert(exposable, { id: `c${index}`, parent_id: 'p1', exposure: `admin${body}` });
   });
   const base = space.head();
   const read = measureReads(cloud);

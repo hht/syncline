@@ -216,21 +216,21 @@ test('cloud: returns deferred index statements for missing foreign key indexes o
 });
 
 test('cloud: an existing table defers creating the bucket indexes its rules now want and dropping the ones they no longer do', () => {
-  const program = sqliteTable('program', { id: text().primaryKey(), status: text() });
-  const published = { name: '_syncline_bucket.program.public.1', columns: ['id'], where: "status = 'published'" };
-  const drafts = { name: '_syncline_bucket.program.drafts.2', columns: ['status', 'id'] };
+  const project = sqliteTable('project', { id: text().primaryKey(), status: text() });
+  const published = { name: '_syncline_bucket.project.public.1', columns: ['id'], where: "status = 'published'" };
+  const drafts = { name: '_syncline_bucket.project.drafts.2', columns: ['status', 'id'] };
   const storage = cloud();
-  expect(defineTables(storage, [program], [program], () => [published])).toEqual([]);
-  storage.sql.exec('CREATE INDEX "program.status" ON "program" ("status")');
+  expect(defineTables(storage, [project], [project], () => [published])).toEqual([]);
+  storage.sql.exec('CREATE INDEX "project.status" ON "project" ("status")');
   const indexes = () =>
     storage.sql
       .exec("SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name")
       .toArray()
       .map(({ name }) => name);
-  expect(indexes()).toEqual(['_syncline_bucket.program.public.1', 'program.status']);
-  expect(defineTables(storage, [program], [program], () => [drafts])).toEqual([
-    'CREATE INDEX IF NOT EXISTS "_syncline_bucket.program.drafts.2" ON "program" ("status", "id")',
-    'DROP INDEX IF EXISTS "_syncline_bucket.program.public.1"',
+  expect(indexes()).toEqual(['_syncline_bucket.project.public.1', 'project.status']);
+  expect(defineTables(storage, [project], [project], () => [drafts])).toEqual([
+    'CREATE INDEX IF NOT EXISTS "_syncline_bucket.project.drafts.2" ON "project" ("status", "id")',
+    'DROP INDEX IF EXISTS "_syncline_bucket.project.public.1"',
   ]);
 });
 

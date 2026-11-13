@@ -3,8 +3,8 @@ import { expect, test } from 'vitest';
 import { Space } from '../src/cloud/space.ts';
 import type { Op } from '../src/protocol/messages.ts';
 import type { PullRequest } from '../src/protocol/pull-url.ts';
-import { setup as catalog } from './device/test-shared-mirror.ts';
-import { program, pullRest } from './support/test-catalog.ts';
+import { setup as cabinet } from './device/test-shared-mirror.ts';
+import { project, pullRest } from './support/test-cabinet.ts';
 import { snapshot, synced } from './support/test-counter.ts';
 import { Device } from './support/test-device.ts';
 import { pulled, putWorkbook, unchunked, upload } from './support/test-schema.ts';
@@ -250,13 +250,13 @@ test('a verification finding corrupted rows, the range pull repairing them, and 
 
 test('a shared space downloading, then landing a published row', async () => {
   const { failed, landed } = await everyStatementFailing(async () => {
-    const { space, storage, catalog: shared, publish, programs } = catalog();
+    const { space, storage, cabinet: shared, publish, projects } = cabinet();
     space.mutate((tx) => {
-      tx.upsert(program, { id: 'p1', status: 'published' });
-      tx.upsert(program, { id: 'p2', status: 'published' });
+      tx.upsert(project, { id: 'p1', status: 'published' });
+      tx.upsert(project, { id: 'p2', status: 'published' });
     }, 0);
     const steps = [() => pullRest(shared, space), () => shared.receive(publish('p3')), () => pullRest(shared, space)];
-    return { storage, steps, state: () => [programs(), shared.behind()] };
+    return { storage, steps, state: () => [projects(), shared.behind()] };
   });
   expect(failed).toBeGreaterThan(0);
   expect(landed).toEqual([['p1', 'p2', 'p3'].map((id) => ({ id, status: 'published' })), false]);

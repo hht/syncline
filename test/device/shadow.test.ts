@@ -68,15 +68,15 @@ const indexes = (storage: Storage) =>
     .map(({ sql }) => String(sql).replace(/^CREATE INDEX "[^"]*"/, 'CREATE INDEX'));
 
 test('same for shared space: rows for full sync stream into shadow table, invisible before final chunk; after swap has all rows', async () => {
-  const program = sqliteTable('program', { id: text().primaryKey() });
-  const storage = deviceStorage(createWorkbook, 'CREATE TABLE program (id TEXT PRIMARY KEY)');
-  const catalog = new Device(storage, tables).shared('catalog', [program]);
-  const row = (id: string): Op => ({ op: 'put', table: 'program', key: { id }, row: { id } });
-  await catalog.receive({ base: null, next: 'n1', patch: [{ op: 'clear' }, row('p1')], seen: 1 });
-  expect(storage.sql.exec('SELECT id FROM program').toArray()).toEqual([]);
-  expect(shadows(storage)).toEqual(['_syncline_shadow_program']);
-  await catalog.receive({ base: null, cursor: 'n1', cookie: { version: 1, nonce: 1 }, lmids: {}, patch: [row('p2')], seen: 1 });
-  expect(storage.sql.exec('SELECT id FROM program ORDER BY id').toArray()).toEqual([{ id: 'p1' }, { id: 'p2' }]);
+  const project = sqliteTable('project', { id: text().primaryKey() });
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE project (id TEXT PRIMARY KEY)');
+  const cabinet = new Device(storage, tables).shared('cabinet', [project]);
+  const row = (id: string): Op => ({ op: 'put', table: 'project', key: { id }, row: { id } });
+  await cabinet.receive({ base: null, next: 'n1', patch: [{ op: 'clear' }, row('p1')], seen: 1 });
+  expect(storage.sql.exec('SELECT id FROM project').toArray()).toEqual([]);
+  expect(shadows(storage)).toEqual(['_syncline_shadow_project']);
+  await cabinet.receive({ base: null, cursor: 'n1', cookie: { version: 1, nonce: 1 }, lmids: {}, patch: [row('p2')], seen: 1 });
+  expect(storage.sql.exec('SELECT id FROM project ORDER BY id').toArray()).toEqual([{ id: 'p1' }, { id: 'p2' }]);
   expect(shadows(storage)).toEqual([]);
 });
 

@@ -132,16 +132,16 @@ impl Device {
         self.handle.send(json!({ "type": "start", "channel": channel }).to_string());
     }
 
-    /// Opens the test Worker's shared catalog space (`TestCatalog`) and starts syncing it.
+    /// Opens the test Worker's shared cabinet space (`TestCabinet`) and starts syncing it.
     fn share(&self) {
-        let program =
-            json!({ "name": "program", "columns": [text("id"), text("status")], "key": ["id"], "indexes": [], "foreignKeys": [] });
+        let project =
+            json!({ "name": "project", "columns": [text("id"), text("status")], "key": ["id"], "indexes": [], "foreignKeys": [] });
         assert_eq!(
-            self.call(json!({ "type": "shared", "name": "catalog", "tables": [program] }))
+            self.call(json!({ "type": "shared", "name": "cabinet", "tables": [project] }))
                 .get("error"),
             None
         );
-        self.start("catalog", &format!("{}/catalog", cloud()));
+        self.start("cabinet", &format!("{}/cabinet", cloud()));
     }
 
     /// Runs `sql` as a local write and commits it.
@@ -244,5 +244,5 @@ fn a_write_reaches_a_connected_device_live_and_a_later_one_by_pull() {
 fn a_device_joins_a_shared_space_and_connects_live() {
     let device = Device::open("sharer", "sharer");
     device.share();
-    device.until_live("catalog");
+    device.until_live("cabinet");
 }

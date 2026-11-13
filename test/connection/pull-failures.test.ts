@@ -86,7 +86,7 @@ test('a shared space pull answered 412, which the cloud sends only to a private 
       return new Response('precondition failed', { status: 412 });
     },
     () => () => undefined,
-    (device) => device.shared('catalog', [sqliteTable('plan', { id: text().primaryKey() })]),
+    (device) => device.shared('cabinet', [sqliteTable('plan', { id: text().primaryKey() })]),
   );
   expect(fetched).toHaveLength(1);
   expect(connection.status().downloadError).toEqual(new Error('pull failed (HTTP 412)'));

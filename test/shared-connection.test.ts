@@ -5,7 +5,7 @@ import { Broadcast } from '../src/cloud/broadcast.ts';
 import { Space } from '../src/cloud/space.ts';
 import type { Chunk, Poke } from '../src/protocol/messages.ts';
 import { type PullRequest, parsePullRequest } from '../src/protocol/pull-url.ts';
-import { subscribed } from './support/test-catalog.ts';
+import { subscribed } from './support/test-cabinet.ts';
 import { Device } from './support/test-device.ts';
 import { drain } from './support/test-drive.ts';
 import { captureReported } from './support/test-errors.ts';
@@ -17,8 +17,8 @@ import { Connection } from './support/test-sync.ts';
 // Device connecting to shared space: Connection connects to device.shared space; HTTP pulls via shared space, WebSockets via broadcast shard;
 // online devices catch up after backend writes.
 
-const program = sqliteTable('program', { id: text().primaryKey(), title: text().notNull() });
-const createProgram = 'CREATE TABLE program (id TEXT PRIMARY KEY, title TEXT NOT NULL)';
+const project = sqliteTable('project', { id: text().primaryKey(), title: text().notNull() });
+const createProject = 'CREATE TABLE project (id TEXT PRIMARY KEY, title TEXT NOT NULL)';
 /** Max character budget for touched rows in shard round: larger rounds send hints and devices pull over HTTP. */
 const inlineLimit = 2000;
 /** Devices subscribe to all buckets. */
@@ -29,8 +29,8 @@ const everything = subscribed(['all']);
  * token supplies device subscription.
  */
 function setup(prepare: (storage: ReturnType<typeof deviceStorage>, device: Device) => void = () => undefined) {
-  const buckets = { all: { program: {} }, public: { program: { where: "title != 'secret'" } } };
-  const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 4 } });
+  const buckets = { all: { project: {} }, public: { project: { where: "title != 'secret'" } } };
+  const space = new Space(cloudStorage(createProject), [project], { shared: { buckets, chunkRows: 4 } });
   const token = { subscribed: everything };
   const cache = { pull: (request: PullRequest) => space.pullShared(request, token.subscribed) };
   const network: Network = new Network(
@@ -44,18 +44,18 @@ function setup(prepare: (storage: ReturnType<typeof deviceStorage>, device: Devi
   const broadcast: Broadcast<CloudEnd> = new Broadcast(network.sockets(), async () => space.round(inlineLimit));
   const commit = (rows: { id: string; title: string }[]) => {
     const { base } = space.mutate((tx) => {
-      for (const row of rows) tx.upsert(program, row);
+      for (const row of rows) tx.upsert(project, row);
     });
     if (base) void broadcast.notify(space.round(inlineLimit, base));
   };
   const devices = [0, 1].map((index) => {
-    const storage = deviceStorage(createProgram);
+    const storage = deviceStorage(createProject);
     const device = new Device(storage, []);
     prepare(storage, device);
-    const catalog = device.shared('catalog', [program]);
-    const connection = new Connection(catalog, { url: 'https://sync.test/catalog', ...network.options(index) });
-    const titles = () => drizzle(storage).select().from(program).orderBy(program.id).all();
-    return { storage, device, catalog, connection, titles };
+    const cabinet = device.shared('cabinet', [project]);
+    const connection = new Connection(cabinet, { url: 'https://sync.test/cabinet', ...network.options(index) });
+    const titles = () => drizzle(storage).select().from(project).orderBy(project.id).all();
+    return { storage, device, cabinet, connection, titles };
   });
   const run = () => drain(network);
   return { space, devices, commit, run, network, broadcast, token, cache };
@@ -285,7 +285,7 @@ test('a device downloading before it connects, answered from cache with a final 
   // Another device downloaded at version 1, and the cache kept the final chunk that answered its second request; this device's first
   // request misses the cache (evicted, or another location).
   const rowByRow = (request: PullRequest) => space.pullShared(request, token.subscribed, 1);
-  const full = fresh.catalog.pullRequest();
+  const full = fresh.cabinet.pullRequest();
   const { next } = rowByRow(full) as Chunk;
   const stale = space.pullShared({ ...full, cursor: next }, token.subscribed) as Poke;
   const requests: PullRequest[] = [];

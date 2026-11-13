@@ -8,7 +8,7 @@
 (* (cookie version, staged chunk count, landed subscription, token          *)
 (* subscription, and cloud head version). Invariant Unmatched is violated   *)
 (* when the entire trace matches.                                          *)
-(* Simulated cloud (test/support/test-shared-cloud.ts): table 'program'   *)
+(* Simulated cloud (test/support/test-shared-cloud.ts): table 'project'   *)
 (* with 12 rows; buckets 'all', 'public', 'team.a', 'team.b'; bucket      *)
 (* columns status and team encoded as 'c'; deployments toggle the 'public' *)
 (* condition between two rule sets.                                         *)

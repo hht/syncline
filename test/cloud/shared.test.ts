@@ -8,48 +8,48 @@ import { Space } from '../../src/cloud/space.ts';
 import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
 import {
   admin,
-  catalog,
+  cabinet,
   contents,
-  day,
+  doc,
   landedRequest,
-  program,
+  project,
   pullAll,
   rules,
   schema,
   subscribed,
   viewer,
-} from '../support/test-catalog.ts';
+} from '../support/test-cabinet.ts';
 import { Device } from '../support/test-device.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Shared space pulls: delivers visible rows for subscribed buckets; full pulls align to chunk boundaries for shared URLs;
 // added buckets scan only additions, removed buckets trigger full pull, and each chunk carries seen.
 
-test('buckets: public bucket includes published programs and public days while all includes everything; row visibility depends only on its own columns; rows leaving bucket emit del in incremental pulls', () => {
-  const { space, publish } = catalog();
+test('buckets: public bucket includes published projects and public docs while all includes everything; row visibility depends only on its own columns; rows leaving bucket emit del in incremental pulls', () => {
+  const { space, publish } = cabinet();
   publish('p1');
   publish('p2', 'draft');
   publish('p3', 'published', 'admin');
-  // Draft program p2 has public day: visible. Days follow program visibility only if audience is set explicitly on the day.
+  // Draft project p2 has public doc: visible. Docs follow project visibility only if exposure is set explicitly on the doc.
   const first = pullAll(space, viewer, { cookie: null });
-  expect(contents(first)).toEqual(['day/p1-d', 'day/p2-d', 'program/p1', 'program/p3']);
+  expect(contents(first)).toEqual(['doc/p1-d', 'doc/p2-d', 'project/p1', 'project/p3']);
   expect(contents(pullAll(space, admin, { cookie: null }))).toHaveLength(6);
 
-  space.mutate((tx) => tx.update(program, { id: 'p1', status: 'draft' }));
-  expect((pullAll(space, viewer, landedRequest(first)).at(-1) as Poke).patch).toEqual([{ op: 'del', table: 'program', key: { id: 'p1' } }]);
+  space.mutate((tx) => tx.update(project, { id: 'p1', status: 'draft' }));
+  expect((pullAll(space, viewer, landedRequest(first)).at(-1) as Poke).patch).toEqual([{ op: 'del', table: 'project', key: { id: 'p1' } }]);
 });
 
 test('reopening shared space with identical schema and bucket rules executes zero writes', () => {
-  const { cloud, publish } = catalog();
+  const { cloud, publish } = cabinet();
   publish('p1');
   const changes = () => Number(cloud.sql.exec('SELECT total_changes() AS n').toArray()[0]?.n);
   const before = changes();
-  new Space(cloud, [program, day], { shared: { buckets: rules, chunkRows: 3 } });
+  new Space(cloud, [project, doc], { shared: { buckets: rules, chunkRows: 3 } });
   expect(changes() - before).toBe(0);
 });
 
 test('initial full pull starts from nearest chunk boundary: devices starting at different times share watermark, catching up incrementally thereafter', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   for (const id of ['p1', 'p2']) publish(id);
   const early = pullAll(space, admin, { cookie: null }, 1);
   publish('p3');
@@ -64,7 +64,7 @@ test('initial full pull starts from nearest chunk boundary: devices starting at 
 });
 
 test('devices landing at same version with identical subscription carry identical URLs: full pulls and incremental pulls from earlier versions share requests and responses', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   const at1 = pullAll(space, admin, { cookie: null });
   publish('p2');
@@ -76,7 +76,7 @@ test('devices landing at same version with identical subscription carry identica
 });
 
 test('each chunk carries seen (head version at computation); final chunk carries next and subscription for resuming from stale cache responses; positions omit seen', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   for (const id of ['p1', 'p2', 'p3']) publish(id);
   const chunks = pullAll(space, admin, { cookie: null }, 1);
   expect(chunks.every((chunk) => (chunk as Chunk).seen === 3)).toBe(true);
@@ -88,7 +88,7 @@ test('each chunk carries seen (head version at computation); final chunk carries
 });
 
 test('subscription adds buckets (token upgraded): resumes from landed position, scanning only newly added buckets without table drops; subsequent incremental pulls use new subscription', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   publish('p2', 'draft', 'admin');
   publish('p3', 'draft', 'admin');
@@ -98,33 +98,33 @@ test('subscription adds buckets (token upgraded): resumes from landed position, 
   expect(after.length).toBeGreaterThan(2);
   const ops = after.flatMap((chunk) => ('patch' in chunk ? chunk.patch : []));
   expect(ops.some((op) => op.op === 'clear' || op.op === 'drop')).toBe(false);
-  expect(contents([...before, ...after])).toEqual(['day/p1-d', 'day/p2-d', 'day/p3-d', 'program/p1', 'program/p2', 'program/p3']);
-  space.mutate((tx) => tx.update(program, { id: 'p2', status: 'archived' }));
+  expect(contents([...before, ...after])).toEqual(['doc/p1-d', 'doc/p2-d', 'doc/p3-d', 'project/p1', 'project/p2', 'project/p3']);
+  space.mutate((tx) => tx.update(project, { id: 'p2', status: 'archived' }));
   expect((pullAll(space, both, landedRequest(after)).at(-1) as Poke).patch).toEqual([
-    { op: 'put', table: 'program', key: { id: 'p2' }, row: { id: 'p2', status: 'archived' } },
+    { op: 'put', table: 'project', key: { id: 'p2' }, row: { id: 'p2', status: 'archived' } },
   ]);
 });
 
 test('subscription removes buckets: triggers full pull (with clear op) leaving only rows visible under new subscription; mid-pull subscription changes resume from landed position', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   publish('p2', 'draft', 'admin');
   const before = pullAll(space, admin, { cookie: null });
   const after = pullAll(space, viewer, landedRequest(before));
   expect((after[0] as Chunk).patch[0]).toEqual({ op: 'clear' });
-  expect(contents(after)).toEqual(['day/p1-d', 'program/p1']);
+  expect(contents(after)).toEqual(['doc/p1-d', 'project/p1']);
 
   // Admin permissions revoked mid-pull while scanning: resumes from position with public subscription, triggering full pull.
   const [first] = pullAll(space, admin, { cookie: null }, 1) as Chunk[];
   const switched = pullAll(space, viewer, { cookie: null, cursor: first?.next ?? '' });
-  expect(contents([first as Chunk, ...switched])).toEqual(['day/p1-d', 'program/p1']);
+  expect(contents([first as Chunk, ...switched])).toEqual(['doc/p1-d', 'project/p1']);
 });
 
-test('large server write modifying many rows (catalog bulk import): recorded as single version, splittable across incremental chunks while landing at that version', () => {
-  const { space } = catalog();
+test('large server write modifying many rows (bulk import): recorded as single version, splittable across incremental chunks while landing at that version', () => {
+  const { space } = cabinet();
   const before = pullAll(space, admin, { cookie: null });
   space.mutate((tx) => {
-    for (let n = 0; n < 10; n += 1) tx.insert(program, { id: `q${n}`, status: 'published' });
+    for (let n = 0; n < 10; n += 1) tx.insert(project, { id: `q${n}`, status: 'published' });
   });
   expect(space.head().version).toBe(1);
   const chunks = pullAll(space, admin, landedRequest(before), 1);
@@ -135,32 +135,32 @@ test('large server write modifying many rows (catalog bulk import): recorded as 
 });
 
 test('unreleased draft: keys and row changes excluded from public buckets; unpublishing emits del; cascade deletes emit only visible child rows', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   const first = pullAll(space, viewer, { cookie: null });
   const base = space.head();
   space.mutate((tx) => {
-    tx.insert(program, { id: 'secret', status: 'draft' });
-    tx.update(program, { id: 'p1', status: 'draft' });
+    tx.insert(project, { id: 'secret', status: 'draft' });
+    tx.update(project, { id: 'p1', status: 'draft' });
   });
-  space.mutate((tx) => tx.update(program, { id: 'secret', status: 'draft-2' }));
+  space.mutate((tx) => tx.update(project, { id: 'secret', status: 'draft-2' }));
   const ops = pullAll(space, viewer, landedRequest(first)).flatMap((chunk) => ('patch' in chunk ? chunk.patch : []));
-  expect(ops).toEqual([{ op: 'del', table: 'program', key: { id: 'p1' } }]);
+  expect(ops).toEqual([{ op: 'del', table: 'project', key: { id: 'p1' } }]);
   // In shard round, draft exists only in "all" bucket
   const rows = space.round(64_000, base).rows ?? [];
   expect(rows.find((row) => row.key.id === 'secret')?.touched).toEqual(['["all"]']);
-  // Cascade delete: deleting draft program cascades to days that were never in public bucket
+  // Cascade delete: deleting draft project cascades to docs that were never in public bucket
   const later = space.head();
-  space.mutate((tx) => tx.insert(day, { id: 'secret-d', program_id: 'secret', audience: 'admin' }));
-  space.mutate((tx) => tx.delete(program, { id: 'secret' }));
+  space.mutate((tx) => tx.insert(doc, { id: 'secret-d', project_id: 'secret', exposure: 'admin' }));
+  space.mutate((tx) => tx.delete(project, { id: 'secret' }));
   for (const row of space.round(64_000, later).rows ?? []) expect(row.touched).toEqual(['["all"]']);
 });
 
 test('shard broadcast round omits row data when changes exceed budget: walks version numbers without reading commit records; round starting at head carries no rows', () => {
-  const { space } = catalog();
+  const { space } = cabinet();
   const base = space.head();
   space.mutate((tx) => {
-    for (let n = 0; n < 100; n += 1) tx.insert(program, { id: `q${n}`, status: 'published' });
+    for (let n = 0; n < 100; n += 1) tx.insert(project, { id: `q${n}`, status: 'published' });
   }, 0);
   const read = vi.spyOn(Commits.prototype, 'after');
   expect(space.round(200, base)).toEqual({ base, cookie: space.head(), incarnation: expect.any(Number) });
@@ -172,13 +172,13 @@ test('shard broadcast round omits row data when changes exceed budget: walks ver
 test('rejects malformed bucket rules on space initialization (unsynced table, nonexistent column, subquery, or mismatched bucket columns across tables)', () => {
   const cloud = cloudStorage(...schema);
   for (const [buckets, message] of [
-    [{ r: { programs: { where: "status = 'published'" } } }, 'is not a synced table'],
-    [{ r: { program: { where: "state = 'published'" } } }, 'no such column'],
-    [{ r: { day: { where: "program_id IN (SELECT id FROM program WHERE status = 'published')" } } }, 'contains a subquery'],
-    [{ r: { program: { by: ['owner'] } } }, 'does not exist'],
-    [{ r: { program: { by: ['status'] }, day: {} } }, 'has mismatched bucket columns'],
+    [{ r: { projects: { where: "status = 'published'" } } }, 'is not a synced table'],
+    [{ r: { project: { where: "state = 'published'" } } }, 'no such column'],
+    [{ r: { doc: { where: "project_id IN (SELECT id FROM project WHERE status = 'published')" } } }, 'contains a subquery'],
+    [{ r: { project: { by: ['owner'] } } }, 'does not exist'],
+    [{ r: { project: { by: ['status'] }, doc: {} } }, 'has mismatched bucket columns'],
   ] satisfies [BucketRules, string][])
-    expect(() => new Space(cloud, [program, day], { shared: { buckets } })).toThrow(message);
+    expect(() => new Space(cloud, [project, doc], { shared: { buckets } })).toThrow(message);
 });
 
 test('bucket columns: row belongs to bucket defined by its bucket column value; updating bucket column moves row across buckets; null values belong to no bucket', () => {
@@ -234,19 +234,19 @@ async function syncMirror(space: Space, mirror: ReturnType<Device['shared']>, wh
 }
 
 test('user account switch on same device (different owner): clears previous data on open and performs full pull', async () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   publish('p2', 'draft');
   const storage = deviceStorage(...schema);
   const ids = () =>
     drizzle(storage)
       .select()
-      .from(program)
+      .from(project)
       .all()
       .map(({ id }) => id);
-  await syncMirror(space, new Device(storage, []).shared('catalog', [program, day], 'admin-user'), admin);
+  await syncMirror(space, new Device(storage, []).shared('cabinet', [project, doc], 'admin-user'), admin);
   expect(ids()).toEqual(['p1', 'p2']);
-  const next = new Device(storage, []).shared('catalog', [program, day], 'viewer');
+  const next = new Device(storage, []).shared('cabinet', [project, doc], 'viewer');
   await next.opened();
   expect(ids()).toEqual([]);
   await syncMirror(space, next, viewer);

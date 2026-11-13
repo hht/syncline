@@ -10,7 +10,7 @@ import {
   SynclineSpace,
 } from 'syncline/cloudflare';
 
-// Test Worker: private space with note and tag tables (and read-only plan) forwarded via {@link forward}; shared catalog space (/catalog)
+// Test Worker: private space with note and tag tables (and read-only plan) forwarded via {@link forward}; shared cabinet space (/cabinet)
 // forwarded via {@link forwardShared}.
 
 export const note = sqliteTable('note', { id: text().primaryKey(), text: text().notNull() });
@@ -146,42 +146,42 @@ export class TestSpace extends SynclineSpace<Env> {
   }
 }
 
-const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
-/** Cloud-side program: adds the cloud-only reason a program was removed from the public bucket. */
-const listing = sqliteTable('program', { id: text().primaryKey(), status: text().notNull(), removed: text() });
+const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull() });
+/** Cloud-side project: adds the cloud-only reason a project was removed from the public bucket. */
+const cloudProject = sqliteTable('project', { id: text().primaryKey(), status: text().notNull(), removed: text() });
 
-/** Shared catalog definition: public bucket filters for published programs not removed; 2 broadcast shards; chunk boundary every 2 rows. */
-const catalog = {
-  schema: { program },
-  rules: { public: { program: { where: "status = 'published' AND removed IS NULL" } }, all: { program: {} } },
+/** Shared cabinet definition: public bucket filters for published projects not removed; 2 broadcast shards; chunk boundary every 2 rows. */
+const cabinet = {
+  schema: { project },
+  rules: { public: { project: { where: "status = 'published' AND removed IS NULL" } }, all: { project: {} } },
   shards: 2,
   chunkRows: 2,
 } satisfies SharedDefinition;
 
-export class TestCatalog extends SynclineSharedSpace<Env> {
+export class TestCabinet extends SynclineSharedSpace<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env, {
-      ...catalog,
-      cloud: { program: listing },
-      validation: new Map([[program, allowed('status')]]),
-      retired: ['program.color'],
-      broadcast: (bindings) => bindings.CATALOG_BROADCAST,
+      ...cabinet,
+      cloud: { project: cloudProject },
+      validation: new Map([[project, allowed('status')]]),
+      retired: ['project.color'],
+      broadcast: (bindings) => bindings.CABINET_BROADCAST,
     });
   }
 
-  /** Server write: upserts a program with the given status. */
+  /** Server write: upserts a project with the given status. */
   publish(id: string, status = 'published') {
-    return this.mutate((tx) => tx.upsert(program, { id, status }));
+    return this.mutate((tx) => tx.upsert(project, { id, status }));
   }
 
-  /** Server write: records why a program was removed, in a column devices never receive. */
+  /** Server write: records why a project was removed, in a column devices never receive. */
   remove(id: string, reason: string) {
-    return this.mutate((tx) => tx.update(listing, { id, removed: reason }));
+    return this.mutate((tx) => tx.update(cloudProject, { id, removed: reason }));
   }
 
-  /** Server write: deletes a program (changing nothing if it is missing). */
+  /** Server write: deletes a project (changing nothing if it is missing). */
   withdraw(id: string) {
-    return this.mutate((tx) => tx.delete(program, { id }));
+    return this.mutate((tx) => tx.delete(project, { id }));
   }
 
   /** Schedules a chore via RPC, recording it in fired when executed. */
@@ -196,9 +196,9 @@ export class TestCatalog extends SynclineSharedSpace<Env> {
   }
 }
 
-export class TestCatalogBroadcast extends SynclineBroadcast<Env> {
+export class TestCabinetBroadcast extends SynclineBroadcast<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, env.CATALOG);
+    super(ctx, env, env.CABINET);
   }
 
   /** Configures the broadcast shard to error on notify for test simulation. */
@@ -238,9 +238,9 @@ export class TestCatalogBroadcast extends SynclineBroadcast<Env> {
   }
 }
 
-export class TestCatalogEntry extends SynclineSharedEntry<Env> {
+export class TestCabinetEntry extends SynclineSharedEntry<Env> {
   protected shared() {
-    return this.env.CATALOG;
+    return this.env.CABINET;
   }
 }
 
@@ -252,8 +252,8 @@ const identityOf = (token: string) => {
 
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => {
-    if (new URL(request.url).pathname === '/catalog') {
-      const route = { entry: ctx.exports.TestCatalogEntry, broadcast: env.CATALOG_BROADCAST, space: 'catalog', definition: catalog };
+    if (new URL(request.url).pathname === '/cabinet') {
+      const route = { entry: ctx.exports.TestCabinetEntry, broadcast: env.CABINET_BROADCAST, space: 'cabinet', definition: cabinet };
       return forwardShared(request, route, async (token) => {
         const identity = identityOf(token);
         return identity && { buckets: [[identity.name === 'admin' ? 'all' : identity.name]], expiresAt: identity.expiresAt };

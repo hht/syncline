@@ -68,7 +68,7 @@ test('autoIncrement is refused on the synced tables of the cloud and still count
 test('a table a shared space created refuses an insert leaving out its sole integer key once the private space declares it', async () => {
   const storage = deviceStorage(createWorkbook);
   const before = new Device(storage, tables);
-  before.shared('catalog', [item]);
+  before.shared('cabinet', [item]);
   expect(storage.sql.exec("SELECT name FROM sqlite_schema WHERE name = 'item'").toArray()).toEqual([{ name: 'item' }]);
   before.close();
   const device = new Device(storage, [...tables, item]);

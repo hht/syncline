@@ -10,14 +10,14 @@ import { inbox } from '../worker/test-socket.ts';
 
 // Broadcast shards accept only forwarded connections carrying expiry epoch ms, subscription, and hash headers.
 
-afterAll(() => fannedOut('catalog'));
+afterAll(() => fannedOut('cabinet'));
 
 /** Sends a direct WebSocket upgrade request to a broadcast shard with simulated forwarded headers. */
 async function accepted(headers: Record<string, string>) {
   const cookie: Cookie = { version: 0, nonce: 0 };
   try {
-    const response = await env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`).fetch(
-      pullURL('https://sync.test/catalog', { cookie }),
+    const response = await env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`).fetch(
+      pullURL('https://sync.test/cabinet', { cookie }),
       { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': subprotocol, ...headers } },
     );
     response.webSocket?.accept();
@@ -30,7 +30,7 @@ async function accepted(headers: Record<string, string>) {
 
 /** Connects directly to a broadcast shard with forwarded headers expiring at expiresAt epoch ms. */
 async function connect(shard: DurableObjectStub, expiresAt: number) {
-  const response = await shard.fetch(pullURL('https://sync.test/catalog', { cookie: { version: 0, nonce: 0 } }), {
+  const response = await shard.fetch(pullURL('https://sync.test/cabinet', { cookie: { version: 0, nonce: 0 } }), {
     headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': subprotocol, [expiresHeader]: String(expiresAt), ...subscription, ...sub },
   });
   if (!response.webSocket) throw new Error('Expected WebSocket upgrade response');
@@ -58,15 +58,15 @@ test('rejects when expiry header is missing or empty, or when subscription hash 
 });
 
 test('a request that is not a WebSocket upgrade is refused with 405', async () => {
-  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
-  const response = await shard.fetch(pullURL('https://sync.test/catalog', { cookie: { version: 0, nonce: 0 } }), {
+  const shard = env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`);
+  const response = await shard.fetch(pullURL('https://sync.test/cabinet', { cookie: { version: 0, nonce: 0 } }), {
     headers: { ...expires, ...subscription, ...sub },
   });
   expect(response.status).toBe(405);
 });
 
 test('a device writing to its shard socket is closed with 1003: devices only listen to shards', async () => {
-  const socket = await connect(env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`), Date.now() + 60_000);
+  const socket = await connect(env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`), Date.now() + 60_000);
   const next = inbox(socket);
   expect(await next()).toHaveProperty('message');
   socket.send('{}');
@@ -74,7 +74,7 @@ test('a device writing to its shard socket is closed with 1003: devices only lis
 });
 
 test('an alarm closing the last connection leaves no alarm scheduled', async () => {
-  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const shard = env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`);
   const soon = inbox(await connect(shard, Date.now() + 50));
   expect(await soon()).toHaveProperty('message');
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -84,7 +84,7 @@ test('an alarm closing the last connection leaves no alarm scheduled', async () 
 });
 
 test('closes expired connections via alarm with 4001 without active writes and reschedules alarm to next expiry minute', async () => {
-  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const shard = env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`);
   const later = Date.now() + 3_600_000;
   const soon = inbox(await connect(shard, Date.now() + 50));
   const kept = inbox(await connect(shard, later));
@@ -101,7 +101,7 @@ test('closes expired connections via alarm with 4001 without active writes and r
 });
 
 test('connections accepted at once by a shard that has not read its alarm yet leave the alarm at the earliest expiry minute', async () => {
-  const shard = env.CATALOG_BROADCAST.getByName(`catalog#${crypto.randomUUID()}`);
+  const shard = env.CABINET_BROADCAST.getByName(`cabinet#${crypto.randomUUID()}`);
   const soon = Date.now() + 120_000;
   await Promise.all([connect(shard, soon), connect(shard, soon + 480_000)]);
   expect(await runInDurableObject(shard, (_, state) => state.storage.getAlarm())).toBe(Math.ceil(soon / 60_000) * 60_000);

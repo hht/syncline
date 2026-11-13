@@ -14,7 +14,7 @@ test('row hash depends only on table name and non-null columns: column order and
   const row = { id: 'w1', note: 'stamp', runs: 8 };
   expect(rowHash('workbook', { runs: 8, id: 'w1', note: 'stamp', extra: null })).toBe(rowHash('workbook', row));
   expect(rowHash('workbook', { ...row, runs: 9 })).not.toBe(rowHash('workbook', row));
-  expect(rowHash('program', row)).not.toBe(rowHash('workbook', row));
+  expect(rowHash('project', row)).not.toBe(rowHash('workbook', row));
 });
 
 test('sum of a set of rows is order-independent, modulo 2^32', () => {

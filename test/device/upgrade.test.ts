@@ -58,41 +58,41 @@ test('local writes modifying rows with unrecognized columns preserve them across
 });
 
 test('pre-upgrade write rejected because row referenced in same write is missing: re-inserted deleted row retains upgraded columns on rollback', async () => {
-  // program only appears in this test: workbook references it to cause actual rejection (referenced row missing)
-  const program = sqliteTable('program', { id: text().primaryKey() });
-  const createProgram = 'CREATE TABLE program (id TEXT PRIMARY KEY)';
-  const workbookWithProgram = sqliteTable('workbook', {
+  // project only appears in this test: workbook references it to cause actual rejection (referenced row missing)
+  const project = sqliteTable('project', { id: text().primaryKey() });
+  const createProject = 'CREATE TABLE project (id TEXT PRIMARY KEY)';
+  const workbookWithProject = sqliteTable('workbook', {
     id: text().primaryKey(),
     note: text(),
     runs: integer(),
-    program_id: text().references(() => program.id),
+    project_id: text().references(() => project.id),
   });
-  const createWorkbookWithProgram = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER, program_id TEXT)';
-  // Device table lagging behind cloud: does not know runs yet, and has not declared reference to program (local write skips check, cloud checks)
-  const laggingWorkbook = sqliteTable('workbook', { id: text().primaryKey(), note: text(), program_id: text() });
-  const createLaggingWorkbook = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, program_id TEXT)';
+  const createWorkbookWithProject = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER, project_id TEXT)';
+  // Device table lagging behind cloud: does not know runs yet, and has not declared reference to project (local write skips check, cloud checks)
+  const laggingWorkbook = sqliteTable('workbook', { id: text().primaryKey(), note: text(), project_id: text() });
+  const createLaggingWorkbook = 'CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, project_id TEXT)';
 
-  const cloud = cloudStorage(createProgram, createWorkbookWithProgram);
+  const cloud = cloudStorage(createProject, createWorkbookWithProject);
   cloud.sql.exec("INSERT INTO workbook VALUES ('w1', 'stamp', 5, NULL)");
   cloud.sql.exec("INSERT INTO workbook VALUES ('w2', 'brick wall', 3, NULL)");
-  const space = new Space(cloud, [program, workbookWithProgram]);
-  const storage = deviceStorage(createProgram, createLaggingWorkbook);
-  const device = new Device(storage, [program, laggingWorkbook]);
+  const space = new Space(cloud, [project, workbookWithProject]);
+  const storage = deviceStorage(createProject, createLaggingWorkbook);
+  const device = new Device(storage, [project, laggingWorkbook]);
   await device.private.receive(pulled(space, device));
 
-  // Same local write: delete w1 carrying unrecognized runs, update w2 to reference nonexistent program; lagging local table skips fk check, cloud checks, entire write rejected by cloud
+  // Same local write: delete w1 carrying unrecognized runs, update w2 to reference nonexistent project; lagging local table skips fk check, cloud checks, entire write rejected by cloud
   await write(device, async (tx) => {
     await tx.delete(laggingWorkbook).where(eq(laggingWorkbook.id, 'w1'));
-    await tx.update(laggingWorkbook).set({ program_id: 'missing program' }).where(eq(laggingWorkbook.id, 'w2'));
+    await tx.update(laggingWorkbook).set({ project_id: 'missing project' }).where(eq(laggingWorkbook.id, 'w2'));
   });
 
   storage.sql.exec('ALTER TABLE workbook ADD COLUMN runs INTEGER');
-  const upgrade = new Device(storage, [program, workbookWithProgram]);
+  const upgrade = new Device(storage, [project, workbookWithProject]);
   await upload(space, upgrade, [upgrade]);
   expect(upgrade.private.pending()).toEqual([]);
 
-  expect(drizzle(storage).select().from(workbookWithProgram).where(eq(workbookWithProgram.id, 'w1')).all()).toEqual([
-    { id: 'w1', note: 'stamp', runs: 5, program_id: null },
+  expect(drizzle(storage).select().from(workbookWithProject).where(eq(workbookWithProject.id, 'w1')).all()).toEqual([
+    { id: 'w1', note: 'stamp', runs: 5, project_id: null },
   ]);
 });
 

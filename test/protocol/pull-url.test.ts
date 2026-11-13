@@ -47,7 +47,7 @@ test('rejects unexpected properties, mismatched property types, or a body that i
 
 test('accepts only recognized shared space and connection query parameters, rejecting private space parameters in URLs', () => {
   const request = { cookie: { version: 3, nonce: 7 }, cursor: 'c', landed: 'l', atLeast: 2, incarnation: 5 };
-  expect(parsePullRequest(new URL(pullURL('https://sync.test/catalog', request)))).toEqual(request);
+  expect(parsePullRequest(new URL(pullURL('https://sync.test/cabinet', request)))).toEqual(request);
   expect([...new URL(pullURL('https://sync.test/space')).searchParams.keys()]).toEqual(['v']);
   for (const name of ['client', 'range', 'refetch'])
     expect(() => parsePullRequest(new URL(`${pullURL('https://sync.test/space')}&${name}=1`))).toThrow('Malformed');

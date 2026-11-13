@@ -12,19 +12,19 @@ import { recording } from '../worker/test-space.ts';
 
 // Shared space entry in entry Workers: canonicalizes URLs routed to cached entrypoints and rejects malformed queries with 400.
 
-afterAll(() => fannedOut('catalog'));
+afterAll(() => fannedOut('cabinet'));
 
-const url = 'https://sync.test/catalog';
-const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
+const url = 'https://sync.test/cabinet';
+const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull() });
 
 /** Invokes forwardShared directly and records requests routed to the cached entrypoint. */
 async function forwarded(target: string, headers: Record<string, string> = {}, method = 'GET') {
   const { seen, target: entry } = recording();
   const route = {
     entry: () => entry,
-    broadcast: env.CATALOG_BROADCAST,
-    space: 'catalog',
-    definition: { schema: { program }, rules: { public: { program: {} } } },
+    broadcast: env.CABINET_BROADCAST,
+    space: 'cabinet',
+    definition: { schema: { project }, rules: { public: { project: {} } } },
   };
   const response = await forwardShared(
     new Request(target, { method, headers: { Authorization: 'Bearer t', ...headers } }),
@@ -98,8 +98,8 @@ test('returns 400 without forwarding to broadcast shards on unrecognized WebSock
   const route = {
     entry: () => ({ fetch: async () => new Response('{}') }),
     broadcast: { getByName: () => ({ fetch: async (request: Request) => shards.push(request) && new Response(null) }) },
-    space: 'catalog',
-    definition: { schema: { program }, rules: { public: { program: {} } } },
+    space: 'cabinet',
+    definition: { schema: { project }, rules: { public: { project: {} } } },
   };
   for (const target of [`${url}?v=${protocolVersion}&cookie=abc`, `${pullURL(url, { cookie: null })}&x=1`]) {
     const request = new Request(target, { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `${subprotocol}, ${bearer}t` } });
@@ -117,8 +117,8 @@ test("routes each WebSocket to a random one of the definition's broadcast shards
   const route = (shardsSet?: number) => ({
     entry: () => ({ fetch: async () => new Response('{}') }),
     broadcast: { getByName: (name: string) => ({ fetch: async () => shards.push(name) && new Response(null) }) },
-    space: 'catalog',
-    definition: { schema: { program }, rules: { public: { program: {} } }, ...(shardsSet && { shards: shardsSet }) },
+    space: 'cabinet',
+    definition: { schema: { project }, rules: { public: { project: {} } }, ...(shardsSet && { shards: shardsSet }) },
   });
   const random = vi.spyOn(Math, 'random');
   try {
@@ -136,15 +136,15 @@ test("routes each WebSocket to a random one of the definition's broadcast shards
   } finally {
     random.mockRestore();
   }
-  expect(shards).toEqual(['catalog#0', 'catalog#15', 'catalog#1']);
+  expect(shards).toEqual(['cabinet#0', 'cabinet#15', 'cabinet#1']);
 });
 
 test('a cached entrypoint called without props fails instead of serving a pull to an unknown subscription', async () => {
   const target = pullURL(url, { cookie: null });
   const subscription = ['["public"]'];
-  const props = { space: 'catalog', subscription, sub: await subscriptionHash(subscription) };
-  expect((await exports.TestCatalogEntry({ props }).fetch(target)).status).toBe(200);
-  const outcome = await exports.TestCatalogEntry.fetch(target).then(
+  const props = { space: 'cabinet', subscription, sub: await subscriptionHash(subscription) };
+  expect((await exports.TestCabinetEntry({ props }).fetch(target)).status).toBe(200);
+  const outcome = await exports.TestCabinetEntry.fetch(target).then(
     async (response) => `${response.status} ${await response.text()}`,
     (error: unknown) => `threw ${String(error)}`,
   );

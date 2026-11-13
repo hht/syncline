@@ -86,7 +86,7 @@ export async function subscribe(buckets: Buckets, list: Bucket[]): Promise<Subsc
   return { subscription, sub: await subscriptionHash(subscription) };
 }
 
-export const address = 'https://sync.test/catalog';
+export const address = 'https://sync.test/cabinet';
 
 /** Serves a pull URL as production does: the entry Worker rebuilds it with the canonical cursor, and the space parses the rebuilt URL. */
 export function serve(space: Space, sent: URL, who: Subscribed, limit: number) {
@@ -100,7 +100,7 @@ export function serve(space: Space, sent: URL, who: Subscribed, limit: number) {
 export function install() {
   const storage = deviceStorage(...deviceSchema);
   const device = new Device(storage, []);
-  return { storage, device, mirror: device.shared('catalog', tables) };
+  return { storage, device, mirror: device.shared('cabinet', tables) };
 }
 type Installed = ReturnType<typeof install>;
 

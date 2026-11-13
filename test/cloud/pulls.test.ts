@@ -4,7 +4,7 @@ import type { BucketRules } from '../../src/cloud/buckets.ts';
 import { Space } from '../../src/cloud/space.ts';
 import { valueBytes, valueChars } from '../../src/protocol/limits.ts';
 import { type Cookie, chunkLimit, socketLimit } from '../../src/protocol/messages.ts';
-import { subscribed } from '../support/test-catalog.ts';
+import { subscribed } from '../support/test-cabinet.ts';
 import { cloudStorage, measureReads } from '../support/test-storage.ts';
 
 // Cloud memory budget for reading storage (pulls, notices, whole-table rescans): single rows and commit keys can approach value size limits;

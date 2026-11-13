@@ -9,7 +9,7 @@ import { alarmAfter } from '../worker/test-space.ts';
 
 afterAll(() => fannedOut('quiet'));
 
-const quiet = () => env.CATALOG.getByName('quiet');
+const quiet = () => env.CABINET.getByName('quiet');
 
 test('a server write changing no rows commits no version and leaves the hourly wakeup in place', async () => {
   await quiet().publish('z1');
@@ -53,7 +53,7 @@ test('a reserved chore this version no longer knows (left by an earlier deploy) 
 });
 
 test('a server write returns once a shard has not answered for 10 s', async () => {
-  await env.CATALOG_BROADCAST.getByName('quiet#0').hangNext(1);
+  await env.CABINET_BROADCAST.getByName('quiet#0').hangNext(1);
   const started = Date.now();
   const outcome = await Promise.race([
     quiet()

@@ -5,7 +5,7 @@ import { Space } from '../../src/cloud/space.ts';
 import type { Op, Poke } from '../../src/protocol/messages.ts';
 import { queryOf } from '../../src/sqlite/storage.ts';
 import { prepareInternalTables } from '../../src/tables/internal-tables.ts';
-import { admin, createProgram, program, subscribed, viewer } from '../support/test-catalog.ts';
+import { admin, createProject, project, subscribed, viewer } from '../support/test-cabinet.ts';
 import { filled } from '../support/test-pull.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 
@@ -25,33 +25,33 @@ test('multi-segment write failure rolls back completely, and chunk boundaries co
       .exec('SELECT version FROM _syncline_boundary ORDER BY version')
       .toArray()
       .map((row) => Number(row.version));
-  commits.record([['program', { id: 'a' }]]);
+  commits.record([['project', { id: 'a' }]]);
   expect(() =>
     storage.transactionSync(() => {
       const recording = commits.begin(null, null);
-      for (let index = 0; index < 5; index += 1) recording.add(['program', { id: `x${index}` }]);
+      for (let index = 0; index < 5; index += 1) recording.add(['project', { id: `x${index}` }]);
       throw new Error('Mid-write failure');
     }),
   ).toThrow('Mid-write failure');
   expect(commits.head().version).toBe(1);
   // Resumes count from 1 row prior to failure: 2 more rows reach threshold of 3, recording boundary at version 2 (ignoring aborted mid-write boundary).
   commits.record([
-    ['program', { id: 'b' }],
-    ['program', { id: 'c' }],
+    ['project', { id: 'b' }],
+    ['project', { id: 'c' }],
   ]);
   expect(boundaries()).toEqual([2]);
 });
 
 test('shared space multi-segment write where same row leaves public bucket then deletes: public subscriber receives deletion without unviewed drafts', () => {
-  const buckets = { public: { program: { where: "status = 'published'" } }, all: { program: {} } };
-  const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 3 } });
-  space.mutate((tx) => tx.insert(program, { id: 'p1', status: 'published' }));
+  const buckets = { public: { project: { where: "status = 'published'" } }, all: { project: {} } };
+  const space = new Space(cloudStorage(createProject), [project], { shared: { buckets, chunkRows: 3 } });
+  space.mutate((tx) => tx.insert(project, { id: 'p1', status: 'published' }));
   const base = space.head();
   const before = { public: landedOf(space, viewer), admin: landedOf(space, admin) };
   space.mutate((tx) => {
-    tx.update(program, { id: 'p1', status: 'draft' });
-    for (let index = 0; index < 3000; index += 1) tx.insert(program, { id: longId(index), status: 'draft' });
-    tx.delete(program, { id: 'p1' });
+    tx.update(project, { id: 'p1', status: 'draft' });
+    for (let index = 0; index < 3000; index += 1) tx.insert(project, { id: longId(index), status: 'draft' });
+    tx.delete(project, { id: 'p1' });
   });
   // Write splits across versions: first change (moved to draft) and deletion are recorded in different versions.
   expect(space.head().version - base.version).toBeGreaterThan(1);
@@ -64,29 +64,29 @@ test('shared space multi-segment write where same row leaves public bucket then 
 
 test('shared space with many long-named rules: segment splitting reserves headroom for bucket additions so revised commits stay within size limit', () => {
   const name = (index: number) => `rule-${index}-${'x'.repeat(30)}`;
-  const buckets = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [name(index), { program: {} }]));
-  const space = new Space(cloudStorage(createProgram), [program], { shared: { buckets, chunkRows: 100_000 } });
+  const buckets = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [name(index), { project: {} }]));
+  const space = new Space(cloudStorage(createProject), [project], { shared: { buckets, chunkRows: 100_000 } });
   const first = subscribed([name(0)]);
   const before = landedOf(space, first);
   space.mutate((tx) => {
-    for (let index = 0; index < 2000; index += 1) tx.insert(program, { id: `p${index}`, status: 'draft' });
+    for (let index = 0; index < 2000; index += 1) tx.insert(project, { id: `p${index}`, status: 'draft' });
   });
   expect(opsSince(space, first, before)).toHaveLength(2000);
 });
 
 test('keyless commits still record version: empty table enters sync or bucket rules revise; server writes touching no synced rows record nothing', () => {
   const other = sqliteTable('other', { id: text().primaryKey() });
-  const storage = cloudStorage(createProgram, 'CREATE TABLE other (id TEXT PRIMARY KEY)');
-  const before = new Space(storage, [program]).head().version;
-  const entered = new Space(storage, [program, other]);
+  const storage = cloudStorage(createProject, 'CREATE TABLE other (id TEXT PRIMARY KEY)');
+  const before = new Space(storage, [project]).head().version;
+  const entered = new Space(storage, [project, other]);
   expect(entered.head().version).toBe(before + 1);
   entered.mutate(() => undefined);
   expect(entered.head().version).toBe(before + 1);
 
-  const shared = cloudStorage(createProgram);
-  const one = { a: { program: {} } };
-  const start = new Space(shared, [program], { shared: { buckets: one } }).head().version;
-  expect(new Space(shared, [program], { shared: { buckets: { ...one, b: { program: {} } } } }).head().version).toBe(start + 1);
+  const shared = cloudStorage(createProject);
+  const one = { a: { project: {} } };
+  const start = new Space(shared, [project], { shared: { buckets: one } }).head().version;
+  expect(new Space(shared, [project], { shared: { buckets: { ...one, b: { project: {} } } } }).head().version).toBe(start + 1);
 });
 
 type Request = Parameters<Space['pullShared']>[0];
@@ -128,15 +128,15 @@ test('multi-segment commit updates only modified segments during revision, skipp
   };
   const inserts = (space: Space) =>
     space.mutate((tx) => {
-      for (let index = 0; index < 5000; index += 1) tx.insert(program, { id: longId(index), status: 'draft' });
+      for (let index = 0; index < 5000; index += 1) tx.insert(project, { id: longId(index), status: 'draft' });
     });
   // 5,000 rows (~2 MB keys) split into 3 segments with 2 pre-written to storage. All match bucket: revised differs from initial (inserted without prior bucket).
-  const changed = cloudStorage(createProgram);
-  const all = new Space(changed, [program], { shared: { buckets: { all: { program: {} } } } });
+  const changed = cloudStorage(createProject);
+  const all = new Space(changed, [project], { shared: { buckets: { all: { project: {} } } } });
   expect(updates(changed, () => inserts(all))).toBe(2);
   // Matches no bucket: revised buckets remain empty, identical to pre-revision state.
-  const unchanged = cloudStorage(createProgram);
-  const none = new Space(unchanged, [program], { shared: { buckets: { none: { program: { where: '0' } } } } });
+  const unchanged = cloudStorage(createProject);
+  const none = new Space(unchanged, [project], { shared: { buckets: { none: { project: { where: '0' } } } } });
   expect(updates(unchanged, () => inserts(none))).toBe(0);
 });
 
@@ -147,8 +147,8 @@ test('compound primary keys are recorded in canonical order (sorted by column na
 });
 
 test('lmidsSince returns latest mutation ID for clients committing after cookie, omitting clients with commits only prior to cookie', () => {
-  const space = new Space(cloudStorage(createProgram), [program]);
-  const put = (id: string) => [{ op: 'put' as const, table: 'program', row: { id, status: 'draft' } }];
+  const space = new Space(cloudStorage(createProject), [project]);
+  const put = (id: string) => [{ op: 'put' as const, table: 'project', row: { id, status: 'draft' } }];
   space.push([
     { client: 'c1', id: 1, changes: put('a') },
     { client: 'c2', id: 1, changes: put('b') },
@@ -163,15 +163,15 @@ test('lmidsSince returns latest mutation ID for clients committing after cookie,
 });
 
 test('device write split across multi-segment commit confirms client when catching up from prior cookie; server writes omit client', () => {
-  const space = new Space(cloudStorage(createProgram), [program]);
+  const space = new Space(cloudStorage(createProject), [project]);
   const cookie = space.head();
   const changes = Array.from({ length: 3000 }, (_, index) => ({
     op: 'put' as const,
-    table: 'program',
+    table: 'project',
     row: { id: longId(index), status: 'draft' },
   }));
   space.push([{ client: 'c1', id: 1, changes }]);
   expect(space.head().version - cookie.version).toBeGreaterThan(1);
-  space.mutate((tx) => tx.insert(program, { id: 'server', status: 'draft' }));
+  space.mutate((tx) => tx.insert(project, { id: 'server', status: 'draft' }));
   expect((space.pull({ cookie }, Number.POSITIVE_INFINITY, true) as Poke).lmids).toEqual({ c1: 1 });
 });

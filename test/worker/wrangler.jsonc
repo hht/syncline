@@ -7,18 +7,18 @@
   "durable_objects": {
     "bindings": [
       { "name": "SPACE", "class_name": "TestSpace" },
-      { "name": "CATALOG", "class_name": "TestCatalog" },
-      { "name": "CATALOG_BROADCAST", "class_name": "TestCatalogBroadcast" }
+      { "name": "CABINET", "class_name": "TestCabinet" },
+      { "name": "CABINET_BROADCAST", "class_name": "TestCabinetBroadcast" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["TestSpace"] },
-    { "tag": "v2", "new_sqlite_classes": ["TestCatalog", "TestCatalogBroadcast"] }
+    { "tag": "v2", "new_sqlite_classes": ["TestCabinet", "TestCabinetBroadcast"] }
   ],
-  // The shared space entry point is uncached; pulls pass through cached TestCatalogEntry (Workers Cache).
+  // The shared space entry point is uncached; pulls pass through cached TestCabinetEntry (Workers Cache).
   "cache": { "enabled": true },
   "exports": {
     "default": { "type": "worker", "cache": { "enabled": false } },
-    "TestCatalogEntry": { "type": "worker", "cache": { "enabled": true } }
+    "TestCabinetEntry": { "type": "worker", "cache": { "enabled": true } }
   }
 }

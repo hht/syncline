@@ -5,7 +5,7 @@ import { Broadcast } from '../src/cloud/broadcast.ts';
 import { Server } from '../src/cloud/server.ts';
 import { Space } from '../src/cloud/space.ts';
 import { parsePullBody, parsePullRequest } from '../src/protocol/pull-url.ts';
-import { admin, createProgram, program } from './support/test-catalog.ts';
+import { admin, createProject, project } from './support/test-cabinet.ts';
 import { Device } from './support/test-device.ts';
 import { drain } from './support/test-drive.ts';
 import { privateCloud } from './support/test-entry.ts';
@@ -23,22 +23,22 @@ const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY)';
 /** Max characters of touched rows a shard round sends inline: larger rounds send hints. */
 const inlineLimit = 2000;
 
-/** Network serving the private space at /space and the shared space at /catalog, each endpoint seeing only the sockets it accepted. */
+/** Network serving the private space at /space and the shared space at /cabinet, each endpoint seeing only the sockets it accepted. */
 function cloud() {
   const notes = new Space(cloudStorage(createNote), [note]);
-  const catalog = new Space(cloudStorage(createProgram), [program], { shared: { buckets: { all: { program: {} } }, chunkRows: 4 } });
+  const cabinet = new Space(cloudStorage(createProject), [project], { shared: { buckets: { all: { project: {} } }, chunkRows: 4 } });
   const network: Network = new Network(
     (items) => items[0],
     () => ({
       ...privateCloud(server),
       accept: (socket, url, expiresAt, fingerprint) =>
-        url.pathname === '/catalog'
+        url.pathname === '/cabinet'
           ? broadcast.accept(socket, parsePullRequest(url).cookie, expiresAt, admin)
           : server.accept(socket, parsePullRequest(url).cookie, expiresAt, fingerprint),
       receive: (socket, message) => (shared.has(socket) ? broadcast.receive(socket) : server.receive(socket, message)),
       pull: (url, body) =>
-        new URL(url).pathname === '/catalog'
-          ? JSON.stringify(catalog.pullShared(parsePullRequest(url), admin))
+        new URL(url).pathname === '/cabinet'
+          ? JSON.stringify(cabinet.pullShared(parsePullRequest(url), admin))
           : server.pull(parsePullBody(body ?? '')),
     }),
   );
@@ -56,19 +56,19 @@ function cloud() {
   const shared = new Set<CloudEnd>();
   // A small chunk limit: oversized private writes reach the device as a hint
   const server: Server<CloudEnd> = new Server(own(new Set()), notes, 250);
-  const broadcast = new Broadcast<CloudEnd>(own(shared), async () => catalog.round(inlineLimit));
+  const broadcast = new Broadcast<CloudEnd>(own(shared), async () => cabinet.round(inlineLimit));
   const publish = (ids: string[], status = (id: string) => id) => {
-    const { base } = catalog.mutate((tx) => {
-      for (const id of ids) tx.upsert(program, { id, status: status(id) });
+    const { base } = cabinet.mutate((tx) => {
+      for (const id of ids) tx.upsert(project, { id, status: status(id) });
     });
-    if (base) void broadcast.notify(catalog.round(inlineLimit, base));
+    if (base) void broadcast.notify(cabinet.round(inlineLimit, base));
   };
   return { notes, network, server, publish };
 }
 
 /** The device with both connections: each space has its own token; records each socket and pull with the token it carried. */
 function device(network: Network) {
-  const storage = deviceStorage(createNote, createProgram);
+  const storage = deviceStorage(createNote, createProject);
   const device = new Device(storage, [note]);
   const options = network.options(0);
   const recorded = { opened: [] as string[], fetched: [] as string[], held: [] as (() => void)[], holding: false };
@@ -87,11 +87,11 @@ function device(network: Network) {
   });
   const connections = [
     new Connection(device.private, { url: 'https://sync.test/space', ...spaceOptions('valid') }),
-    new Connection(device.shared('catalog', [program]), { url: 'https://sync.test/catalog', ...spaceOptions('renewed') }),
+    new Connection(device.shared('cabinet', [project]), { url: 'https://sync.test/cabinet', ...spaceOptions('renewed') }),
   ];
   const local = () => ({
     notes: drizzle(storage).select().from(note).orderBy(note.id).all(),
-    programs: drizzle(storage).select().from(program).orderBy(program.id).all(),
+    projects: drizzle(storage).select().from(project).orderBy(project.id).all(),
   });
   return { device, connections, recorded, local };
 }
@@ -119,7 +119,7 @@ test('private and shared spaces syncing on one device ignore each other’s sock
   network.failOne();
   await stepUntil(network, () => recorded.opened.length === 2, ['handshake']);
   await drain(network);
-  expect(local()).toEqual({ notes: [{ id: 'n0' }], programs: [{ id: 'p1', status: 'p1' }] });
+  expect(local()).toEqual({ notes: [{ id: 'n0' }], projects: [{ id: 'p1', status: 'p1' }] });
   expect(notes.pull({ cookie: null }, 100_000).patch).toContainEqual(expect.objectContaining({ key: { id: 'n0' } }));
   // Both spaces receive a hint and wait for a token to pull over HTTP at once
   recorded.holding = true;
@@ -140,15 +140,15 @@ test('private and shared spaces syncing on one device ignore each other’s sock
   await write(phone, (tx) => tx.insert(note).values({ id: 'n1' }));
   publish(['p2']);
   await drain(network);
-  expect([local().notes.length, local().programs.length, notes.pull({ cookie: null }, 100_000).patch.length]).toEqual([12, 42, 13]);
+  expect([local().notes.length, local().projects.length, notes.pull({ cookie: null }, 100_000).patch.length]).toEqual([12, 42, 13]);
   for (const connection of connections)
     expect(connection.status()).toMatchObject({ connected: true, downloadError: undefined, pending: 0 });
   // Each space pulled with its own token and reconnected once after the disconnect and once after the resync: no event of one space
   // disturbed the other. After the hints the private space pulls at once, while the shared space spreads its pull
-  const [privatePull, sharedPull] = ['/space Bearer valid', '/catalog Bearer renewed'];
+  const [privatePull, sharedPull] = ['/space Bearer valid', '/cabinet Bearer renewed'];
   const pulls = (count: number) => Array<string>(count).fill(privatePull);
   expect(recorded.fetched).toEqual([privatePull, sharedPull, ...pulls(2), sharedPull, ...pulls(5), sharedPull, ...pulls(4), sharedPull]);
-  expect(recorded.opened).toEqual(['/catalog', '/space', '/catalog', '/space', '/catalog', '/space']);
+  expect(recorded.opened).toEqual(['/cabinet', '/space', '/cabinet', '/space', '/cabinet', '/space']);
   expect(reported).toEqual([]);
   for (const connection of connections) connection.stop();
 });

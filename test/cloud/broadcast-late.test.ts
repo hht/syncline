@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test, vi } from 'vitest';
 import { expired } from '../../src/protocol/messages.ts';
-import { program } from '../support/test-catalog.ts';
+import { project } from '../support/test-cabinet.ts';
 import { captureReported } from '../support/test-errors.ts';
 import { hinted, setup, unsent } from './test-broadcast.ts';
 
@@ -9,11 +9,11 @@ import { hinted, setup, unsent } from './test-broadcast.ts';
 // in model/Fanout.tla).
 
 test('a device a late round leaves behind after a shard restart catches up once its token expires and it connects again', async () => {
-  const { space, shard, catalog, restart, connect, fail, pullAll } = await setup();
+  const { space, shard, cabinet, restart, connect, fail, pullAll } = await setup();
   // The fanout sends (base, p2], gives up on it, and the call reaches the shard only after a restart
   const { base, round: late } = unsent(space());
   await pullAll();
-  space().mutate((tx) => tx.upsert(program, { id: 'p3', status: 'published' }), 0);
+  space().mutate((tx) => tx.upsert(project, { id: 'p3', status: 'published' }), 0);
   await shard().notify(space().round(64_000, base));
   restart();
   await shard().notify(late);
@@ -25,20 +25,20 @@ test('a device a late round leaves behind after a shard restart catches up once 
   const reported = captureReported();
   const expiresAt = Date.now() + 60_000;
   const stale = await connect('public', expiresAt);
-  for (const message of stale.sent) await catalog.notified(JSON.parse(message), false);
+  for (const message of stale.sent) await cabinet.notified(JSON.parse(message), false);
   // The failed catch-up falls back to a hint at the point the late round left, which the device already holds: it sees nothing newer,
   // and having heard from the shard, it keeps the connection
   expect(reported).toEqual(['Shared space error']);
   expect(hinted(stale)).toEqual(late.cookie);
-  expect(catalog.behind()).toBe(false);
-  expect(catalog.cookie()?.version).toBeLessThan(space().head().version);
+  expect(cabinet.behind()).toBe(false);
+  expect(cabinet.cookie()?.version).toBeLessThan(space().head().version);
   fail(false);
   vi.setSystemTime(expiresAt + 1);
   shard().closeExpired();
   expect(stale.closed).toEqual([expired]);
   const fresh = await connect();
-  for (const message of fresh.sent) await catalog.notified(JSON.parse(message), false);
-  expect(catalog.behind()).toBe(true);
+  for (const message of fresh.sent) await cabinet.notified(JSON.parse(message), false);
+  expect(cabinet.behind()).toBe(true);
   await pullAll();
-  expect(catalog.cookie()).toEqual(space().head());
+  expect(cabinet.cookie()).toEqual(space().head());
 });

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import type { Chunk, Poke } from '../../src/protocol/messages.ts';
-import { admin, contents, day, landedRequest, program, pullAll, rules, schema } from '../support/test-catalog.ts';
+import { admin, contents, doc, landedRequest, project, pullAll, rules, schema } from '../support/test-cabinet.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 
 // Shared space log truncation (Truncate in model/Shared.tla): commit log is capped by byte size, purging the oldest entries;
@@ -12,9 +12,9 @@ import { cloudStorage } from '../support/test-storage.ts';
 /** Shared space with lowered commit log byte cap, written `count` times (cyclically updating rows so log grows without table data growth). */
 function written(count: number) {
   const cloud = cloudStorage(...schema);
-  const space = new Space(cloud, [program, day], { shared: { buckets: rules, chunkRows: 3 }, commitFloor: 2_000 });
+  const space = new Space(cloud, [project, doc], { shared: { buckets: rules, chunkRows: 3 }, commitFloor: 2_000 });
   for (let index = 0; index < count; index += 1)
-    space.mutate((tx) => tx.upsert(program, { id: `p${index % 5}`, status: index % 2 === 0 ? 'published' : 'draft' }));
+    space.mutate((tx) => tx.upsert(project, { id: `p${index % 5}`, status: index % 2 === 0 ? 'published' : 'draft' }));
   return { cloud, space };
 }
 
@@ -25,9 +25,9 @@ const truncateAll = (space: Space) => {
 test('truncating version 0 preserves space incarnation across broadcast rounds and pull chunks', () => {
   const { cloud, space } = written(10);
   const incarnation = space.round(1_000).incarnation;
-  space.mutate((tx) => tx.upsert(program, { id: 'q', status: 'published' }));
+  space.mutate((tx) => tx.upsert(project, { id: 'q', status: 'published' }));
   for (let index = 0; index < 400; index += 1)
-    space.mutate((tx) => tx.upsert(program, { id: 'q', status: index % 2 ? 'draft' : 'published' }));
+    space.mutate((tx) => tx.upsert(project, { id: 'q', status: index % 2 ? 'draft' : 'published' }));
   truncateAll(space);
   expect(cloud.sql.exec('SELECT 1 FROM _syncline_commit WHERE version = 0').toArray()).toEqual([]);
   expect(space.round(1_000).incarnation).toBe(incarnation);
@@ -40,7 +40,7 @@ test('cookie older than log floor receives reset response, prompting device to c
   const half = space.pullShared({ cookie: null }, admin, 50) as Chunk;
   expect(half).toHaveProperty('next');
   for (let index = 0; index < 400; index += 1)
-    space.mutate((tx) => tx.upsert(program, { id: `p${index % 5}`, status: index % 3 ? 'draft' : 'published' }));
+    space.mutate((tx) => tx.upsert(project, { id: `p${index % 5}`, status: index % 3 ? 'draft' : 'published' }));
   truncateAll(space);
   expect(space.pullShared(landedRequest(early), admin)).toMatchObject({ reset: true });
   expect(space.pullShared({ cookie: null, cursor: half.next }, admin)).toMatchObject({ reset: true });
@@ -54,7 +54,7 @@ test('shard broadcast round from a base below the log floor carries no rows: a s
   const { cloud, space } = written(1);
   const base = space.head();
   for (let index = 0; index < 400; index += 1)
-    space.mutate((tx) => tx.upsert(program, { id: `p${index % 5}`, status: index % 3 ? 'draft' : 'published' }));
+    space.mutate((tx) => tx.upsert(project, { id: `p${index % 5}`, status: index % 3 ? 'draft' : 'published' }));
   truncateAll(space);
   const [low] = cloud.sql.exec('SELECT version FROM _syncline_low').toArray();
   expect(Number(low?.version)).toBeGreaterThan(base.version);

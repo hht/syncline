@@ -59,7 +59,7 @@ test('openSyncline refuses autoIncrement on a synced table and on a shared space
   await expect(openedWith({ schema: { counted } })).rejects.toThrow('Column counted.id is autoIncrement');
   const { space, open } = await openedWith({ localOnly: { counted } });
   expect(open.options).toMatchObject({ config: { localOnly: [{ name: 'counted', key: ['id'] }] } });
-  expect(() => space.openShared('catalog', { schema: { counted }, url: 'https://sync.test/catalog' })).toThrow(
+  expect(() => space.openShared('cabinet', { schema: { counted }, url: 'https://sync.test/cabinet' })).toThrow(
     'Column counted.id is autoIncrement',
   );
 });
@@ -157,7 +157,7 @@ test('resync carries discardPending, false unless asked', async () => {
 
 test('opening a shared space with an empty name throws and leaves the private space status reporting', async () => {
   const { space, instance } = await openedWith();
-  expect(() => space.openShared('', { schema: {}, url: 'https://sync.test/catalog' })).toThrow('Shared space name must not be empty');
+  expect(() => space.openShared('', { schema: {}, url: 'https://sync.test/cabinet' })).toThrow('Shared space name must not be empty');
   const status = { ...offline, connected: true, pending: 0, hasSynced: true, updateNeeded: false };
   worker().deliver(instance, { type: 'status', channel: '', status: { ...status, downloadError: undefined, uploadError: undefined } });
   expect(space.status()).toMatchObject(status);

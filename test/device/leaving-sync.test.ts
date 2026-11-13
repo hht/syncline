@@ -7,16 +7,16 @@ import { deviceStorage } from '../support/test-storage.ts';
 // Tables leaving sync are wiped where no later owner switch could reach them; whatever the app does with the name afterwards must not
 // keep the database from opening, and a synced table it drops comes back in full.
 
-const program = sqliteTable('program', { id: text().primaryKey() });
-const course = sqliteTable('course', { id: text().primaryKey() });
+const project = sqliteTable('project', { id: text().primaryKey() });
+const crayon = sqliteTable('crayon', { id: text().primaryKey() });
 const synced = { base: null, cookie: { version: 1, nonce: 1 }, lmids: {} };
 
-/** Storage where shared space catalog (owner admin) declared program and course and received a course row. */
-async function catalogSynced() {
-  const storage = deviceStorage(createWorkbook, 'CREATE TABLE program (id TEXT PRIMARY KEY)', 'CREATE TABLE course (id TEXT PRIMARY KEY)');
+/** Storage where shared space cabinet (owner admin) declared project and crayon and received a crayon row. */
+async function cabinetSynced() {
+  const storage = deviceStorage(createWorkbook, 'CREATE TABLE project (id TEXT PRIMARY KEY)', 'CREATE TABLE crayon (id TEXT PRIMARY KEY)');
   const device = new Device(storage, tables, { owner: 'alice' });
-  const catalog = device.shared('catalog', [program, course], 'admin');
-  await catalog.receive({ ...synced, patch: [{ op: 'put', table: 'course', key: { id: 'c1' }, row: { id: 'c1' } }] });
+  const cabinet = device.shared('cabinet', [project, crayon], 'admin');
+  await cabinet.receive({ ...synced, patch: [{ op: 'put', table: 'crayon', key: { id: 'c1' }, row: { id: 'c1' } }] });
   device.close();
   return storage;
 }
@@ -24,21 +24,21 @@ async function catalogSynced() {
 test.for(['admin', 'public'])(
   'shared space (opened for %s) that stopped declaring a table the app replaced with a view still opens',
   async (owner) => {
-    const storage = await catalogSynced();
-    storage.sql.exec('DROP TABLE course');
-    storage.sql.exec('CREATE VIEW course AS SELECT id FROM program');
+    const storage = await cabinetSynced();
+    storage.sql.exec('DROP TABLE crayon');
+    storage.sql.exec('CREATE VIEW crayon AS SELECT id FROM project');
     const device = new Device(storage, tables, { owner: 'alice' });
-    await expect(device.shared('catalog', [program], owner).opened()).resolves.toBeUndefined();
+    await expect(device.shared('cabinet', [project], owner).opened()).resolves.toBeUndefined();
   },
 );
 
 test('retiring a table that was local-only at the last open keeps its local writes', async () => {
-  const storage = await catalogSynced();
-  const local = new Device(storage, tables, { owner: 'alice', localOnly: [course] });
-  await local.write(async (execute) => execute("INSERT INTO course (id) VALUES ('draft')", []));
+  const storage = await cabinetSynced();
+  const local = new Device(storage, tables, { owner: 'alice', localOnly: [crayon] });
+  await local.write(async (execute) => execute("INSERT INTO crayon (id) VALUES ('draft')", []));
   local.close();
-  new Device(storage, tables, { owner: 'alice', retired: ['course'] }).close();
-  expect(storage.sql.exec('SELECT id FROM course').toArray()).toEqual([{ id: 'draft' }]);
+  new Device(storage, tables, { owner: 'alice', retired: ['crayon'] }).close();
+  expect(storage.sql.exec('SELECT id FROM crayon').toArray()).toEqual([{ id: 'draft' }]);
 });
 
 const plan = sqliteTable('plan', { id: text().primaryKey(), note: text() });

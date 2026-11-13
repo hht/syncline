@@ -254,7 +254,7 @@ test('tag leaves sync mid multi-chunk incremental pull: staged tag rows are disc
   for (let index = 0; index < 50; index += 1) both.mutate((tx) => tx.insert(tag, { id: `t${index}`, name: 'lid' }));
   for (let index = 0; index < 50; index += 1) both.mutate((tx) => tx.insert(workbook, { id: `w${index}` }));
   storage.sql.exec(
-    'INSERT INTO _syncline_unknown (name, row, space, key) VALUES (\'plan\', \'{"id":"p1"}\', \'catalog\', \'{"id":"p1"}\')',
+    'INSERT INTO _syncline_unknown (name, row, space, key) VALUES (\'plan\', \'{"id":"p1"}\', \'cabinet\', \'{"id":"p1"}\')',
   );
   const first = both.pull(lagging.private.pullRequest(), 2000);
   expect(first).toHaveProperty('next');
@@ -262,7 +262,7 @@ test('tag leaves sync mid multi-chunk incremental pull: staged tag rows are disc
   const space = new Space(cloud, [workbook], { retired: ['tag'] });
   for (let step = 0; lagging.private.behind() && step < 20; step += 1)
     await lagging.private.receive(space.pull({ ...lagging.private.pullRequest(), checksum: '' }, 2000));
-  expect(storage.sql.exec('SELECT name, space FROM _syncline_unknown').toArray()).toEqual([{ name: 'plan', space: 'catalog' }]);
+  expect(storage.sql.exec('SELECT name, space FROM _syncline_unknown').toArray()).toEqual([{ name: 'plan', space: 'cabinet' }]);
   expect(rows(storage, 'workbook')).toHaveLength(50);
   expect(await lagging.private.verify()).toBe(true);
 });

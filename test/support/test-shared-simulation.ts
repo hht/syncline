@@ -6,8 +6,8 @@ import { Network } from './test-network.ts';
 import { random } from './test-random.ts';
 import {
   bucketsOf,
-  createProgram,
-  program,
+  createProject,
+  project,
   type Row,
   rowsOf,
   SharedCloud,
@@ -34,7 +34,7 @@ import type { Message } from './test-trace.ts';
 // Stale intermediate chunks are covered by dedicated unit tests and the model.
 // @see https://apple.github.io/foundationdb/testing.html
 
-const url = 'https://sync.test/catalog';
+const url = 'https://sync.test/cabinet';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 /** Formats subscription name into model bucket names (TraceShared.tla): ['team', 'a'] becomes 'team.a'; empty when undefined. */
 const bucketNames = (name: string | undefined) => (name === undefined ? [] : bucketsOf(name).map((bucket) => bucket.join('.')));
@@ -51,7 +51,7 @@ export class SharedSimulation {
   readonly #history = new Map<string, Row[]>();
   /** Rows each device showed at its last landed cookie: a resync or reset drops the cookie but keeps them visible until the full pull lands. */
   readonly #lastLanded = new Map<number, Row[]>();
-  readonly #storages = [0, 1, 2].map(() => deviceStorage(createProgram));
+  readonly #storages = [0, 1, 2].map(() => deviceStorage(createProject));
   /** Active owner logged into each device: switching owners clears previously visible rows. */
   readonly owners: string[] = [];
   readonly #devices: Device[] = [];
@@ -119,7 +119,7 @@ export class SharedSimulation {
       this.#lastLanded.delete(index);
     }
     const device = new Device(this.storage(index), []);
-    const mirror = device.shared('catalog', [program], owner);
+    const mirror = device.shared('cabinet', [project], owner);
     this.#devices[index] = device;
     this.mirrors[index] = mirror;
     this.owners[index] = owner;
@@ -203,7 +203,7 @@ export class SharedSimulation {
   #converged() {
     return this.mirrors.every((mirror, index) => {
       const name = this.#cloud.subscriptions[index] as string;
-      const [row] = this.storage(index).sql.exec("SELECT incarnation FROM _syncline_cookie WHERE space = 'catalog'").toArray();
+      const [row] = this.storage(index).sql.exec("SELECT incarnation FROM _syncline_cookie WHERE space = 'cabinet'").toArray();
       return (
         !mirror.behind() &&
         row?.incarnation === this.#cloud.incarnation() &&
@@ -215,7 +215,7 @@ export class SharedSimulation {
 
   /** Subscription name landed on device index; undefined if not yet synced. */
   #landed(index: number) {
-    const [row] = this.storage(index).sql.exec("SELECT sub FROM _syncline_cookie WHERE space = 'catalog'").toArray();
+    const [row] = this.storage(index).sql.exec("SELECT sub FROM _syncline_cookie WHERE space = 'cabinet'").toArray();
     return subscriptionNames.find((name) => subscriptionOf(name).sub === row?.sub);
   }
 
@@ -226,7 +226,7 @@ export class SharedSimulation {
 
   /** Rows on device at index. */
   rows(index: number) {
-    return drizzle(this.storage(index)).select().from(program).orderBy(program.id).all();
+    return drizzle(this.storage(index)).select().from(project).orderBy(project.id).all();
   }
 
   /** Records visible rows for each subscription at cloud head under current bucket rules. */
@@ -288,7 +288,7 @@ export class SharedSimulation {
     const seen = this.mirrors.map(
       (mirror, index): Seen => ({
         cookie: mirror.cookie()?.version ?? -1,
-        staged: Number(this.storage(index).sql.exec("SELECT count(*) AS n FROM _syncline_stage WHERE space = 'catalog'").toArray()[0]?.n),
+        staged: Number(this.storage(index).sql.exec("SELECT count(*) AS n FROM _syncline_stage WHERE space = 'cabinet'").toArray()[0]?.n),
         landed: bucketNames(this.#landed(index)),
         sub: bucketNames(this.#cloud.subscriptions[index]),
       }),

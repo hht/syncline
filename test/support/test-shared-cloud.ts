@@ -7,7 +7,7 @@ import { Space } from '../../src/cloud/space.ts';
 import { socketLimit } from '../../src/protocol/messages.ts';
 import { parsePullRequest } from '../../src/protocol/pull-url.ts';
 import { Seams } from './test-bounds.ts';
-import { subscribed } from './test-catalog.ts';
+import { subscribed } from './test-cabinet.ts';
 import type { Cloud, CloudEnd, Network } from './test-network.ts';
 import { picker } from './test-skeleton.ts';
 import { cloudStorage } from './test-storage.ts';
@@ -16,13 +16,13 @@ import { cloudStorage } from './test-storage.ts';
 // backend writes, fanout rounds to shards (retrying dropped rounds with backoff), deploy rule updates, shard restarts
 // and hibernated eviction, space rebuilds, token updates, and incremental bucket counting.
 
-export const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull(), title: text().notNull(), team: text() });
-export const createProgram = 'CREATE TABLE program (id TEXT PRIMARY KEY, status TEXT NOT NULL, title TEXT NOT NULL, team TEXT)';
+export const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull(), title: text().notNull(), team: text() });
+export const createProject = 'CREATE TABLE project (id TEXT PRIMARY KEY, status TEXT NOT NULL, title TEXT NOT NULL, team TEXT)';
 
 /** Deployed bucket rule variants: public filter alternates between published and featured; includes all and team-partitioned buckets. */
 const definitions: BucketRules[] = [
-  { public: { program: { where: "status = 'published'" } }, all: { program: {} }, team: { program: { by: ['team'] } } },
-  { public: { program: { where: "status IN ('published', 'featured')" } }, all: { program: {} }, team: { program: { by: ['team'] } } },
+  { public: { project: { where: "status = 'published'" } }, all: { project: {} }, team: { project: { by: ['team'] } } },
+  { public: { project: { where: "status IN ('published', 'featured')" } }, all: { project: {} }, team: { project: { by: ['team'] } } },
 ];
 
 /** Subscription configurations: adding, removing, or simultaneously adding and removing buckets. */
@@ -57,13 +57,13 @@ export type Row = { id: string; status: string; title: string; team: string | nu
 /** Computes visible rows for subscription under definition rules. */
 export function rowsOf(storage: ReturnType<typeof cloudStorage>, definition: BucketRules, subscription: Bucket[]) {
   const conditions = subscription.map(([rule, ...params]) => {
-    const member = definition[rule]?.program;
+    const member = definition[rule]?.project;
     if (!member) return '0';
     const by = (member.by ?? []).map((column, index) => `${column} = '${String(params[index])}'`);
     return `(${[member.where ?? '1', ...by].join(' AND ')})`;
   });
   const where = conditions.length > 0 ? conditions.join(' OR ') : '0';
-  return storage.sql.exec(`SELECT id, status, title, team FROM program WHERE ${where} ORDER BY id`).toArray() as Row[];
+  return storage.sql.exec(`SELECT id, status, title, team FROM project WHERE ${where} ORDER BY id`).toArray() as Row[];
 }
 
 /** Message bounds for the sizes this cloud configures. */
@@ -74,7 +74,7 @@ export function seams() {
   return new Seams({
     chunk: chunkChars,
     socket: socketLimit,
-    tables: ['program'],
+    tables: ['project'],
     key: { id: longest(keys) },
     shared: {
       bucket: longest(subscriptions.flatMap(({ subscription }) => subscription)),
@@ -86,7 +86,7 @@ export function seams() {
 
 export class SharedCloud {
   /** Shared space database storage: replaced on rebuild. */
-  storage: ReturnType<typeof cloudStorage> = cloudStorage(createProgram);
+  storage: ReturnType<typeof cloudStorage> = cloudStorage(createProject);
   #deployed = 0;
   #space: Space;
   #broadcast: Broadcast<CloudEnd>;
@@ -138,7 +138,7 @@ export class SharedCloud {
 
   /** Maps row bucket columns to identifier (c in model/TraceShared.tla): statuses x teams mapped to 1-9 (0 for absent). */
   bucketColumn(id: string) {
-    const [row] = this.storage.sql.exec('SELECT status, team FROM program WHERE id = ?', id).toArray();
+    const [row] = this.storage.sql.exec('SELECT status, team FROM project WHERE id = ?', id).toArray();
     if (!row) return 0;
     return statuses.indexOf(String(row.status)) * teams.length + teams.indexOf((row.team as string | null) ?? null) + 1;
   }
@@ -176,7 +176,7 @@ export class SharedCloud {
       return cursor;
     };
     const sql = { exec, databaseSize: 0 };
-    const space = new Space({ ...storage, sql }, [program], { shared: { buckets: this.definition(), chunkRows }, commitFloor });
+    const space = new Space({ ...storage, sql }, [project], { shared: { buckets: this.definition(), chunkRows }, commitFloor });
     this.#fanout = new Fanout(
       {
         shards: ['shard'],
@@ -235,7 +235,7 @@ export class SharedCloud {
     void this.#fanout.deliver();
   }
 
-  /** Backend write: modifies or deletes a program row and triggers fanout delivery. */
+  /** Backend write: modifies or deletes a project row and triggers fanout delivery. */
   write() {
     const base = this.#space.head();
     const id = this.#pick(keys) as string;
@@ -243,8 +243,8 @@ export class SharedCloud {
     const status = this.#pick(statuses) as string;
     const team = this.#pick(teams) ?? null;
     this.#space.mutate((tx) => {
-      if (this.#random() < 0.2) tx.delete(program, { id });
-      else tx.upsert(program, { id, status, title: `t${this.#titles}`, team });
+      if (this.#random() < 0.2) tx.delete(project, { id });
+      else tx.upsert(project, { id, status, title: `t${this.#titles}`, team });
     }, 0);
     if (this.#space.head().version === base.version) return;
     this.deliver();
@@ -255,7 +255,7 @@ export class SharedCloud {
    * resets version counter and incarnation nonce.
    */
   rebuild() {
-    this.storage = cloudStorage(createProgram);
+    this.storage = cloudStorage(createProject);
     this.#saved = null;
     this.#space = this.#open();
     this.deliver();

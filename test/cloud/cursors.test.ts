@@ -6,7 +6,7 @@ import { Space } from '../../src/cloud/space.ts';
 import { keyBytes, subscriptionBytes } from '../../src/protocol/limits.ts';
 import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
 import { pullURL } from '../../src/protocol/pull-url.ts';
-import { catalog, contents, landedRequest, pullAll, subscribed, viewer } from '../support/test-catalog.ts';
+import { cabinet, contents, landedRequest, pullAll, subscribed, viewer } from '../support/test-cabinet.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 
 // Pull cursors: scanning resumes smoothly across schema changes when tables are altered during active pulls; forged or corrupted cursors and landed subscriptions do not throw; private and shared spaces share identical cursor structure.
@@ -189,18 +189,18 @@ test('maximum shared space pull URL length (8 KB subscription, max bucket/key le
     tail: { at: cookie, index: most },
     carried: { downloaded: most, total: most },
   });
-  const url = pullURL('https://sync.example.com/catalog', { cookie, cursor, landed, atLeast: most, incarnation: most });
+  const url = pullURL('https://sync.example.com/cabinet', { cookie, cursor, landed, atLeast: most, incarnation: most });
   expect(url.length).toBeLessThan(16 * 1024);
 });
 
 test('a landed subscription that is not base64url JSON of a bucket list (forged or corrupted) counts as absent: full pull with clear op', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   const { cookie } = landedRequest(pullAll(space, viewer, { cookie: null }));
   const base64url = (json: string) => btoa(json).replaceAll('+', '-').replaceAll('/', '_');
   for (const landed of [base64url('{"buckets":["public"]}'), base64url('[1]'), base64url('not json'), '%%%']) {
     const after = pullAll(space, viewer, { cookie, landed });
     expect((after[0] as Chunk).patch[0], landed).toEqual({ op: 'clear' });
-    expect(contents(after), landed).toEqual(['day/p1-d', 'program/p1']);
+    expect(contents(after), landed).toEqual(['doc/p1-d', 'project/p1']);
   }
 });

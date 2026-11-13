@@ -124,7 +124,7 @@ test('local-only tables cannot share names with synced or shared space tables', 
     'local-only table has the same name as a synced table: workbook',
   );
   const device = new Device(storage, tables, { localOnly: [timer] });
-  expect(() => device.shared('catalog', [timer])).toThrow('same name as an existing synced or local-only table: reminder');
+  expect(() => device.shared('cabinet', [timer])).toThrow('same name as an existing synced or local-only table: reminder');
 });
 
 test('a local-only table with rows that a later release syncs: its rows, which would never upload, are wiped and the space pulls in full', async () => {

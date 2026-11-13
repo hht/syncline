@@ -14,7 +14,7 @@ import { inbox } from './test-socket.ts';
 export const fannedOut = (name: string) =>
   vi.waitFor(
     () =>
-      runInDurableObject(env.CATALOG.getByName(name), (_, state) => {
+      runInDurableObject(env.CABINET.getByName(name), (_, state) => {
         const confirmed = state.storage.kv.get('syncline:fanout');
         const head = state.storage.sql.exec<{ version: number }>('SELECT max(version) AS version FROM _syncline_commit').one();
         expect(confirmed).toMatchObject({ cookie: { version: head.version } });
@@ -22,10 +22,10 @@ export const fannedOut = (name: string) =>
     { timeout: 10_000 },
   );
 
-export const url = 'https://sync.test/catalog';
+export const url = 'https://sync.test/cabinet';
 /** Test token helper: admin subscribes to all buckets, public subscribes to public bucket. */
 export const token = (who: string) => `${who}.${Number.MAX_SAFE_INTEGER}`;
-export const catalog = () => env.CATALOG.getByName('catalog');
+export const cabinet = () => env.CABINET.getByName('cabinet');
 
 /** Generates forwarded entry headers (subscription and hash) for direct invocations. */
 export async function entryHeaders(who: string) {
@@ -39,7 +39,7 @@ export async function pullAll(who: string) {
   for (let cursor: string | undefined; chunks.length < 20; ) {
     const target = pullURL(url, { cookie: null, ...(cursor === undefined ? {} : { cursor }) });
     const response = await exports.default.fetch(target, { headers: { Authorization: `Bearer ${token(who)}` } });
-    const stored = await catalog().fetch(new Request(target, { headers: await entryHeaders(who) }));
+    const stored = await cabinet().fetch(new Request(target, { headers: await entryHeaders(who) }));
     const chunk = (await response.json()) as Poke | Chunk;
     const cache = response.headers.get('Cache-Control');
     chunks.push({ chunk, cache, stored: stored.headers.get('Cache-Control'), body: await stored.text() });

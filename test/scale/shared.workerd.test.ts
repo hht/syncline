@@ -10,23 +10,23 @@ import { expectBounded, fillRows, measured, scale } from '../worker/test-reads.t
 // Shared space scaling in real Durable Objects: chunk rowsRead does not grow with table size (even with selective filters) or with the
 // writes since a chunk boundary, writes succeed with many rules.
 
-const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
+const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull() });
 
-/** Runs body in a fresh object with program table created; uses private test object to avoid shared broadcast shard startup round in flight. */
+/** Runs body in a fresh object with project table created; uses private test object to avoid shared broadcast shard startup round in flight. */
 const inObject = <T>(body: Parameters<typeof measured<T>>[1]) =>
   measured(env.SPACE.getByName(crypto.randomUUID()), (context) => {
-    context.raw.sql.exec('CREATE TABLE program (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
+    context.raw.sql.exec('CREATE TABLE project (id TEXT PRIMARY KEY, status TEXT NOT NULL)');
     return body(context);
   });
 
 test('selective bucket filter (only final row matches): chunk rowsRead has upper bound independent of table size using index scan', () =>
   inObject(({ raw, storage, reads }) => {
-    const buckets = { sparse: { program: { where: "status = 'sparse'" } } } satisfies BucketRules;
+    const buckets = { sparse: { project: { where: "status = 'sparse'" } } } satisfies BucketRules;
     // Table exists: rule indexes created in background; duplicated here for test setup.
-    const rules = new Buckets([program], buckets);
-    for (const sql of defineTables(storage, [program], [program], (table) => rules.indexes(table))) storage.sql.exec(sql);
-    const space = new Space(storage, [program], { shared: { buckets, chunkRows: 100 } });
-    fillRows(raw, 'program', scale, `printf('p%06d', i), CASE WHEN i = ${scale} THEN 'sparse' ELSE 'draft' END`);
+    const rules = new Buckets([project], buckets);
+    for (const sql of defineTables(storage, [project], [project], (table) => rules.indexes(table))) storage.sql.exec(sql);
+    const space = new Space(storage, [project], { shared: { buckets, chunkRows: 100 } });
+    fillRows(raw, 'project', scale, `printf('p%06d', i), CASE WHEN i = ${scale} THEN 'sparse' ELSE 'draft' END`);
     const subscribed = { subscription: ['["sparse"]'], sub: 'sparse' };
     const given: unknown[] = [];
     // Follows next to final chunk: each request is bounded.
@@ -63,20 +63,20 @@ test('first chunk of a full pull subscribed to 150 buckets over 20 tables: the l
 
 /** count rules where rule i matches rows where status equals rule name. */
 const rules = (count: number) =>
-  Object.fromEntries(Array.from({ length: count }, (_, i) => [`v${i}`, { program: { where: `status = 'v${i}'` } }]));
+  Object.fromEntries(Array.from({ length: count }, (_, i) => [`v${i}`, { project: { where: `status = 'v${i}'` } }]));
 
 test('table participating in 300 bucket rules accepts backend writes without exceeding statement argument limits', () =>
   inObject(({ storage }) => {
-    const space = new Space(storage, [program], { shared: { buckets: rules(300), chunkRows: 100 } });
-    expect(() => space.mutate((tx) => tx.upsert(program, { id: 'a', status: 'v0' }), 0)).not.toThrow();
+    const space = new Space(storage, [project], { shared: { buckets: rules(300), chunkRows: 100 } });
+    expect(() => space.mutate((tx) => tx.upsert(project, { id: 'a', status: 'v0' }), 0)).not.toThrow();
   }));
 
 test('single row matching 300 rules: round payload sizes by touched rows capped at limit without replicating per rule', () =>
   inObject(({ storage }) => {
-    const everywhere = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`v${i}`, { program: {} }]));
-    const space = new Space(storage, [program], { shared: { buckets: everywhere } });
+    const everywhere = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`v${i}`, { project: {} }]));
+    const space = new Space(storage, [project], { shared: { buckets: everywhere } });
     const base = space.head();
-    space.mutate((tx) => tx.upsert(program, { id: 'a', status: 'v0' }), 0);
+    space.mutate((tx) => tx.upsert(project, { id: 'a', status: 'v0' }), 0);
     const round = space.round(64_000, base);
     expect(round.rows).toHaveLength(1);
     expect(round.rows?.[0]?.now).toHaveLength(300);

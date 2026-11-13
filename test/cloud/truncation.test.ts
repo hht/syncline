@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Commits, rowOverhead } from '../../src/cloud/commits.ts';
 import { Space } from '../../src/cloud/space.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
-import { day, program, rules, schema } from '../support/test-catalog.ts';
+import { doc, project, rules, schema } from '../support/test-cabinet.ts';
 import { Device } from '../support/test-device.ts';
 import { createWorkbook, install, pulled, tables, upload, workbook, workbooks, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage, restoredStorage } from '../support/test-storage.ts';
@@ -171,9 +171,9 @@ test('a log up to its floor is within the limit however small the data, and one 
 
 test('a shared write split across commits records the byte size of each segment as stored, after buckets are added to its keys', () => {
   const cloud = cloudStorage(...schema);
-  const space = new Space(cloud, [program, day], { shared: { buckets: rules } });
+  const space = new Space(cloud, [project, doc], { shared: { buckets: rules } });
   space.mutate((tx) => {
-    for (let index = 0; index < 9000; index += 1) tx.upsert(program, { id: `${'k'.repeat(400)}${index}`, status: 'published' });
+    for (let index = 0; index < 9000; index += 1) tx.upsert(project, { id: `${'k'.repeat(400)}${index}`, status: 'published' });
   });
   const rows = query(cloud, 'SELECT bytes, length(CAST(keys AS BLOB)) AS stored FROM _syncline_commit WHERE version > 0 ORDER BY version');
   // More than two segments: growth from earlier segments must carry into every later one.

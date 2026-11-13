@@ -6,14 +6,14 @@ import { deviceStorage } from '../support/test-storage.ts';
 
 // Device schema compatibility against cloud schema, as the device judges it: tables and columns used by the device must exist in cloud sync declarations with matching shapes; omissions are compatible; retired references require app upgrades.
 
-const program = sqliteTable('program', { id: text().primaryKey() });
+const project = sqliteTable('project', { id: text().primaryKey() });
 const workbook = sqliteTable('workbook', {
   id: text().primaryKey(),
   title: text().notNull(),
   runs: integer(),
-  program: text().references(() => program.id),
+  project: text().references(() => project.id),
 });
-const cloud = declare([program, workbook]);
+const cloud = declare([project, workbook]);
 
 /** How a device declaring `tables` judges the cloud schema above with `retired` names. */
 const judge = (tables: SQLiteTable[], retired: string[] = []) =>
@@ -21,27 +21,27 @@ const judge = (tables: SQLiteTable[], retired: string[] = []) =>
 
 test('describes Drizzle table shapes: types, nullability, primary keys, and foreign keys', () => {
   expect(cloud.workbook).toEqual({
-    columns: { id: 'text!', title: 'text!', runs: 'integer', program: 'text' },
+    columns: { id: 'text!', title: 'text!', runs: 'integer', project: 'text' },
     key: ['id'],
-    references: ['program>program.id'],
+    references: ['project>project.id'],
   });
 });
 
 test('treats device schemas with subsets of cloud tables and columns as compatible, as well as identical schemas', () => {
   expect(
     judge([
-      program,
-      sqliteTable('workbook', { id: text().primaryKey(), title: text().notNull(), program: text().references(() => program.id) }),
+      project,
+      sqliteTable('workbook', { id: text().primaryKey(), title: text().notNull(), project: text().references(() => project.id) }),
     ]),
   ).toBeUndefined();
-  expect(judge([program, workbook])).toBeUndefined();
-  expect(judge([program])).toBeUndefined();
+  expect(judge([project, workbook])).toBeUndefined();
+  expect(judge([project])).toBeUndefined();
 });
 
 test('marks schemas ahead when device defines undeployed tables/columns, mismatched types/keys, or nullable columns declared non-null on cloud', () => {
   const device = [
-    program,
-    sqliteTable('workbook', { id: text().primaryKey(), title: text(), runs: text(), notes: text(), program: text() }),
+    project,
+    sqliteTable('workbook', { id: text().primaryKey(), title: text(), runs: text(), notes: text(), project: text() }),
     sqliteTable('tag', { id: text().primaryKey() }),
   ];
   expect(judge(device)).toEqual({
@@ -51,13 +51,13 @@ test('marks schemas ahead when device defines undeployed tables/columns, mismatc
   const rekeyed = sqliteTable('workbook', {
     id: text().notNull(),
     title: text().primaryKey(),
-    program: text().references(() => program.id),
+    project: text().references(() => project.id),
   });
-  expect(judge([program, rekeyed])).toEqual({ kind: 'ahead', names: ['workbook'] });
+  expect(judge([project, rekeyed])).toEqual({ kind: 'ahead', names: ['workbook'] });
 });
 
 test('rejects a cloud schema body that does not parse, quoting its start', () => {
-  const device = new Device(deviceStorage(), [program]);
+  const device = new Device(deviceStorage(), [project]);
   expect(() => device.private.judge(`<html>${'x'.repeat(300)}`)).toThrow(/^invalid cloud schema declaration format: <html>x{194}$/);
 });
 
@@ -67,7 +67,7 @@ test('treats device columns declared non-null when nullable on cloud as compatib
 
 test('marks schemas retired when referencing retired tables or columns, prioritizing retired over ahead', () => {
   const device = [
-    program,
+    project,
     sqliteTable('workbook', { id: text().primaryKey(), title: text().notNull(), notes: text(), sets: integer() }),
     sqliteTable('tag', { id: text().primaryKey() }),
   ];

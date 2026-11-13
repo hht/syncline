@@ -4,7 +4,7 @@ import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
 import { ValidationError } from '../../src/tables/validation.ts';
-import { catalog, contents, day, landedRequest, program, pullAll, rules, schema, viewer } from '../support/test-catalog.ts';
+import { cabinet, contents, doc, landedRequest, project, pullAll, rules, schema, viewer } from '../support/test-cabinet.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 
 // Server writes report stored primary key values (matching pushed writes from devices): caller values are mapped to column types (e.g. string "5" to integer 5),
@@ -128,13 +128,13 @@ test('a shared space server write updates a cloud-only table row unrecorded, bes
   const audit = sqliteTable('audit', { id: text().primaryKey(), note: text() });
   const storage = cloudStorage(...schema, 'CREATE TABLE audit (id TEXT PRIMARY KEY, note TEXT)');
   storage.sql.exec("INSERT INTO audit VALUES ('a1', 'old')");
-  const space = new Space(storage, [program, day], { shared: { buckets: rules } });
+  const space = new Space(storage, [project, doc], { shared: { buckets: rules } });
   space.mutate((tx) => {
     tx.update(audit, { id: 'a1', note: 'new' });
-    tx.insert(program, { id: 'p1', status: 'published' });
+    tx.insert(project, { id: 'p1', status: 'published' });
   });
   expect(storage.sql.exec('SELECT id, note FROM audit').toArray()).toEqual([{ id: 'a1', note: 'new' }]);
-  expect(contents(pullAll(space, viewer, { cookie: null }))).toEqual(['program/p1']);
+  expect(contents(pullAll(space, viewer, { cookie: null }))).toEqual(['project/p1']);
 });
 
 test('a server write storing bytes in a text column of a table created without STRICT throws ValidationError and stores nothing', () => {
@@ -147,21 +147,21 @@ test('a server write storing bytes in a text column of a table created without S
 });
 
 test('a shared space server write that catches a failed statement and goes on writing commits the rest, each row reported from its bucket before the write', () => {
-  const { space, publish } = catalog();
+  const { space, publish } = cabinet();
   publish('p1');
   const landed = landedRequest(pullAll(space, viewer, { cookie: null }));
   space.mutate((tx) => {
     try {
-      tx.update(program, { id: 'p1', status: null as never });
+      tx.update(project, { id: 'p1', status: null as never });
     } catch {
       // The integrator recovers from the failed statement: the transaction is still open.
     }
-    tx.insert(program, { id: 'p2', status: 'published' });
-    tx.update(program, { id: 'p1', status: 'draft' });
+    tx.insert(project, { id: 'p2', status: 'published' });
+    tx.update(project, { id: 'p1', status: 'draft' });
   });
   const patch = pullAll(space, viewer, landed).flatMap((chunk) => (chunk as Chunk).patch);
   expect(patch).toEqual([
-    { op: 'put', table: 'program', key: { id: 'p2' }, row: { id: 'p2', status: 'published' } },
-    { op: 'del', table: 'program', key: { id: 'p1' } },
+    { op: 'put', table: 'project', key: { id: 'p2' }, row: { id: 'p2', status: 'published' } },
+    { op: 'del', table: 'project', key: { id: 'p1' } },
   ]);
 });

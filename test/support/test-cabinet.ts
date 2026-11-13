@@ -7,20 +7,20 @@ import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import type { Shared } from './test-device.ts';
 import { cloudStorage } from './test-storage.ts';
 
-// Shared space pull test fixtures: program and day tables, public (published programs and public days) and all bucket rules.
+// Shared space pull test fixtures: project and doc tables, public (published projects and public docs) and all bucket rules.
 // Pulls chunks sequentially to final chunk; device pulls following its own requests until no staged chunks remain.
 
-export const program = sqliteTable('program', { id: text().primaryKey(), status: text().notNull() });
-export const day = sqliteTable('day', {
+export const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull() });
+export const doc = sqliteTable('doc', {
   id: text().primaryKey(),
-  program_id: text().references(() => program.id),
-  audience: text().notNull(),
+  project_id: text().references(() => project.id),
+  exposure: text().notNull(),
 });
-export const createProgram = 'CREATE TABLE program (id TEXT PRIMARY KEY, status TEXT NOT NULL)';
-export const schema = [createProgram, 'CREATE TABLE day (id TEXT PRIMARY KEY, program_id TEXT, audience TEXT NOT NULL)'];
+export const createProject = 'CREATE TABLE project (id TEXT PRIMARY KEY, status TEXT NOT NULL)';
+export const schema = [createProject, 'CREATE TABLE doc (id TEXT PRIMARY KEY, project_id TEXT, exposure TEXT NOT NULL)'];
 export const rules = {
-  public: { program: { where: "status = 'published'" }, day: { where: "audience = 'public'" } },
-  all: { program: {}, day: {} },
+  public: { project: { where: "status = 'published'" }, doc: { where: "exposure = 'public'" } },
+  all: { project: {}, doc: {} },
 } satisfies BucketRules;
 
 /** Creates a subscription descriptor: canonicalizes buckets; uses JSON representation as digest fingerprint in tests. */
@@ -33,14 +33,14 @@ export function subscribed(...buckets: Bucket[]) {
 export const viewer = subscribed(['public']);
 export const admin = subscribed(['all']);
 
-/** Shared space: chunk boundary every 3 changed rows; helper inserts a program and its day. */
-export function catalog() {
+/** Shared space: chunk boundary every 3 changed rows; helper inserts a project and its doc. */
+export function cabinet() {
   const cloud = cloudStorage(...schema);
-  const space = new Space(cloud, [program, day], { shared: { buckets: rules, chunkRows: 3 } });
-  const publish = (id: string, status = 'published', audience = 'public') =>
+  const space = new Space(cloud, [project, doc], { shared: { buckets: rules, chunkRows: 3 } });
+  const publish = (id: string, status = 'published', exposure = 'public') =>
     space.mutate((tx) => {
-      tx.insert(program, { id, status });
-      tx.insert(day, { id: `${id}-d`, program_id: id, audience });
+      tx.insert(project, { id, status });
+      tx.insert(doc, { id: `${id}-d`, project_id: id, exposure });
     });
   return { cloud, space, publish };
 }
@@ -62,16 +62,16 @@ export const pullOne = (space: Space, request: PullRequest) => space.pullShared(
 
 /** Device pulls chunks sequentially until no staged chunks remain; returns issued requests. */
 export async function pullRest(
-  catalog: Shared,
+  cabinet: Shared,
   space: Space,
   serve: (request: PullRequest) => Poke | Chunk | Reset = (request) => pullOne(space, request),
 ) {
   const requests: PullRequest[] = [];
   do {
-    const request = catalog.pullRequest();
+    const request = cabinet.pullRequest();
     requests.push(request);
-    expect(await catalog.receive(serve(request))).toBe(true);
-  } while (catalog.staging() && requests.length < 20);
+    expect(await cabinet.receive(serve(request))).toBe(true);
+  } while (cabinet.staging() && requests.length < 20);
   return requests;
 }
 

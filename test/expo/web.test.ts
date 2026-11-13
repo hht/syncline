@@ -130,13 +130,13 @@ test('queries on closed database fail with "Local database is closed"; new event
 test('marks downloadError on private space and shared spaces when open fails without lingering in connecting state', async () => {
   const space = open(async () => 'valid');
   const { instance, call } = worker().last('open');
-  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog' });
+  const cabinet = space.openShared('cabinet', { schema: {}, url: 'https://sync.test/cabinet' });
   worker().deliver(instance, { type: 'reply', id: call.id ?? -1, error: { message: 'Local database is open in another tab' } });
   await flush();
   const failed = { connecting: false, downloadError: expect.objectContaining({ message: 'Local database is open in another tab' }) };
-  expect([space.status(), catalog.status()]).toEqual([expect.objectContaining(failed), expect.objectContaining(failed)]);
+  expect([space.status(), cabinet.status()]).toEqual([expect.objectContaining(failed), expect.objectContaining(failed)]);
   const reasons = await Promise.all(
-    [space.waitForReady(), catalog.waitForReady()].map((opening) => opening.catch((error: Error) => error.message)),
+    [space.waitForReady(), cabinet.waitForReady()].map((opening) => opening.catch((error: Error) => error.message)),
   );
   expect(reasons).toEqual(['Local database is open in another tab', 'Local database is open in another tab']);
   expect(worker().posted.map(({ call }) => call.type)).toEqual(['open', 'shared']);
@@ -145,7 +145,7 @@ test('marks downloadError on private space and shared spaces when open fails wit
 test('opening a shared space reaches the core before queries issued after it, so a user switch clears rows before they are read', async () => {
   const { space } = await opened();
   worker().posted.length = 0;
-  space.openShared('catalog', { schema: { note }, url: 'https://sync.test/catalog', userID: 'u2' });
+  space.openShared('cabinet', { schema: { note }, url: 'https://sync.test/cabinet', userID: 'u2' });
   void space.db
     .select()
     .from(note)
@@ -161,12 +161,12 @@ test('opening a shared space reaches the core before queries issued after it, so
 
 test('reopening identical shared space returns open instance without reopening; throws when url or user differs', async () => {
   const { space } = await opened();
-  const options = { schema: {}, url: 'https://sync.test/catalog', userID: 'u1' };
-  const first = space.openShared('catalog', options);
-  expect(space.openShared('catalog', options)).toBe(first);
+  const options = { schema: {}, url: 'https://sync.test/cabinet', userID: 'u1' };
+  const first = space.openShared('cabinet', options);
+  expect(space.openShared('cabinet', options)).toBe(first);
   await flush();
   expect(worker().posted.filter(({ call }) => call.type === 'shared')).toHaveLength(1);
-  expect(() => space.openShared('catalog', { ...options, userID: 'u2' })).toThrow('already open');
+  expect(() => space.openShared('cabinet', { ...options, userID: 'u2' })).toThrow('already open');
 });
 
 test('in-flight calls fail with "Local database is closed" when close reply arrives without waiting indefinitely', async () => {
@@ -283,12 +283,12 @@ test('waitForReady() resolves once open and connect succeed, and rejects with th
   const refused = { message: 'table has the same name as an existing synced or local-only table: note' };
   worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1, error: refused });
   await expect(clashing.waitForReady()).rejects.toThrow(refused.message);
-  const catalog = space.openShared('catalog', { schema: {}, url: 'https://sync.test/catalog?bucket=a' });
+  const cabinet = space.openShared('cabinet', { schema: {}, url: 'https://sync.test/cabinet?bucket=a' });
   await flush();
   worker().deliver(instance, { type: 'reply', id: worker().last('shared').call.id ?? -1 });
   await flush();
-  const invalid = { message: 'sync URL must not contain query string or fragment: https://sync.test/catalog?bucket=a' };
+  const invalid = { message: 'sync URL must not contain query string or fragment: https://sync.test/cabinet?bucket=a' };
   worker().deliver(instance, { type: 'reply', id: worker().last('connect').call.id ?? -1, error: invalid });
-  await expect(catalog.waitForReady()).rejects.toThrow(invalid.message);
-  expect(catalog.status().downloadError?.message).toBe(invalid.message);
+  await expect(cabinet.waitForReady()).rejects.toThrow(invalid.message);
+  expect(cabinet.status().downloadError?.message).toBe(invalid.message);
 });
