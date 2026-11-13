@@ -34,7 +34,7 @@ pub struct Column {
     pub field: String,
     pub storage: Storage,
     pub not_null: bool,
-    /// SQL literal for static default value (converted to stored database value): `0`, `'{"rest":90}'`, `NULL`; None if no default value.
+    /// SQL literal for static default value (converted to stored database value): `0`, `'{"rank":90}'`, `NULL`; None if no default value.
     pub default: Option<String>,
     /// Boolean column: must be 0 or 1.
     pub boolean: bool,
@@ -298,9 +298,9 @@ mod tests {
         json!({ "name": name, "field": name, "storage": storage, "notNull": not_null, "default": default, "boolean": false, "json": false })
     }
 
-    fn workout() -> Value {
+    fn workbook() -> Value {
         json!({
-            "name": "workout",
+            "name": "workbook",
             "columns": [
                 text("id"),
                 column("title", "text", true, &Value::Null),
@@ -310,17 +310,17 @@ mod tests {
         })
     }
 
-    fn exercise() -> Value {
+    fn excerpt() -> Value {
         json!({
-            "name": "exercise",
+            "name": "excerpt",
             "columns": [
-                text("id"), text("workout"),
+                text("id"), text("workbook"),
                 column("position", "integer", false, &Value::Null),
-                column("settings", "text", false, &json!(r#"'{"rest":90}'"#)),
+                column("settings", "text", false, &json!(r#"'{"rank":90}'"#)),
             ],
             "key": ["id"],
-            "indexes": [{ "name": "exercise.position", "columns": ["position"] }],
-            "foreignKeys": [{ "columns": ["workout"], "parent": "workout", "to": ["id"] }],
+            "indexes": [{ "name": "excerpt.position", "columns": ["position"] }],
+            "foreignKeys": [{ "columns": ["workbook"], "parent": "workbook", "to": ["id"] }],
         })
     }
 
@@ -361,26 +361,23 @@ mod tests {
     #[test]
     fn new_database_enables_incremental_auto_vacuum_and_creates_indexes_for_declarations_and_foreign_keys() {
         let db = Connection::open_in_memory().unwrap();
-        define(&db, &declared(json!([workout(), exercise(), pair()])), &[]).unwrap();
+        define(&db, &declared(json!([workbook(), excerpt(), pair()])), &[]).unwrap();
         let vacuum: i64 = db.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
         assert_eq!(vacuum, 2);
         let expected = [
             (
-                "exercise",
-                r#"CREATE TABLE "exercise" ("id" TEXT, "workout" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rest":90}', PRIMARY KEY ("id")) STRICT"#,
+                "excerpt",
+                r#"CREATE TABLE "excerpt" ("id" TEXT, "workbook" TEXT, "position" INTEGER, "settings" TEXT DEFAULT '{"rank":90}', PRIMARY KEY ("id")) STRICT"#,
             ),
-            (
-                "exercise.position",
-                r#"CREATE INDEX "exercise.position" ON "exercise" ("position")"#,
-            ),
-            ("exercise.workout", r#"CREATE INDEX "exercise.workout" ON "exercise" ("workout")"#),
+            ("excerpt.position", r#"CREATE INDEX "excerpt.position" ON "excerpt" ("position")"#),
+            ("excerpt.workbook", r#"CREATE INDEX "excerpt.workbook" ON "excerpt" ("workbook")"#),
             (
                 "pair",
                 r#"CREATE TABLE "pair" ("left" TEXT, "right" TEXT, PRIMARY KEY ("left", "right")) STRICT"#,
             ),
             (
-                "workout",
-                r#"CREATE TABLE "workout" ("id" TEXT, "title" TEXT, "done" INTEGER DEFAULT 0, PRIMARY KEY ("id")) STRICT"#,
+                "workbook",
+                r#"CREATE TABLE "workbook" ("id" TEXT, "title" TEXT, "done" INTEGER DEFAULT 0, PRIMARY KEY ("id")) STRICT"#,
             ),
         ];
         assert_eq!(schema(&db), expected.map(|(name, sql)| (name.to_owned(), sql.to_owned())));
@@ -391,32 +388,32 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         let set = json!({
             "name": "set",
-            "columns": [text("exercise"), column("position", "integer", false, &Value::Null)],
-            "key": ["exercise", "position"], "indexes": [], "foreignKeys": [{ "columns": ["exercise"], "parent": "exercise", "to": ["id"] }],
+            "columns": [text("excerpt"), column("position", "integer", false, &Value::Null)],
+            "key": ["excerpt", "position"], "indexes": [], "foreignKeys": [{ "columns": ["excerpt"], "parent": "excerpt", "to": ["id"] }],
         });
-        define(&db, &declared(json!([workout(), exercise(), set])), &[]).unwrap();
-        assert!(!schema(&db).iter().any(|(name, _)| name == "set.exercise"));
+        define(&db, &declared(json!([workbook(), excerpt(), set])), &[]).unwrap();
+        assert!(!schema(&db).iter().any(|(name, _)| name == "set.excerpt"));
         let detail: String = db
-            .query_row(r#"EXPLAIN QUERY PLAN SELECT * FROM "set" WHERE exercise = 'e1'"#, [], |row| {
+            .query_row(r#"EXPLAIN QUERY PLAN SELECT * FROM "set" WHERE excerpt = 'e1'"#, [], |row| {
                 row.get(3)
             })
             .unwrap();
-        assert!(detail.contains("INDEX sqlite_autoindex_set_1 (exercise=?)"), "{detail}");
+        assert!(detail.contains("INDEX sqlite_autoindex_set_1 (excerpt=?)"), "{detail}");
     }
 
     #[test]
     fn existing_table_only_adds_new_columns_and_is_idempotent() {
-        let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT) STRICT; INSERT INTO workout VALUES ('w1', 'leg day');");
-        define(&db, &declared(json!([workout()])), &[]).unwrap();
+        let db = opened("CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT) STRICT; INSERT INTO workbook VALUES ('w1', 'lab day');");
+        define(&db, &declared(json!([workbook()])), &[]).unwrap();
         let after = schema(&db);
-        define(&db, &declared(json!([workout()])), &[]).unwrap();
+        define(&db, &declared(json!([workbook()])), &[]).unwrap();
         assert_eq!(schema(&db), after);
         let row: (String, String, i64) = db
-            .query_row("SELECT id, title, done FROM workout", [], |row| {
+            .query_row("SELECT id, title, done FROM workbook", [], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .unwrap();
-        assert_eq!(row, ("w1".to_owned(), "leg day".to_owned(), 0));
+        assert_eq!(row, ("w1".to_owned(), "lab day".to_owned(), 0));
     }
 
     #[test]
@@ -432,31 +429,31 @@ mod tests {
 
     #[test]
     fn existing_column_type_mismatch_fails_on_define() {
-        let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
+        let db = opened("CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
         assert_eq!(
-            incompatible(&db, json!([workout()])),
-            "type of workout.done changed (database has text, declared has integer): column types cannot change; use a new table"
+            incompatible(&db, json!([workbook()])),
+            "type of workbook.done changed (database has text, declared has integer): column types cannot change; use a new table"
         );
     }
 
     #[test]
     fn adding_not_null_column_without_fixed_default_fails_while_fixed_default_succeeds() {
-        let with_reps = |default: Value| {
-            let mut table = workout();
+        let with_runs = |default: Value| {
+            let mut table = workbook();
             table["columns"]
                 .as_array_mut()
                 .unwrap()
-                .push(column("reps", "integer", true, &default));
+                .push(column("runs", "integer", true, &default));
             json!([table])
         };
         let db = opened(
-            "CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT; INSERT INTO workout VALUES ('w1', 'leg day', 0);",
+            "CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, done INTEGER DEFAULT 0) STRICT; INSERT INTO workbook VALUES ('w1', 'lab day', 0);",
         );
-        let message = "workout.reps is not null without a fixed default: adding such a column to an existing table fails on existing rows and un-upgraded apps; make it nullable or provide a fixed default";
-        assert_eq!(incompatible(&db, with_reps(Value::Null)), message);
-        assert_eq!(incompatible(&db, with_reps(json!("NULL"))), message);
-        define(&db, &declared(with_reps(json!("5"))), &[]).unwrap();
-        assert_eq!(rows(&db, "SELECT CAST(reps AS TEXT) FROM workout"), ["5"]);
+        let message = "workbook.runs is not null without a fixed default: adding such a column to an existing table fails on existing rows and un-upgraded apps; make it nullable or provide a fixed default";
+        assert_eq!(incompatible(&db, with_runs(Value::Null)), message);
+        assert_eq!(incompatible(&db, with_runs(json!("NULL"))), message);
+        define(&db, &declared(with_runs(json!("5"))), &[]).unwrap();
+        assert_eq!(rows(&db, "SELECT CAST(runs AS TEXT) FROM workbook"), ["5"]);
     }
 
     #[test]
@@ -483,9 +480,9 @@ mod tests {
 
     #[test]
     fn any_table_failure_rolls_back_entire_definition() {
-        let db = opened("CREATE TABLE workout (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
+        let db = opened("CREATE TABLE workbook (id TEXT PRIMARY KEY, title TEXT, done TEXT)");
         // A local-only table that fails takes the synced tables defined before it with it.
-        let defined = define(&db, &declared(json!([pair()])), &declared(json!([workout()])));
+        let defined = define(&db, &declared(json!([pair()])), &declared(json!([workbook()])));
         assert!(matches!(defined, Err(Error::Failed(_))), "{defined:?}");
         assert!(!schema(&db).iter().any(|(name, _)| name == "pair"));
     }

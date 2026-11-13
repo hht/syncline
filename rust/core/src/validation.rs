@@ -149,13 +149,13 @@ mod tests {
             column
         };
         serde_json::from_value(json!({
-            "name": "workout",
+            "name": "workbook",
             "columns": [
                 column("id", "text", json!({ "notNull": true })),
-                column("reps", "integer", json!({})),
+                column("runs", "integer", json!({})),
                 column("done", "integer", json!({ "boolean": true })),
                 column("weight", "real", json!({})),
-                column("kind", "text", json!({ "values": ["strength", "cardio"] })),
+                column("kind", "text", json!({ "values": ["standard", "custom"] })),
                 column("code", "text", json!({ "length": 2 })),
                 column("extra", "text", json!({ "json": true, "notNull": true })),
             ],
@@ -167,7 +167,7 @@ mod tests {
     fn opened(row: &str) -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(&format!(
-            "CREATE TABLE workout (id TEXT PRIMARY KEY, reps, done, weight, kind, code, extra); INSERT INTO workout VALUES ({row});"
+            "CREATE TABLE workbook (id TEXT PRIMARY KEY, runs, done, weight, kind, code, extra); INSERT INTO workbook VALUES ({row});"
         ))
         .unwrap();
         db
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn valid_row_returns_read_columns() {
-        let db = opened("'w1', 5, 1, 2, 'strength', '😀', '{\"a\":[1]}'");
+        let db = opened("'w1', 5, 1, 2, 'standard', '😀', '{\"a\":[1]}'");
         let stored = check(&db, &table(), true, &key("w1")).unwrap();
         assert_eq!(stored.get("weight"), Some(&Value::Integer(2)));
         assert_eq!(stored.0.len(), 7);
@@ -191,13 +191,13 @@ mod tests {
         let Err(Error::Invalid { table: name, issues }) = check(&db, &table(), true, &key("w1")) else {
             panic!("expected invalid")
         };
-        assert_eq!(name, "workout");
+        assert_eq!(name, "workbook");
         let found: Vec<(Vec<Segment>, String)> = issues.into_iter().map(|issue| (issue.path, issue.message)).collect();
         let expected = [
-            ("repsField", "must be an integer"),
+            ("runsField", "must be an integer"),
             ("doneField", "must be 0 or 1"),
             ("weightField", "must be a finite number"),
-            ("kindField", "must be one of strength, cardio"),
+            ("kindField", "must be one of standard, custom"),
             ("codeField", "exceeds 2 characters"),
             ("extraField", "must be valid JSON"),
         ];

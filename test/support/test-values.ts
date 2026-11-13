@@ -4,7 +4,7 @@ import fc from 'fast-check';
 // Value fixtures for property tests: a table with every supported column mode, key-only tables, value generators, and the oracle
 // (what Drizzle reads back from SQLite after writing a value, and why a write must be refused under the documented limits).
 
-const kinds = ['strength', 'cardio'] as const;
+const kinds = ['standard', 'custom'] as const;
 
 export const item = sqliteTable('item', {
   id: text().primaryKey(),
@@ -106,7 +106,7 @@ const columns = {
   atMs: fc.option(dateValue),
   data: fc.option(jsonValue),
   // Values the declaration refuses (a kind outside the enum, a code over 4 characters, a null status) appear rarely, so most rows are valid.
-  kind: fc.option(fc.oneof({ weight: 8, arbitrary: fc.constantFrom(...kinds) }, { weight: 1, arbitrary: fc.constant('yoga') })),
+  kind: fc.option(fc.oneof({ weight: 8, arbitrary: fc.constantFrom(...kinds) }, { weight: 1, arbitrary: fc.constant('yarn') })),
   code: fc.option(
     fc.oneof(
       { weight: 8, arbitrary: fc.string({ unit: char, maxLength: 4 }).filter((code) => code.length <= 4) },

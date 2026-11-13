@@ -224,8 +224,8 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT); CREATE TABLE scratch (id TEXT PRIMARY KEY);
-                 INSERT INTO workout VALUES ('w1', 'squat');",
+                "CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT); CREATE TABLE scratch (id TEXT PRIMARY KEY);
+                 INSERT INTO workbook VALUES ('w1', 'stamp');",
             )
             .unwrap();
         Database::new(connection).unwrap()
@@ -244,14 +244,14 @@ mod tests {
             assert_eq!(setting(), 0, "{sql}");
         }
         // Table-valued PRAGMA functions compile PRAGMAs only at execution time and remain readable
-        let mut statement = device.prepare_guarded("SELECT name FROM pragma_table_info('workout')").unwrap();
+        let mut statement = device.prepare_guarded("SELECT name FROM pragma_table_info('workbook')").unwrap();
         assert_eq!(statement.query_map([], |row| row.get::<_, String>(0)).unwrap().count(), 2);
         // Internal Syncline statements are not blocked
         device.connection().execute_batch("PRAGMA query_only = 0").unwrap();
     }
 
     fn notes(device: &Database) -> Vec<(String, Option<String>)> {
-        crate::sql::all_rows(device.connection(), "SELECT id, note FROM workout ORDER BY id", |row| {
+        crate::sql::all_rows(device.connection(), "SELECT id, note FROM workbook ORDER BY id", |row| {
             Ok((row.get(0)?, row.get(1)?))
         })
     }
@@ -259,22 +259,22 @@ mod tests {
     #[test]
     fn concurrent_sessions_record_independently_and_revert() {
         let mut device = opened();
-        let workouts = device.record(Some(&["workout".to_owned()])).unwrap();
+        let workbooks = device.record(Some(&["workbook".to_owned()])).unwrap();
         let all = device.record(None).unwrap();
         let connection = device.connection();
         connection
-            .execute("UPDATE workout SET note = 'front squat' WHERE id = 'w1'", [])
+            .execute("UPDATE workbook SET note = 'front stamp' WHERE id = 'w1'", [])
             .unwrap();
-        connection.execute("INSERT INTO workout VALUES ('w2', 'bench')", []).unwrap();
+        connection.execute("INSERT INTO workbook VALUES ('w2', 'brick')", []).unwrap();
         connection.execute("INSERT INTO scratch VALUES ('s1')", []).unwrap();
-        let only = device.stop(workouts).unwrap().unwrap();
+        let only = device.stop(workbooks).unwrap().unwrap();
         let everything = device.stop(all).unwrap().unwrap();
         assert!(everything.len() > only.len());
-        assert_eq!(device.stop(workouts).unwrap(), None);
+        assert_eq!(device.stop(workbooks).unwrap(), None);
 
         device.connection().execute_batch("SAVEPOINT reverting").unwrap();
         device.revert(&only).unwrap();
-        assert_eq!(notes(&device), [("w1".to_owned(), Some("squat".to_owned()))]);
+        assert_eq!(notes(&device), [("w1".to_owned(), Some("stamp".to_owned()))]);
         let scratch: i64 = device
             .connection()
             .query_row("SELECT count(*) FROM scratch", [], |row| row.get(0))
@@ -288,12 +288,12 @@ mod tests {
         let id = device.record(None).unwrap();
         device
             .connection()
-            .execute_batch("UPDATE workout SET note = 'front squat'; INSERT INTO workout VALUES ('w2', 'bench');")
+            .execute_batch("UPDATE workbook SET note = 'front stamp'; INSERT INTO workbook VALUES ('w2', 'brick');")
             .unwrap();
         let changeset = device.stop(id).unwrap().unwrap();
         device
             .connection()
-            .execute("UPDATE workout SET note = 'deadlift' WHERE id = 'w1'", [])
+            .execute("UPDATE workbook SET note = 'doorbell' WHERE id = 'w1'", [])
             .unwrap();
 
         device.connection().execute_batch("SAVEPOINT reverting").unwrap();
@@ -302,8 +302,8 @@ mod tests {
         assert_eq!(
             notes(&device),
             [
-                ("w1".to_owned(), Some("deadlift".to_owned())),
-                ("w2".to_owned(), Some("bench".to_owned()))
+                ("w1".to_owned(), Some("doorbell".to_owned())),
+                ("w2".to_owned(), Some("brick".to_owned()))
             ]
         );
     }
@@ -313,9 +313,9 @@ mod tests {
         let device = opened();
         let connection = device.connection();
         connection
-            .execute_batch("CREATE TABLE remark (id TEXT PRIMARY KEY, workout_id TEXT REFERENCES workout (id)); INSERT INTO remark VALUES ('r1', 'w1');")
+            .execute_batch("CREATE TABLE remark (id TEXT PRIMARY KEY, workbook_id TEXT REFERENCES workbook (id)); INSERT INTO remark VALUES ('r1', 'w1');")
             .unwrap();
-        connection.execute("DELETE FROM workout", []).unwrap();
+        connection.execute("DELETE FROM workbook", []).unwrap();
         let remarks: i64 = connection.query_row("SELECT count(*) FROM remark", [], |row| row.get(0)).unwrap();
         assert_eq!((notes(&device), remarks), (vec![], 1));
     }
@@ -326,7 +326,7 @@ mod tests {
         let id = device.record(None).unwrap();
         device
             .connection()
-            .execute("INSERT INTO workout VALUES ('w2', 'bench')", [])
+            .execute("INSERT INTO workbook VALUES ('w2', 'brick')", [])
             .unwrap();
         let changeset = device.stop(id).unwrap().unwrap();
 
@@ -336,8 +336,8 @@ mod tests {
         assert_eq!(
             notes(&device),
             [
-                ("w1".to_owned(), Some("squat".to_owned())),
-                ("w2".to_owned(), Some("bench".to_owned()))
+                ("w1".to_owned(), Some("stamp".to_owned())),
+                ("w2".to_owned(), Some("brick".to_owned()))
             ]
         );
     }
@@ -346,7 +346,7 @@ mod tests {
     fn empty_session_yields_empty_changeset_revert_is_noop() {
         let mut device = opened();
         let id = device.record(Some(&[])).unwrap();
-        device.connection().execute("UPDATE workout SET note = 'front squat'", []).unwrap();
+        device.connection().execute("UPDATE workbook SET note = 'front stamp'", []).unwrap();
         let changeset = device.stop(id).unwrap().unwrap();
         assert_eq!(changeset, Vec::<u8>::new());
         device.revert(&changeset).unwrap();

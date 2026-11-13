@@ -35,7 +35,7 @@ async function synced() {
   const space = new Space(cloud, [workbookWithRuns, tag]);
   space.mutate((tx) => {
     tx.insert(workbookWithRuns, { id: 'w1', note: 'stamp', runs: 5 });
-    tx.insert(tag, { id: 't1', name: 'legs' });
+    tx.insert(tag, { id: 't1', name: 'lids' });
   });
   const storage = deviceStorage(createWorkbook, 'CREATE INDEX "workbook.runs" ON workbook (runs)', createTag);
   const device = new Device(storage, [workbookWithRuns, tag]);
@@ -87,7 +87,7 @@ test('app rolls back to not recognizing tag and upgrades back: changes during ro
   const { space, storage } = await synced();
   const rolledBack = new Device(storage, [workbookWithRuns]);
   await rolledBack.private.receive(space.mutate((tx) => tx.delete(tag, { id: 't1' })));
-  await rolledBack.private.receive(space.mutate((tx) => tx.insert(tag, { id: 't2', name: 'back' })));
+  await rolledBack.private.receive(space.mutate((tx) => tx.insert(tag, { id: 't2', name: 'blue' })));
   await write(rolledBack, (tx) => tx.update(workbookWithRuns).set({ runs: 7 }).where(eq(workbookWithRuns.id, 'w1')));
   expect(storage.sql.exec('SELECT id FROM tag').toArray()).toEqual([{ id: 't1' }]);
 
@@ -98,7 +98,7 @@ test('app rolls back to not recognizing tag and upgrades back: changes during ro
   expect(back.private.behind()).toBe(true);
   expect(back.private.pending()).toHaveLength(1);
   await back.private.receive(pulled(space, back));
-  expect(storage.sql.exec('SELECT id, name FROM tag').toArray()).toEqual([{ id: 't2', name: 'back' }]);
+  expect(storage.sql.exec('SELECT id, name FROM tag').toArray()).toEqual([{ id: 't2', name: 'blue' }]);
   expect(storage.sql.exec('SELECT runs FROM workbook').toArray()).toEqual([{ runs: 7 }]);
   await upload(space, back, [back]);
   expect(back.private.pending()).toEqual([]);

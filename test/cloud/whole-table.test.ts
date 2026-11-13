@@ -13,21 +13,21 @@ import { catchUp, createTag, createWorkbook, rows, tag, workbookWithRuns } from 
 test('sync scope emptied by deployment then restored: delivers whole table as re-entry, synced devices receive rows (empty record does not equal fresh space)', async () => {
   const cloud = cloudStorage(createTag);
   const before = new Space(cloud, [tag]);
-  before.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Legs' }));
+  before.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Lids' }));
   const storage = deviceStorage(createTag);
   const device = new Device(storage, [tag]);
   await catchUp(before, device);
   await catchUp(new Space(cloud, []), device);
   expect(rows(storage, 'tag')).toEqual([]);
   await catchUp(new Space(cloud, [tag]), device);
-  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'Legs', _extra: null }]);
+  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'Lids', _extra: null }]);
 });
 
 test('concurrent cloud writes/deletes/inserts across scanned and unscanned keys mid-rescan: incremental pull completes normally, device converges with cloud', async () => {
   const cloud = cloudStorage(createWorkbook, createTag);
   const before = new Space(cloud, [workbook]);
   before.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
-  for (let index = 0; index < 60; index += 1) cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', `t${String(index).padStart(2, '0')}`, 'Legs');
+  for (let index = 0; index < 60; index += 1) cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', `t${String(index).padStart(2, '0')}`, 'Lids');
   const storage = deviceStorage(createWorkbook, createTag);
   const device = new Device(storage, [workbook, tag]);
   await catchUp(before, device);
@@ -83,20 +83,20 @@ test('a column leaving sync mid incremental pull sends rows of its table sent be
 test('a table leaving sync and returning within one incremental pull: the drop recorded when it left is not sent after its rows', () => {
   const cloud = cloudStorage(createWorkbook, createTag);
   const both = new Space(cloud, [workbook, tag]);
-  both.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Legs' }));
+  both.mutate((tx) => tx.insert(tag, { id: 't1', name: 'Lids' }));
   const base = both.head();
   // A release rolled back and deployed again while the device was away
   new Space(cloud, [workbook]);
   const space = new Space(cloud, [workbook, tag]);
   expect((space.pull({ cookie: base }, Number.POSITIVE_INFINITY) as Chunk).patch).toEqual([
     { op: 'drop', table: 'tag' },
-    { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Legs' } },
+    { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Lids' } },
   ]);
 });
 
 test('a device connecting with a cookie from before a table entered sync receives the table in the catch-up of its connection', () => {
   const cloud = cloudStorage(createWorkbook, createTag);
-  cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', 't1', 'Legs');
+  cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', 't1', 'Lids');
   const base = new Space(cloud, [workbook]).head();
   const space = new Space(cloud, [workbook, tag]);
   const server = new Server({ acceptWebSocket: () => undefined, getWebSockets: (): RecordingSocket[] => [] }, space);
@@ -108,7 +108,7 @@ test('a device connecting with a cookie from before a table entered sync receive
       cookie: space.head(),
       patch: [
         { op: 'drop', table: 'tag' },
-        { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Legs' } },
+        { op: 'put', table: 'tag', key: { id: 't1' }, row: { id: 't1', name: 'Lids' } },
       ],
     }),
   ]);

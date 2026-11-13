@@ -28,8 +28,8 @@ async function withTags() {
   const storage = deviceStorage(createWorkbook, createTag);
   const both = new Space(cloud, [workbook, tag]);
   both.mutate((tx) => {
-    tx.insert(tag, { id: 't1', name: 'leg' });
-    tx.insert(tag, { id: 't2', name: 'chest' });
+    tx.insert(tag, { id: 't1', name: 'lid' });
+    tx.insert(tag, { id: 't2', name: 'chalk' });
   });
   const device = new Device(storage, [workbook, tag]);
   await catchUp(both, device);
@@ -50,7 +50,7 @@ test('cloud-only table enters sync: records keyless commit without scaling by ro
   const before = new Space(cloud, [workbook]);
   before.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
   for (let index = 0; index < 2500; index += 1)
-    cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', `t${String(index).padStart(4, '0')}`, 'leg');
+    cloud.sql.exec('INSERT INTO tag VALUES (?, ?)', `t${String(index).padStart(4, '0')}`, 'lid');
   const upgraded = deviceStorage(createWorkbook, createTag);
   const phone = new Device(upgraded, [workbookWithRuns, tag]);
   const lagging = new Device(deviceStorage(createWorkbook), [workbookWithRuns]);
@@ -97,7 +97,7 @@ test('table undeclared without retiring (code rollback): records drop and stops 
   const { space: rolledBack, events } = opened(cloud, [workbook]);
   expect(events).toEqual([{ type: 'schema.changed', entered: [], left: ['tag.id', 'tag.name'] }]);
   expect(rolledBack.head().version).toBe(2);
-  cloud.sql.exec("UPDATE tag SET name = 'back' WHERE id = 't1'");
+  cloud.sql.exec("UPDATE tag SET name = 'blue' WHERE id = 't1'");
   cloud.sql.exec("DELETE FROM tag WHERE id = 't2'");
   rolledBack.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
   expect((await catchUp(rolledBack, device)).patch).toContainEqual({ op: 'drop', table: 'tag' });
@@ -106,7 +106,7 @@ test('table undeclared without retiring (code rollback): records drop and stops 
   const again = new Space(cloud, [workbook, tag]);
   const before = device.private.cookie();
   await catchUp(again, device);
-  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'back', _extra: null }]);
+  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'blue', _extra: null }]);
   expect(device.private.cookie()?.version).toBeGreaterThan(before?.version ?? 0);
   expect(await device.private.verify()).toBe(true);
 });
@@ -197,14 +197,14 @@ test('cloud deploys mid multi-chunk incremental pull and returning table re-ente
   const again = new Space(cloud, [workbook, tag]);
   for (let step = 0; device.private.behind() && step < 20; step += 1)
     await device.private.receive(again.pull({ ...device.private.pullRequest(), checksum: '' }, 10));
-  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'leg', _extra: null }]);
+  expect(rows(storage, 'tag')).toEqual([{ id: 't1', name: 'lid', _extra: null }]);
   expect(await device.private.verify()).toBe(true);
 });
 
 test('table modified before leaving sync with device cookie earlier than modification (both drop and rollback): incremental pull skips dropped table commits and catches up to head', async () => {
   for (const options of [{ retired: ['tag'] }, {}]) {
     const { cloud, storage } = await withTags();
-    new Space(cloud, [workbook, tag]).mutate((tx) => tx.insert(tag, { id: 't3', name: 'back' }));
+    new Space(cloud, [workbook, tag]).mutate((tx) => tx.insert(tag, { id: 't3', name: 'blue' }));
     const space = new Space(cloud, [workbook], options);
     space.mutate((tx) => tx.insert(workbook, { id: 'w1' }));
     await catchUp(space, new Device(storage, [workbook], options));
@@ -231,7 +231,7 @@ test('synced table adds non-null column with default value: rows without the col
 test('device without tag declaration holds unknown rows, tag leaves sync (both retired and rollback): incremental drop clears unknown rows and checksum verifies', async () => {
   for (const options of [{ retired: ['tag'] }, {}]) {
     const cloud = cloudStorage(createWorkbook, createTag);
-    new Space(cloud, [workbook, tag]).mutate((tx) => tx.insert(tag, { id: 't1', name: 'leg' }));
+    new Space(cloud, [workbook, tag]).mutate((tx) => tx.insert(tag, { id: 't1', name: 'lid' }));
     const storage = deviceStorage(createWorkbook);
     const lagging = new Device(storage, [workbook]);
     await catchUp(new Space(cloud, [workbook, tag]), lagging);
@@ -251,7 +251,7 @@ test('tag leaves sync mid multi-chunk incremental pull: staged tag rows are disc
   const storage = deviceStorage(createWorkbook);
   const lagging = new Device(storage, [workbook]);
   await catchUp(both, lagging);
-  for (let index = 0; index < 50; index += 1) both.mutate((tx) => tx.insert(tag, { id: `t${index}`, name: 'leg' }));
+  for (let index = 0; index < 50; index += 1) both.mutate((tx) => tx.insert(tag, { id: `t${index}`, name: 'lid' }));
   for (let index = 0; index < 50; index += 1) both.mutate((tx) => tx.insert(workbook, { id: `w${index}` }));
   storage.sql.exec(
     'INSERT INTO _syncline_unknown (name, row, space, key) VALUES (\'plan\', \'{"id":"p1"}\', \'catalog\', \'{"id":"p1"}\')',
@@ -289,7 +289,7 @@ test('a range pull resumed after a deploy took its table out of sync continues w
   const cloud = cloudStorage(createWorkbook, createTag);
   const before = new Space(cloud, [workbook, tag]);
   before.mutate((tx) => {
-    for (let index = 0; index < 60; index += 1) tx.insert(tag, { id: `t${String(index).padStart(2, '0')}`, name: 'Legs' });
+    for (let index = 0; index < 60; index += 1) tx.insert(tag, { id: `t${String(index).padStart(2, '0')}`, name: 'Lids' });
     tx.insert(workbook, { id: 'w1' });
   });
   const cookie = before.head();

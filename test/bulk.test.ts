@@ -9,8 +9,8 @@ import { serving, write } from './support/test-schema.ts';
 import { cloudStorage, deviceStorage } from './support/test-storage.ts';
 import { Connection } from './support/test-sync.ts';
 
-// Writing many rows in a single write: creating a full plan (workbook, excerpt, and set tables) is one write;
-// deleting all workbooks cascading excerpts and sets is also one write. Sized to coach plan maximum (96 workbooks,
+// Writing many rows in a single write: creating a full outline (workbook, excerpt, and set tables) is one write;
+// deleting all workbooks cascading excerpts and sets is also one write. Sized to a large outline (96 workbooks,
 // 17 excerpts, 35 sets, ~5,000 rows); notification exceeds 1 MB, so the other online device falls back to HTTP pull.
 
 const workbook = sqliteTable('workbook', { id: text().primaryKey(), title: text().notNull() });
@@ -39,14 +39,14 @@ const schema = [
 const workbooks = 96;
 const excerptsPerWorkbook = 17;
 const setsPerWorkbook = 35;
-/** Remaining fields attached to an excerpt or set in a plan (prescriptions, notes, units), sized to typical JSON lengths. */
+/** Remaining fields attached to an excerpt or set in an outline (settings, notes, units), sized to typical JSON lengths. */
 const notes = {
   reminder: 90,
-  notes: 'Keep core tight, 2s eccentric, 1s pause at bottom',
-  muscles: ['quads', 'glutes'],
+  notes: 'Read slowly, mark each term, then sum up the idea',
+  markers: ['north', 'cedars'],
   video: 'https://example.com/v.mp4',
 };
-const target = { target: 5, target_type: 'runs', intensity: 75, intensity_unit: 'percent', progressions: [] };
+const target = { target: 5, target_type: 'runs', threshold: 75, threshold_unit: 'percent', replacements: [] };
 
 /** Long primary key (41 chars) excerpt id: primary key JSON is large, exceeding 2 MB single-value limit at tens of thousands of rows. */
 const longId = (e: number) => `${'e'.repeat(36)}${String(e).padStart(5, '0')}`;

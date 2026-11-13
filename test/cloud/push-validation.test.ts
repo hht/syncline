@@ -15,7 +15,7 @@ test.for([
   const space = new Space(storage, [entry]);
   const poke = space.push([
     { client: 'c1', id: 1, changes: [{ op: 'put', table: 'entry', row: { id: 'e1', ...values } }] },
-    { client: 'c1', id: 2, changes: [{ op: 'put', table: 'entry', row: { id: 'e2', done: 1, settings: '{"unit":"kg"}' } }] },
+    { client: 'c1', id: 2, changes: [{ op: 'put', table: 'entry', row: { id: 'e2', done: 1, settings: '{"unit":"km"}' } }] },
   ]);
   expect(poke?.lmids).toEqual({ c1: 2 });
   expect(space.held()).toEqual([expect.objectContaining({ id: 1, reason: expect.stringContaining(reason) })]);

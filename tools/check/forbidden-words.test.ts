@@ -7,13 +7,13 @@ test('rejects declared names containing forbidden words', () => {
   expect(
     rules(
       'a.ts',
-      `class WorkoutManager {}
+      `class WorkbookManager {}
 const userData = 1;
 function handleTap() {}
 export const doSave = () => {};`,
     ),
   ).toEqual([
-    '1 WorkoutManager contains forbidden word Manager; use a word that states what it does',
+    '1 WorkbookManager contains forbidden word Manager; use a word that states what it does',
     '2 userData contains forbidden word Data; use a word that states what it does',
     '3 handleTap contains forbidden word handle; use a word that states what it does',
     '4 doSave contains forbidden word do; use a word that states what it does',
@@ -25,7 +25,7 @@ test('allows framework patterns, third-party imports, and similar words', () => 
     rules(
       'a.tsx',
       `import { processColor } from 'react-native';
-function useWorkout() { return processColor('red'); }
+function useWorkbook() { return processColor('red'); }
 const AuthProvider = () => null;
 const doneAt = 1;
 const data = 2;`,
@@ -45,8 +45,8 @@ test('rejects lowercase forbidden words', () => {
 
 test('rejects filenames containing forbidden words', () => {
   expect(rules('src/date-utils.ts', '')).toEqual(['1 date-utils.ts contains forbidden word Utils; use a word that states what it does']);
-  expect(rules('src/workout-helper.web.ts', '')).toEqual([
-    '1 workout-helper.web.ts contains forbidden word Helper; use a word that states what it does',
+  expect(rules('src/workbook-helper.web.ts', '')).toEqual([
+    '1 workbook-helper.web.ts contains forbidden word Helper; use a word that states what it does',
   ]);
 });
 
@@ -91,11 +91,11 @@ const pageant = 4;`;
   ]);
 });
 
-test('rejects log as ambiguous; allows catalog, login', () => {
+test('rejects log as ambiguous; allows dialog, login', () => {
   const text = `const log = 1;
 const changeLogs = 2;
 const logger = 3;
-const catalog = 4;
+const dialog = 4;
 const login = 5;`;
   expect(rules('a.ts', text)).toEqual([
     '1 log contains forbidden word Log; use a word that states what it does',
@@ -105,9 +105,9 @@ const login = 5;`;
 });
 
 test('rejects version numbers in names; p95 is not a version', () => {
-  expect(rules('a.ts', 'const finishedV2At = 1;\nconst coach_v2 = 2;\nconst p95 = 3;')).toEqual([
+  expect(rules('a.ts', 'const finishedV2At = 1;\nconst draft_v2 = 2;\nconst p95 = 3;')).toEqual([
     '1 finishedV2At contains version V2; name by meaning',
-    '2 coach_v2 contains version v2; name by meaning',
+    '2 draft_v2 contains version v2; name by meaning',
   ]);
 });
 

@@ -320,16 +320,16 @@ mod tests {
 
     #[test]
     fn changes_roundtrip_json_preserving_column_order() {
-        let text = r#"[{"op":"put","table":"workout","row":{"note":"squat","id":"w1","weight":102.5,"reps":5,"done":null}},{"op":"del","table":"workout","key":{"id":"w2"}}]"#;
+        let text = r#"[{"op":"put","table":"workbook","row":{"note":"stamp","id":"w1","weight":102.5,"runs":5,"done":null}},{"op":"del","table":"workbook","key":{"id":"w2"}}]"#;
         let changes: Vec<Change> = serde_json::from_str(text).unwrap();
         let Change::Put { row, .. } = &changes[0] else {
             panic!("expected put")
         };
         assert_eq!(
             row.0.iter().map(|(column, _)| column.as_str()).collect::<Vec<_>>(),
-            ["note", "id", "weight", "reps", "done"]
+            ["note", "id", "weight", "runs", "done"]
         );
-        assert_eq!(row.get("reps"), Some(&Value::Integer(5)));
+        assert_eq!(row.get("runs"), Some(&Value::Integer(5)));
         assert_eq!(serde_json::to_string(&changes).unwrap(), text);
         assert_eq!(changes_json(&changes), text);
     }

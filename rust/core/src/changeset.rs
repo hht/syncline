@@ -107,14 +107,14 @@ mod tests {
     fn parses_insert_update_and_delete_rows() {
         let connection = Connection::open_in_memory().unwrap();
         connection
-            .execute_batch("CREATE TABLE workout (id TEXT PRIMARY KEY, note TEXT, reps INTEGER); INSERT INTO workout VALUES ('w1', 'squat', 5), ('w2', 'bench', 3);")
+            .execute_batch("CREATE TABLE workbook (id TEXT PRIMARY KEY, note TEXT, runs INTEGER); INSERT INTO workbook VALUES ('w1', 'stamp', 5), ('w2', 'brick', 3);")
             .unwrap();
         let mut device = Database::new(connection).unwrap();
         let id = device.record(None).unwrap();
         device
             .connection()
             .execute_batch(
-                "INSERT INTO workout VALUES ('w3', NULL, 1.5); UPDATE workout SET reps = 6 WHERE id = 'w1'; DELETE FROM workout WHERE id = 'w2';",
+                "INSERT INTO workbook VALUES ('w3', NULL, 1.5); UPDATE workbook SET runs = 6 WHERE id = 'w1'; DELETE FROM workbook WHERE id = 'w2';",
             )
             .unwrap();
         let mut changes = parse(&device.stop(id).unwrap().unwrap()).unwrap();
@@ -124,15 +124,15 @@ mod tests {
             changes,
             [
                 RowChange::Delete {
-                    table: "workout".to_owned(),
-                    before: vec![text("w2"), text("bench"), Value::Integer(3)]
+                    table: "workbook".to_owned(),
+                    before: vec![text("w2"), text("brick"), Value::Integer(3)]
                 },
                 RowChange::Insert {
-                    table: "workout".to_owned(),
+                    table: "workbook".to_owned(),
                     after: vec![text("w3"), Value::Null, Value::Real(1.5)]
                 },
                 RowChange::Update {
-                    table: "workout".to_owned(),
+                    table: "workbook".to_owned(),
                     before: vec![Some(text("w1")), None, Some(Value::Integer(5))],
                     after: vec![None, None, Some(Value::Integer(6))],
                 },

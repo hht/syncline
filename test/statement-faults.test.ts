@@ -94,8 +94,8 @@ async function upgrading(): Promise<Scenario> {
     'CREATE TABLE plan (id TEXT PRIMARY KEY, title TEXT)',
     'CREATE TABLE tag (id TEXT PRIMARY KEY)',
   );
-  // 'heavy' fits no INTEGER column of a STRICT table: it stays in _extra when the column arrives.
-  cloud.sql.exec("INSERT INTO workbook VALUES ('w1', 'stamp', 5), ('w2', 'brick', 'heavy')");
+  // 'hello' fits no INTEGER column of a STRICT table: it stays in _extra when the column arrives.
+  cloud.sql.exec("INSERT INTO workbook VALUES ('w1', 'stamp', 5), ('w2', 'brick', 'hello')");
   cloud.sql.exec("INSERT INTO plan VALUES ('p1', 'base')");
   cloud.sql.exec("INSERT INTO tag VALUES ('t1')");
   const space = new Space(cloud, [workbook, plan, tag]);
@@ -136,7 +136,7 @@ test('opening a new release over a lagging device with a pending write: columns 
   expect(landed).toEqual([
     [
       { id: 'w1', note: 'deep stamp', _extra: null, runs: 5 },
-      { id: 'w2', note: 'brick', _extra: '{"runs":"heavy"}', runs: null },
+      { id: 'w2', note: 'brick', _extra: '{"runs":"hello"}', runs: null },
     ],
     [{ id: 'p1', title: 'base', _extra: null }],
     [{ id: 't1', _extra: null }],
@@ -145,7 +145,7 @@ test('opening a new release over a lagging device with a pending write: columns 
     0,
     [
       { id: 'w1', note: 'deep stamp', runs: 5 },
-      { id: 'w2', note: 'brick', runs: 'heavy' },
+      { id: 'w2', note: 'brick', runs: 'hello' },
     ],
   ]);
 });

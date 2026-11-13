@@ -13,12 +13,12 @@ import { cloudStorage, deviceStorage } from '../support/test-storage.ts';
 
 // Column types and input validation: syncs all declared Drizzle column types; validates row modifications against column definitions and developer Standard Schemas; local writes roll back on failure, cloud rejects invalid mutations.
 
-type Settings = { unit: 'kg' | 'lb'; rest: number };
+type Settings = { unit: 'km' | 'mi'; rank: number };
 
 const workbook = sqliteTable('workbook', {
   id: text().primaryKey(),
   title: text().notNull(),
-  kind: text({ enum: ['strength', 'cardio'] }),
+  kind: text({ enum: ['standard', 'custom'] }),
   code: text({ length: 4 }),
   settings: text({ mode: 'json' }).$type<Settings>(),
   runs: integer(),
@@ -33,7 +33,7 @@ const create =
 
 // Integrator schema generated via Drizzle with customized JSON shape.
 const validation = new Map([
-  [workbook, createSelectSchema(workbook, { settings: z.object({ unit: z.enum(['kg', 'lb']), rest: z.int().nonnegative() }).nullable() })],
+  [workbook, createSelectSchema(workbook, { settings: z.object({ unit: z.enum(['km', 'mi']), rank: z.int().nonnegative() }).nullable() })],
 ]);
 
 // Sets up cloud storage and two connected devices; cloud, phone, and optionally tablet carry validation schemas.
@@ -67,9 +67,9 @@ test('syncs every column type: round-trips values with matching decoded represen
   const full = {
     id: 'w1',
     title: 'stamp',
-    kind: 'strength',
+    kind: 'standard',
     code: 'SQ01',
-    settings: { unit: 'kg', rest: 90 },
+    settings: { unit: 'km', rank: 90 },
     runs: 5,
     done: true,
     startedAt: new Date('2026-10-18T03:00:00Z'),
@@ -103,7 +103,7 @@ test('rejects local writes violating column definitions and rolls back mutations
   const { phone } = await withDevices();
   const insert = phone.device.write(async (execute) =>
     execute(
-      "INSERT INTO workbook (id, title, kind, code, settings, runs, done, weight) VALUES ('w1', NULL, 'yoga', 'STAMP', '{bad', 'five', 2, 'heavy')",
+      "INSERT INTO workbook (id, title, kind, code, settings, runs, done, weight) VALUES ('w1', NULL, 'yarn', 'STAMP', '{bad', 'five', 2, 'hello')",
       [],
     ),
   );
@@ -123,11 +123,11 @@ test('validates the complete row when updating a single column', async () => {
 test('validates rows against integrator Standard Schema, attaching field paths to validation issues', async () => {
   const { phone } = await withDevices();
   const insert = write(phone.device, (tx) =>
-    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'st', rest: -1 } as unknown as Settings }),
+    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'ft', rank: -1 } as unknown as Settings }),
   );
   expect(await issuesOf(insert)).toEqual([
     ['settings', 'unit'],
-    ['settings', 'rest'],
+    ['settings', 'rank'],
   ]);
   expect(read(phone.storage)).toEqual([]);
 });
@@ -135,7 +135,7 @@ test('validates rows against integrator Standard Schema, attaching field paths t
 test('cloud re-validates pushes: rejects invalid mutations and advances client sequence number while device reverts local write', async () => {
   const { cloud, space, phone, tablet, devices } = await withDevices({ schemaOnTablet: false });
   await write(tablet.device, (tx) =>
-    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'st' } as unknown as Settings }),
+    tx.insert(workbook).values({ id: 'w1', title: 'stamp', settings: { unit: 'ft' } as unknown as Settings }),
   );
   expect(read(tablet.storage)).toHaveLength(1);
   await upload(space, tablet.device, devices);
@@ -161,7 +161,7 @@ test('rejects invalid server writes and rolls back transaction without committin
   const mutate = async () =>
     space.mutate((tx) => {
       tx.insert(workbook, { id: 'w1', title: 'stamp' });
-      tx.insert(workbook, { id: 'w2', title: 'brick wall', kind: 'yoga' as 'cardio' });
+      tx.insert(workbook, { id: 'w2', title: 'brick wall', kind: 'yarn' as 'custom' });
     });
   expect(await issuesOf(mutate())).toEqual([['kind']]);
   expect(read(cloud)).toEqual([]);

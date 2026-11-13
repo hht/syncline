@@ -10,7 +10,7 @@ test('reports ADR numbers, dates, who decided, line numbers, and version history
       `/**
  * compare by line (ADR 002 §2)
  * 2026-10-01 user decided
- * old format defaults missing to 0 (hooks/use-coach.ts:309)
+ * old format defaults missing to 0 (hooks/use-session.ts:309)
  */
 // see node_modules/x/index.js
 // docs https://example.com

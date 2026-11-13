@@ -40,8 +40,8 @@ test.for([
   ],
   [
     'inserts a row giving _extra',
-    ["INSERT INTO workbook (id, note, _extra) VALUES ('w3', 'lunge', '{\"runs\":9}')"],
-    [{ op: 'put', table: 'workbook', row: { id: 'w3', note: 'lunge' } }],
+    ["INSERT INTO workbook (id, note, _extra) VALUES ('w3', 'lumen', '{\"runs\":9}')"],
+    [{ op: 'put', table: 'workbook', row: { id: 'w3', note: 'lumen' } }],
   ],
 ] as const)(
   'a local write on an older release that %s keeps the columns of the newer release, uploads, and matches the cloud after the upgrade',

@@ -195,14 +195,14 @@ mod tests {
     #[test]
     fn row_hash_matches_js_calculation() {
         let row = Row(vec![
-            ("reps".to_owned(), Value::Integer(8)),
+            ("runs".to_owned(), Value::Integer(8)),
             ("id".to_owned(), Value::Text("w1".to_owned())),
-            ("note".to_owned(), Value::Text("\u{6df1}\u{8e72}😀".to_owned())),
+            ("note".to_owned(), Value::Text("\u{6df1}\u{591c}😀".to_owned())),
             ("weight".to_owned(), Value::Real(102.5)),
             ("at".to_owned(), Value::Real(3.0)),
             ("gone".to_owned(), Value::Null),
         ]);
-        // JS: rowHash('workout', { reps: 8, id: 'w1', note: '\u6df1\u8e72😀', weight: 102.5, at: 3, gone: null })
-        assert_eq!(row_hash("workout", &row), 707_658_655);
+        // JS: rowHash('workbook', { runs: 8, id: 'w1', note: '\u6df1\u591c😀', weight: 102.5, at: 3, gone: null })
+        assert_eq!(row_hash("workbook", &row), 1_798_901_250);
     }
 }
