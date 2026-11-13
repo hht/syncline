@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { type Mutation, pullNeeded } from '../../src/common/protocol.ts';
 import { AccountMismatchError } from '../../src/expo/errors.ts';
+import { type Mutation, pullNeeded } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
 import { drain, flush, withFakeTimers } from '../support/test-drive.ts';
 import { privateCloud } from '../support/test-entry.ts';

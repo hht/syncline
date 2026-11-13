@@ -4,8 +4,8 @@ import { type Bucket, type BucketRules, bucketId } from '../../src/cloud/buckets
 import { type Confirmed, Fanout } from '../../src/cloud/fanout.ts';
 import type { Round } from '../../src/cloud/shared.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { socketLimit } from '../../src/common/protocol.ts';
-import { parsePullRequest } from '../../src/common/pull-url.ts';
+import { socketLimit } from '../../src/protocol/messages.ts';
+import { parsePullRequest } from '../../src/protocol/pull-url.ts';
 import { Seams } from './test-bounds.ts';
 import { subscribed } from './test-catalog.ts';
 import type { Cloud, CloudEnd, Network } from './test-network.ts';

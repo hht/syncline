@@ -1,6 +1,6 @@
 import { blob, integer, primaryKey, type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import { among } from '../../src/common/sql.ts';
+import { among } from '../../src/sqlite/sql.ts';
 import { cloudTables } from '../../src/tables/cloud-tables.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { cloudStorage } from '../support/test-storage.ts';

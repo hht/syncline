@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { formatCookie } from '../src/common/protocol.ts';
+import { formatCookie } from '../src/protocol/messages.ts';
 import { Device, Space } from './support/test-checksum.ts';
 import { head } from './support/test-commits.ts';
 import { counter, keys, replay, type Snapshot, schema, serverInc, snapshot, tables, tag, writes } from './support/test-counter.ts';

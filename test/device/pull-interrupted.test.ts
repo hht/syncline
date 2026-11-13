@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk } from '../../src/common/protocol.ts';
+import type { Chunk } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
 import { both, createSet, filled, pullChunk, pullRest, set, tables } from '../support/test-pull.ts';
 import { createWorkout, upload, workout, write } from '../support/test-schema.ts';

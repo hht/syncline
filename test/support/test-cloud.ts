@@ -1,7 +1,7 @@
 import { Server } from '../../src/cloud/server.ts';
-import { socketLimit } from '../../src/common/protocol.ts';
-import type { Storage } from '../../src/common/storage.ts';
-import { protocolVersion } from '../../src/common/version.ts';
+import { socketLimit } from '../../src/protocol/messages.ts';
+import { protocolVersion } from '../../src/protocol/version.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { Seams } from './test-bounds.ts';
 import { Space } from './test-checksum.ts';
 import { decidedTwice, head, recordDecisions } from './test-commits.ts';

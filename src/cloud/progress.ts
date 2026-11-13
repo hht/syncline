@@ -1,4 +1,4 @@
-import type { Cookie, Progress } from '../common/protocol.ts';
+import type { Cookie, Progress } from '../protocol/messages.ts';
 import type { Commits } from './commits.ts';
 
 // How private space download progress is estimated (following PowerSync downloadProgress with downloaded and total):

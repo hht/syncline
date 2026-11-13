@@ -1,5 +1,5 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import type { Change } from '../common/protocol.ts';
+import type { Change } from '../protocol/messages.ts';
 import type { Schema } from '../tables/table-definitions.ts';
 import type { Validation } from '../tables/validation.ts';
 import { remoteDatabase } from './remote-database.ts';

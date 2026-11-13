@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { expect } from 'vitest';
-import { protocolVersion } from '../../src/common/version.ts';
+import { protocolVersion } from '../../src/protocol/version.ts';
 import { SimulatedCloud, seams } from './test-cloud.ts';
 import { decided, WriteLedger } from './test-commits.ts';
 import { keys, labelsOf, Releases, writes } from './test-counter.ts';

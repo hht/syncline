@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import type { Poke } from '../../../src/common/protocol.ts';
+import type { Poke } from '../../../src/protocol/messages.ts';
 import { Space } from '../../support/test-checksum.ts';
 import { cloudStorage } from '../../support/test-storage.ts';
 

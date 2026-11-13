@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk } from '../../src/common/protocol.ts';
+import type { Chunk } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
 import { workout } from '../support/test-schema.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';

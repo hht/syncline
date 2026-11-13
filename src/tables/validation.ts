@@ -1,8 +1,8 @@
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { keyBytes, tableNameChars } from '../common/limits.ts';
-import { foldCase, quote, whereKey } from '../common/sql.ts';
-import { type Query, Reject } from '../common/storage.ts';
+import { keyBytes, tableNameChars } from '../protocol/limits.ts';
+import { foldCase, quote, whereKey } from '../sqlite/sql.ts';
+import { type Query, Reject } from '../sqlite/storage.ts';
 import { keyBytesOf, keyColumns, keyOf, primaryKey } from './keys.ts';
 
 /**

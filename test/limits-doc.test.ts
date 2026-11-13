@@ -6,6 +6,8 @@ import { Buckets, bucketBytes, rulesPerTable } from '../src/cloud/buckets.ts';
 import { defaultConnections } from '../src/cloud/server.ts';
 import { defaultRows } from '../src/cloud/shared.ts';
 import { Space } from '../src/cloud/space.ts';
+import { receiveTimeout as shellReceiveTimeout } from '../src/expo/shell.ts';
+import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../src/features/exports/cloud/exports.ts';
 import {
   commitFloor,
   keyBytes,
@@ -19,7 +21,7 @@ import {
   writeBytes,
   writeKeyBytes,
   writeRows,
-} from '../src/common/limits.ts';
+} from '../src/protocol/limits.ts';
 import {
   expired,
   invalidPush,
@@ -30,10 +32,8 @@ import {
   socketLimit,
   tooManyConnections,
   unsupportedMessage,
-} from '../src/common/protocol.ts';
-import { versionMismatch } from '../src/common/version.ts';
-import { receiveTimeout as shellReceiveTimeout } from '../src/expo/shell.ts';
-import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../src/features/exports/cloud/exports.ts';
+} from '../src/protocol/messages.ts';
+import { versionMismatch } from '../src/protocol/version.ts';
 import { schemaMismatch } from '../src/tables/declaration.ts';
 import { rustLimits } from './support/test-rust.ts';
 import { cloudStorage } from './support/test-storage.ts';

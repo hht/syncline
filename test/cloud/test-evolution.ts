@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { Space } from '../../src/cloud/space.ts';
-import type { Poke } from '../../src/common/protocol.ts';
+import type { Poke } from '../../src/protocol/messages.ts';
 import type { Device } from '../support/test-device.ts';
 import type { deviceStorage } from '../support/test-storage.ts';
 

@@ -3,7 +3,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../src/cloud/space.ts';
 import type { Transaction } from '../src/cloud/transaction.ts';
-import { Reject } from '../src/common/storage.ts';
+import { Reject } from '../src/sqlite/storage.ts';
 import { Device } from './support/test-device.ts';
 import {
   createWorkout,

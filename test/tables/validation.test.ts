@@ -4,7 +4,7 @@ import { createSelectSchema } from 'drizzle-orm/zod';
 import { expect, test } from 'vitest';
 import { z } from 'zod';
 import { Space } from '../../src/cloud/space.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { type StandardSchema, ValidationError } from '../../src/tables/validation.ts';
 import { Device } from '../support/test-device.ts';

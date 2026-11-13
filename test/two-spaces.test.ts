@@ -4,7 +4,7 @@ import { expect, test } from 'vitest';
 import { Broadcast } from '../src/cloud/broadcast.ts';
 import { Server } from '../src/cloud/server.ts';
 import { Space } from '../src/cloud/space.ts';
-import { parsePullBody, parsePullRequest } from '../src/common/pull-url.ts';
+import { parsePullBody, parsePullRequest } from '../src/protocol/pull-url.ts';
 import { admin, createProgram, program } from './support/test-catalog.ts';
 import { Device } from './support/test-device.ts';
 import { drain } from './support/test-drive.ts';

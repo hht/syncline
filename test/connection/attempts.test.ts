@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { pullNeeded } from '../../src/common/protocol.ts';
+import { pullNeeded } from '../../src/protocol/messages.ts';
 import { flush, withFakeTimers } from '../support/test-drive.ts';
 import { captureReported } from '../support/test-errors.ts';
 import { workout, workouts, write } from '../support/test-schema.ts';

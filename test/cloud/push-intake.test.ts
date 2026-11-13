@@ -3,10 +3,10 @@ import { expect, test, vi } from 'vitest';
 import type { SynclineEvent } from '../../src/cloud/events.ts';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { pushBytes, writeBytes } from '../../src/common/limits.ts';
-import { parseMutations } from '../../src/common/parse.ts';
-import { type Mutation, pullNeeded } from '../../src/common/protocol.ts';
-import { utf8Bytes } from '../../src/common/size.ts';
+import { pushBytes, writeBytes } from '../../src/protocol/limits.ts';
+import { type Mutation, pullNeeded } from '../../src/protocol/messages.ts';
+import { parseMutations } from '../../src/protocol/parse.ts';
+import { utf8Bytes } from '../../src/protocol/size.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 

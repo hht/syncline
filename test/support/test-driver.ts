@@ -1,4 +1,4 @@
-import type { Cursor } from '../../src/common/storage.ts';
+import type { Cursor } from '../../src/sqlite/storage.ts';
 
 /**
  * Shared storage driver helpers across cloud test double and Rust device database:

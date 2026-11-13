@@ -1,8 +1,8 @@
 import { encodePosition, encodeScan } from '../../src/cloud/position.ts';
-import { pullBytes, pushBytes } from '../../src/common/limits.ts';
-import { type Op, ping, pong, pushMutations } from '../../src/common/protocol.ts';
-import { opChars, utf8Bytes } from '../../src/common/size.ts';
-import { protocolVersion } from '../../src/common/version.ts';
+import { pullBytes, pushBytes } from '../../src/protocol/limits.ts';
+import { type Op, ping, pong, pushMutations } from '../../src/protocol/messages.ts';
+import { opChars, utf8Bytes } from '../../src/protocol/size.ts';
+import { protocolVersion } from '../../src/protocol/version.ts';
 import { rustLimits } from './test-rust.ts';
 
 // Resource bounds of the deterministic simulations: every URL, request and response body, and WebSocket frame crossing the simulated

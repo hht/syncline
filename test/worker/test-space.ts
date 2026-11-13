@@ -1,8 +1,8 @@
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { env, exports } from 'cloudflare:workers';
 import { expect } from 'vitest';
-import { bearer, type Change, type Chunk, type Cookie, type Poke, subprotocol } from '../../src/common/protocol.ts';
-import { type PullRequest, pullURL } from '../../src/common/pull-url.ts';
+import { bearer, type Change, type Chunk, type Cookie, type Poke, subprotocol } from '../../src/protocol/messages.ts';
+import { type PullRequest, pullURL } from '../../src/protocol/pull-url.ts';
 import { inbox } from './test-socket.ts';
 
 // Shared across platform tests: connects private space clients via the test Worker entry point (WebSocket and HTTP pull), and writes for client c1.

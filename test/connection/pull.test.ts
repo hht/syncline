@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk, Poke, Progress, Reset } from '../../src/common/protocol.ts';
+import type { Chunk, Poke, Progress, Reset } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
 import { flush } from '../support/test-drive.ts';
 import { both, createSet, filled, pullChunk, pullRest, set, tables } from '../support/test-pull.ts';

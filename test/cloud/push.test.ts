@@ -3,8 +3,8 @@ import { expect, test, vi } from 'vitest';
 import type { SynclineEvent } from '../../src/cloud/events.ts';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { parseMutations } from '../../src/common/parse.ts';
-import type { Mutation } from '../../src/common/protocol.ts';
+import type { Mutation } from '../../src/protocol/messages.ts';
+import { parseMutations } from '../../src/protocol/parse.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 

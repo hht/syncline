@@ -1,8 +1,8 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { Space as CoreSpace } from '../../src/cloud/space.ts';
-import type { PullRequest } from '../../src/common/pull-url.ts';
-import type { CloudStorage } from '../../src/common/storage.ts';
 import { spaceChecksum } from '../../src/features/checksum/cloud/checksums.ts';
+import type { PullRequest } from '../../src/protocol/pull-url.ts';
+import type { CloudStorage } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { Device as CoreDevice } from './test-device.ts';
 import type { rustStorage } from './test-rust.ts';

@@ -1,8 +1,8 @@
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import { tableNameChars } from '../../../src/common/limits.ts';
-import type { Poke } from '../../../src/common/protocol.ts';
-import type { Storage } from '../../../src/common/storage.ts';
+import { tableNameChars } from '../../../src/protocol/limits.ts';
+import type { Poke } from '../../../src/protocol/messages.ts';
+import type { Storage } from '../../../src/sqlite/storage.ts';
 import { Device, Space } from '../../support/test-checksum.ts';
 import { drain, withFakeTimers } from '../../support/test-drive.ts';
 import { captureReported } from '../../support/test-errors.ts';

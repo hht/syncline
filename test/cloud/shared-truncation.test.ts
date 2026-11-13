@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk, Poke } from '../../src/common/protocol.ts';
+import type { Chunk, Poke } from '../../src/protocol/messages.ts';
 import { admin, contents, day, landedRequest, program, pullAll, rules, schema } from '../support/test-catalog.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 

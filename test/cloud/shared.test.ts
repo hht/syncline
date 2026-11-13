@@ -5,7 +5,7 @@ import type { BucketRules } from '../../src/cloud/buckets.ts';
 import { Commits } from '../../src/cloud/commits.ts';
 import { decodePosition, landedAt } from '../../src/cloud/position.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk, Poke, Reset } from '../../src/common/protocol.ts';
+import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
 import {
   admin,
   catalog,

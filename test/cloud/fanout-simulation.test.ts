@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { Subscribed } from '../../src/cloud/shared.ts';
-import type { Cookie } from '../../src/common/protocol.ts';
+import type { Cookie } from '../../src/protocol/messages.ts';
 import { random, stepped } from '../support/test-random.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';
 import { cookieOf, FanoutCloud, incarnation, pick, shardNames, type Weighted, when } from './test-fanout.ts';

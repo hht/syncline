@@ -1,5 +1,5 @@
-import { type Change, sameCookie } from '../../src/common/protocol.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import { type Change, sameCookie } from '../../src/protocol/messages.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { Device } from './test-checksum.ts';
 import { head } from './test-commits.ts';
 import { createMemo, labelsOf, type Releases, schema, writes } from './test-counter.ts';

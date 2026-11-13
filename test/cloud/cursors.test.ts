@@ -3,9 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { bucketBytes } from '../../src/cloud/buckets.ts';
 import { encodePosition } from '../../src/cloud/position.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { keyBytes, subscriptionBytes } from '../../src/common/limits.ts';
-import type { Chunk, Poke, Reset } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { keyBytes, subscriptionBytes } from '../../src/protocol/limits.ts';
+import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { catalog, contents, landedRequest, pullAll, subscribed, viewer } from '../support/test-catalog.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 

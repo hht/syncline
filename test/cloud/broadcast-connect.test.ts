@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { pullNeeded } from '../../src/common/protocol.ts';
+import { pullNeeded } from '../../src/protocol/messages.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';
 import { last, setup, subscriptions, unsent } from './test-broadcast.ts';
 

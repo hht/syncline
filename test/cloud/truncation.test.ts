@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Commits, rowOverhead } from '../../src/cloud/commits.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk } from '../../src/common/protocol.ts';
+import type { Chunk } from '../../src/protocol/messages.ts';
 import { day, program, rules, schema } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { createWorkout, install, pulled, tables, upload, workout, workouts, write } from '../support/test-schema.ts';

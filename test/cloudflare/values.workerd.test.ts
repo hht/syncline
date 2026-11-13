@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/durable-sqlite';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { CloudStorage } from '../../src/common/storage.ts';
+import type { CloudStorage } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { item, itemRow, problems, readBack, valueTables } from '../support/test-values.ts';
 import { object, space } from '../worker/test-space.ts';

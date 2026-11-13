@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 import {
   type Cookie,
   expired,
@@ -12,8 +12,8 @@ import {
   sameCookie,
   socketLimit,
   unsupportedMessage,
-} from '../common/protocol.ts';
-import { fitsBytes } from '../common/size.ts';
+} from '../protocol/messages.ts';
+import { fitsBytes } from '../protocol/size.ts';
 import { type Events, isolated, quiet } from './events.ts';
 import { closeSocket, type Socket, type Sockets } from './server.ts';
 import type { Round, Subscribed } from './shared.ts';

@@ -1,7 +1,7 @@
 import { Broadcast } from '../../src/cloud/broadcast.ts';
 import { type Confirmed, Fanout } from '../../src/cloud/fanout.ts';
 import type { Round, Subscribed } from '../../src/cloud/shared.ts';
-import type { Cookie } from '../../src/common/protocol.ts';
+import type { Cookie } from '../../src/protocol/messages.ts';
 import type { RecordingSocket } from '../support/test-sockets.ts';
 
 // The cloud side of the fanout simulation: a shared space history, the real Fanout delivering it, and two real Broadcast shards, with

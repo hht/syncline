@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 import { Client } from './client.ts';
 import { deserializeError } from './errors.ts';
 import { type OpenOptions, type Schema, syncline } from './syncline.ts';

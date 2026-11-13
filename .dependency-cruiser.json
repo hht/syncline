@@ -17,8 +17,8 @@
       "comment": "Core code must not import pluggable features (under src/features/: checksums, exports): the core defines interfaces, while cloud features are wired by the entry assembly root (cloudflare/index.ts) and device features live in the Rust core. The core works completely without them (only tests verifying checksums wire them).",
       "severity": "error",
       "from": {
-        "path": "^src/(common|tables|cloud|expo|cloudflare)/",
-        "pathNot": "^src/cloudflare/index\\.ts$"
+        "path": "^src/",
+        "pathNot": "^src/(features/|cloudflare/index\\.ts$)"
       },
       "to": {
         "path": "^src/features/"

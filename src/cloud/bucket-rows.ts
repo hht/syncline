@@ -1,6 +1,6 @@
-import { readRows } from '../common/limits.ts';
-import { quote, quoteAll } from '../common/sql.ts';
-import type { CloudStorage, Query } from '../common/storage.ts';
+import { readRows } from '../protocol/limits.ts';
+import { quote, quoteAll } from '../sqlite/sql.ts';
+import type { CloudStorage, Query } from '../sqlite/storage.ts';
 import { rowId } from '../tables/keys.ts';
 import { bucketsAs } from './batches.ts';
 import type { Buckets, Subscription } from './buckets.ts';

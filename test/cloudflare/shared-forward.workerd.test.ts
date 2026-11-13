@@ -4,9 +4,9 @@ import { afterAll, expect, test, vi } from 'vitest';
 import { subscriptionHash } from '../../src/cloud/buckets.ts';
 import { landedAt } from '../../src/cloud/position.ts';
 import { forwardShared } from '../../src/cloudflare/shared.ts';
-import { bearer, subprotocol } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
-import { protocolVersion } from '../../src/common/version.ts';
+import { bearer, subprotocol } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
+import { protocolVersion } from '../../src/protocol/version.ts';
 import { fannedOut } from '../worker/test-shared.ts';
 import { recording } from '../worker/test-space.ts';
 

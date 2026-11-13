@@ -1,6 +1,6 @@
 import { integer, type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import type { Poke } from '../../src/common/protocol.ts';
+import type { Poke } from '../../src/protocol/messages.ts';
 import { tableName } from '../../src/tables/table-definitions.ts';
 import { Device, type Shared } from '../support/test-device.ts';
 import { Local, None, Ownership, P } from '../support/test-ownership.ts';

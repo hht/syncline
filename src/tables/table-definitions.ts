@@ -1,7 +1,7 @@
 import { getColumns, is, SQL } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { literal, quote, quoteAll, tableColumns } from '../common/sql.ts';
-import type { Storage } from '../common/storage.ts';
+import { literal, quote, quoteAll, tableColumns } from '../sqlite/sql.ts';
+import type { Storage } from '../sqlite/storage.ts';
 import { keyColumns } from './keys.ts';
 import { affinityOf, checkDeclared, storageTypeOf } from './validation.ts';
 

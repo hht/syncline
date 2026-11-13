@@ -1,4 +1,4 @@
-import type { Progress } from '../common/protocol.ts';
+import type { Progress } from '../protocol/messages.ts';
 
 /**
  * Defines the synchronization status structure reported by the sync engine and observed by the UI.

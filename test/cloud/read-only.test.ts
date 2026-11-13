@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { integer, type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { Device } from '../support/test-device.ts';
 import { pulled, upload, write } from '../support/test-schema.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';

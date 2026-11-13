@@ -1,8 +1,8 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../src/cloud/space.ts';
-import type { Op } from '../src/common/protocol.ts';
-import type { PullRequest } from '../src/common/pull-url.ts';
+import type { Op } from '../src/protocol/messages.ts';
+import type { PullRequest } from '../src/protocol/pull-url.ts';
 import { setup as catalog } from './device/test-shared-mirror.ts';
 import { program, pullRest } from './support/test-catalog.ts';
 import { snapshot, synced } from './support/test-counter.ts';

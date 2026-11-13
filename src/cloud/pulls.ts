@@ -1,7 +1,7 @@
-import { readRows } from '../common/limits.ts';
-import { isProgress } from '../common/parse.ts';
-import type { Checksum, Chunk, Poke, Progress } from '../common/protocol.ts';
-import type { PullRequest } from '../common/pull-url.ts';
+import { readRows } from '../protocol/limits.ts';
+import type { Checksum, Chunk, Poke, Progress } from '../protocol/messages.ts';
+import { isProgress } from '../protocol/parse.ts';
+import type { PullRequest } from '../protocol/pull-url.ts';
 import type { TableReads } from './batches.ts';
 import type { Commits } from './commits.ts';
 import { type HeldWrites, heldIn } from './held.ts';

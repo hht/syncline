@@ -1,5 +1,5 @@
+import { type Cookie, formatCookie, type PullRange } from './messages.ts';
 import { bounds, invalid, isCount, isNames, isObject, parseCookie, cookie as parseCookieValue } from './parse.ts';
-import { type Cookie, formatCookie, type PullRange } from './protocol.ts';
 import { protocolVersion, versionParam } from './version.ts';
 
 /**

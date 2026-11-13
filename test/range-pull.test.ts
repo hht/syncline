@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Space } from '../src/cloud/space.ts';
-import type { Op, PullRange } from '../src/common/protocol.ts';
+import type { Op, PullRange } from '../src/protocol/messages.ts';
 import { Device } from './support/test-device.ts';
 import { both, createSet, filled, set, tables } from './support/test-pull.ts';
 import { createWorkout, unchunked, workout, write } from './support/test-schema.ts';

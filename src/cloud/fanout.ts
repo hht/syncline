@@ -1,4 +1,4 @@
-import { type Cookie, sameCookie } from '../common/protocol.ts';
+import { type Cookie, sameCookie } from '../protocol/messages.ts';
 import type { Round } from './shared.ts';
 
 /** Version acknowledged by all shards, with the shards that acknowledged it. */

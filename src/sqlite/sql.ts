@@ -1,4 +1,4 @@
-import { valueChars } from './limits.ts';
+import { valueChars } from '../protocol/limits.ts';
 import type { Query } from './storage.ts';
 
 /**

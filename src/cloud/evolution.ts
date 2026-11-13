@@ -1,7 +1,7 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import type { Cookie } from '../common/protocol.ts';
-import { foldCase, quote, tableColumns } from '../common/sql.ts';
-import type { Query, Storage } from '../common/storage.ts';
+import type { Cookie } from '../protocol/messages.ts';
+import { foldCase, quote, tableColumns } from '../sqlite/sql.ts';
+import type { Query, Storage } from '../sqlite/storage.ts';
 import { declare, refuseRetired, tableAndColumn } from '../tables/declaration.ts';
 import { tableName } from '../tables/table-definitions.ts';
 import type { Buckets } from './buckets.ts';

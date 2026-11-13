@@ -1,7 +1,7 @@
 import { getColumns } from 'drizzle-orm';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import type { Value } from '../common/protocol.ts';
-import { utf8Bytes } from '../common/size.ts';
+import type { Value } from '../protocol/messages.ts';
+import { utf8Bytes } from '../protocol/size.ts';
 
 /**
  * Primary key extraction, canonical serialization, size estimation, and SQL range comparisons.

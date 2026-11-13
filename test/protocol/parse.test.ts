@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
-import { clientChars } from '../../src/common/limits.ts';
-import { parseMutations } from '../../src/common/parse.ts';
+import { clientChars } from '../../src/protocol/limits.ts';
+import { parseMutations } from '../../src/protocol/parse.ts';
 
 // Cloud parses pushed batches at the trust boundary (the device core parses what the cloud sends).
 

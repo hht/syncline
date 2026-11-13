@@ -1,6 +1,6 @@
 import type { Events } from '../cloud/events.ts';
 import { dropRetired, nextDrop } from '../cloud/evolution.ts';
-import type { Query } from '../common/storage.ts';
+import type { Query } from '../sqlite/storage.ts';
 import { type Chore, reserved, type Schedule } from './schedule.ts';
 
 /**

@@ -1,10 +1,10 @@
 import { exports } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
 import { forward } from '../../src/cloudflare/forward.ts';
-import { pullBytes } from '../../src/common/limits.ts';
-import { bearer, subprotocol } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
-import { protocolVersion, versionMismatch } from '../../src/common/version.ts';
+import { pullBytes } from '../../src/protocol/limits.ts';
+import { bearer, subprotocol } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
+import { protocolVersion, versionMismatch } from '../../src/protocol/version.ts';
 import { schemaPrefix } from '../../src/tables/declaration.ts';
 import { pullResponse, recording, space, url } from '../worker/test-space.ts';
 

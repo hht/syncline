@@ -3,7 +3,7 @@ import { expect } from 'vitest';
 import { Broadcast } from '../../src/cloud/broadcast.ts';
 import type { SynclineEvent } from '../../src/cloud/events.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Hint, Poke } from '../../src/common/protocol.ts';
+import type { Hint, Poke } from '../../src/protocol/messages.ts';
 import { admin, createProgram, program, pullRest, viewer } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';

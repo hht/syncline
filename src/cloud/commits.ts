@@ -1,7 +1,7 @@
-import { batchRows, commitFloor, readBytes, truncateBytes, truncateRows, valueBytes } from '../common/limits.ts';
-import type { Cookie } from '../common/protocol.ts';
-import { utf8Bytes } from '../common/size.ts';
-import type { Query } from '../common/storage.ts';
+import { batchRows, commitFloor, readBytes, truncateBytes, truncateRows, valueBytes } from '../protocol/limits.ts';
+import type { Cookie } from '../protocol/messages.ts';
+import { utf8Bytes } from '../protocol/size.ts';
+import type { Query } from '../sqlite/storage.ts';
 import type { Key } from '../tables/keys.ts';
 import { within } from './batches.ts';
 

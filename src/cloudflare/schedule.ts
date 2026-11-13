@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 
 /**
  * Multiplexes chores and integrator callbacks onto a single Durable Object alarm:

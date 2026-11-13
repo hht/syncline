@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { parsePullBody, parsePullRequest, pullURL } from '../../src/common/pull-url.ts';
+import { parsePullBody, parsePullRequest, pullURL } from '../../src/protocol/pull-url.ts';
 
 // Pull requests: shared space requests are encoded in the URL, private space requests in POST bodies, both validated at cloud boundaries.
 

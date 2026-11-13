@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { expired, socketLimit } from '../../src/common/protocol.ts';
+import { expired, socketLimit } from '../../src/protocol/messages.ts';
 import { program } from '../support/test-catalog.ts';
 import { captureReported } from '../support/test-errors.ts';
 import { RecordingSocket } from '../support/test-sockets.ts';

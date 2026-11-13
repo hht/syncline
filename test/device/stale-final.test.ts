@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import type { Chunk, Poke } from '../../src/common/protocol.ts';
-import type { PullRequest } from '../../src/common/pull-url.ts';
+import type { Chunk, Poke } from '../../src/protocol/messages.ts';
+import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import { program, pullOne, pullRest } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { failOnce, injectedError } from '../support/test-storage.ts';

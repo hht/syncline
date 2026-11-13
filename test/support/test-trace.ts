@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { head } from './test-commits.ts';
 import type { Device } from './test-device.ts';
 

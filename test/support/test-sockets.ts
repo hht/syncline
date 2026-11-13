@@ -1,5 +1,5 @@
 import type { Socket } from '../../src/cloud/server.ts';
-import { ping, pong } from '../../src/common/protocol.ts';
+import { ping, pong } from '../../src/protocol/messages.ts';
 import type { Seams } from './test-bounds.ts';
 import { type Message, socketMessage } from './test-trace.ts';
 

@@ -1,6 +1,6 @@
-import { notifyAll } from '../../src/common/listeners.ts';
 import { abortable } from '../../src/expo/client.ts';
 import type { SyncStatus } from '../../src/expo/status.ts';
+import { notifyAll } from '../../src/listeners.ts';
 import type { ConnectionOptions, Mirror } from './test-device.ts';
 import type { Calls } from './test-rust.ts';
 

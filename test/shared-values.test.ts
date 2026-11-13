@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { Broadcast } from '../src/cloud/broadcast.ts';
 import type { Bucket, Buckets } from '../src/cloud/buckets.ts';
 import type { Space } from '../src/cloud/space.ts';
-import { parsePullRequest } from '../src/common/pull-url.ts';
+import { parsePullRequest } from '../src/protocol/pull-url.ts';
 import { drain } from './support/test-drive.ts';
 import { type CloudEnd, Network } from './support/test-network.ts';
 import {

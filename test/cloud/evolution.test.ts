@@ -2,8 +2,8 @@ import { integer, type SQLiteTable, sqliteTable, text } from 'drizzle-orm/sqlite
 import { expect, test } from 'vitest';
 import type { SynclineEvent } from '../../src/cloud/events.ts';
 import { dropRetired, evolve, nextDrop, retiredGrace } from '../../src/cloud/evolution.ts';
-import type { Mutation } from '../../src/common/protocol.ts';
-import { queryOf } from '../../src/common/storage.ts';
+import type { Mutation } from '../../src/protocol/messages.ts';
+import { queryOf } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { Device, Space } from '../support/test-checksum.ts';
 import { workout, write } from '../support/test-schema.ts';

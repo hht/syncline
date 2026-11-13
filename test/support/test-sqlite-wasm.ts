@@ -1,5 +1,5 @@
 import type { BindableValue, Database, PreparedStatement, Sqlite3Static, SqlValue } from '@sqlite.org/sqlite-wasm';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { cursor, savepoint, statementCache } from './test-driver.ts';
 
 /**

@@ -1,6 +1,6 @@
-import { subprotocol } from '../common/protocol.ts';
-import { parsePullRequest } from '../common/pull-url.ts';
-import { protocolVersion, versionConflict, versionMismatch, versionParam } from '../common/version.ts';
+import { subprotocol } from '../protocol/messages.ts';
+import { parsePullRequest } from '../protocol/pull-url.ts';
+import { protocolVersion, versionConflict, versionMismatch, versionParam } from '../protocol/version.ts';
 import { schemaHeader } from '../tables/declaration.ts';
 import { isSocket, tokenOf, withoutToken } from './requests.ts';
 

@@ -1,8 +1,8 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { subscriptionBytes } from '../common/limits.ts';
-import { utf8Bytes } from '../common/size.ts';
-import { among, literal, quote, quoteAll } from '../common/sql.ts';
-import { type Query, Reject } from '../common/storage.ts';
+import { subscriptionBytes } from '../protocol/limits.ts';
+import { utf8Bytes } from '../protocol/size.ts';
+import { among, literal, quote, quoteAll } from '../sqlite/sql.ts';
+import { type Query, Reject } from '../sqlite/storage.ts';
 import { fingerprintOf } from '../tables/fingerprint.ts';
 import { keyColumns, keyOf, rowId } from '../tables/keys.ts';
 import { bucketIndexPrefix } from '../tables/table-definitions.ts';

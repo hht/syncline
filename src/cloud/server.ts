@@ -1,5 +1,4 @@
-import { pushBytes } from '../common/limits.ts';
-import { type Pushed, parseMutations } from '../common/parse.ts';
+import { pushBytes } from '../protocol/limits.ts';
 import {
   type Change,
   type Cookie,
@@ -14,9 +13,10 @@ import {
   sameCookie,
   socketLimit,
   tooManyConnections,
-} from '../common/protocol.ts';
-import type { PullRequest } from '../common/pull-url.ts';
-import { fitsBytes } from '../common/size.ts';
+} from '../protocol/messages.ts';
+import { type Pushed, parseMutations } from '../protocol/parse.ts';
+import type { PullRequest } from '../protocol/pull-url.ts';
+import { fitsBytes } from '../protocol/size.ts';
 import { schemaFingerprint, schemaMismatch } from '../tables/declaration.ts';
 import { type Events, isolated, quiet } from './events.ts';
 import type { Oversized, Space } from './space.ts';

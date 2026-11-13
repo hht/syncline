@@ -1,4 +1,4 @@
-import type { Op } from './protocol.ts';
+import type { Op } from './messages.ts';
 
 // Measures payload sizes: platform ceilings in bytes (WebSocket message size, Durable Object values and rows) use UTF-8 byte lengths,
 // measured via utf8Bytes and fitsBytes in JavaScript or octet_length in SQL.

@@ -4,7 +4,7 @@ import { expect } from 'vitest';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
 import type { Transaction } from '../../src/cloud/transaction.ts';
-import { type Hint, type Poke, socketLimit } from '../../src/common/protocol.ts';
+import { type Hint, type Poke, socketLimit } from '../../src/protocol/messages.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import type { Device } from './test-device.ts';
 import { install } from './test-schema.ts';

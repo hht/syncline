@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
-import type { Op } from '../../src/common/protocol.ts';
+import type { Op } from '../../src/protocol/messages.ts';
 import { Device } from '../support/test-device.ts';
 import { captureReported } from '../support/test-errors.ts';
 import { createWorkout, putWorkout, tables, workouts } from '../support/test-schema.ts';

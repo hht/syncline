@@ -2,7 +2,7 @@ import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk } from '../../src/common/protocol.ts';
+import type { Chunk } from '../../src/protocol/messages.ts';
 import { ValidationError } from '../../src/tables/validation.ts';
 import { catalog, contents, day, landedRequest, program, pullAll, rules, schema, viewer } from '../support/test-catalog.ts';
 import { cloudStorage } from '../support/test-storage.ts';

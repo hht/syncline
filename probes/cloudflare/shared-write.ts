@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { sharedWriteRows } from '../../src/common/limits.ts';
+import { sharedWriteRows } from '../../src/protocol/limits.ts';
 import { account, cloudflare, untilJson, withWorker } from './deploy.ts';
 
 /**

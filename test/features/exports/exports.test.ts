@@ -1,8 +1,8 @@
 import { expect, test, vi } from 'vitest';
 import type { Events, SynclineEvent } from '../../../src/cloud/events.ts';
 import { Space } from '../../../src/cloud/space.ts';
-import type { Op } from '../../../src/common/protocol.ts';
 import { Exports, exportChunk } from '../../../src/features/exports/cloud/exports.ts';
+import type { Op } from '../../../src/protocol/messages.ts';
 import { captureReported } from '../../support/test-errors.ts';
 import { createWorkout, tables, workout } from '../../support/test-schema.ts';
 import { cloudStorage, restoredStorage } from '../../support/test-storage.ts';

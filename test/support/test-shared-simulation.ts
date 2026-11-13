@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { expect } from 'vitest';
-import { formatCookie } from '../../src/common/protocol.ts';
+import { formatCookie } from '../../src/protocol/messages.ts';
 import { Device } from './test-device.ts';
 import { Network } from './test-network.ts';
 import { random } from './test-random.ts';

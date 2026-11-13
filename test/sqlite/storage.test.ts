@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import { isTransient, Reject } from '../../src/common/storage.ts';
+import { isTransient, Reject } from '../../src/sqlite/storage.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
 // Classifies storage errors as transient or permanent: recognizes result codes from both workerd (suffix) and official SQLite WASM (prefix).

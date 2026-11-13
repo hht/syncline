@@ -3,7 +3,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { type BucketRules, Buckets } from '../../src/cloud/buckets.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Cursor } from '../../src/common/storage.ts';
+import type { Cursor } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { expectBounded, fillRows, measured, scale } from '../worker/test-reads.ts';
 

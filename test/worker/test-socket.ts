@@ -1,4 +1,4 @@
-import { type Poke, pong } from '../../src/common/protocol.ts';
+import { type Poke, pong } from '../../src/protocol/messages.ts';
 
 // Shared across platform tests: queues WebSocket messages and close events received by the client in arrival order.
 

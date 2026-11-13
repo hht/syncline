@@ -1,4 +1,4 @@
-import { bearer, bearerToken } from '../common/protocol.ts';
+import { bearer, bearerToken } from '../protocol/messages.ts';
 import { schemaHeader, schemaPrefix } from '../tables/declaration.ts';
 
 /**

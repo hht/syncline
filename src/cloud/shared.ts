@@ -1,9 +1,9 @@
-import { readRows } from '../common/limits.ts';
-import { isProgress } from '../common/parse.ts';
-import type { Chunk, Cookie, Poke, Progress, Reset, Value } from '../common/protocol.ts';
-import type { PullRequest } from '../common/pull-url.ts';
-import { quote } from '../common/sql.ts';
-import type { Query } from '../common/storage.ts';
+import { readRows } from '../protocol/limits.ts';
+import type { Chunk, Cookie, Poke, Progress, Reset, Value } from '../protocol/messages.ts';
+import { isProgress } from '../protocol/parse.ts';
+import type { PullRequest } from '../protocol/pull-url.ts';
+import { quote } from '../sqlite/sql.ts';
+import type { Query } from '../sqlite/storage.ts';
 import { rowId } from '../tables/keys.ts';
 import { bucketsAs, type TableReads } from './batches.ts';
 import type { BucketRows, Tally } from './bucket-rows.ts';

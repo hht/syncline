@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import type { Transaction } from '../../src/cloud/transaction.ts';
-import { sharedWriteRows, writeKeyBytes } from '../../src/common/limits.ts';
+import { sharedWriteRows, writeKeyBytes } from '../../src/protocol/limits.ts';
 import { catalog, day, program, schema } from '../support/test-catalog.ts';
 import { cloudStorage } from '../support/test-storage.ts';
 

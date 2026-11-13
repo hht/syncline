@@ -2,8 +2,8 @@ import type { Events } from '../../../cloud/events.ts';
 import { decodePosition } from '../../../cloud/position.ts';
 import type { Space } from '../../../cloud/space.ts';
 import { withTimeout } from '../../../cloud/timeout.ts';
-import { report } from '../../../common/listeners.ts';
-import type { Op } from '../../../common/protocol.ts';
+import { report } from '../../../listeners.ts';
+import type { Op } from '../../../protocol/messages.ts';
 
 /** Approximate character budget per exported chunk: exporters process one chunk at a time (e.g. writing to D1); smaller chunks remain fast. */
 const exportChars = 500_000;

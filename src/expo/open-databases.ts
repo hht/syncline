@@ -1,4 +1,4 @@
-import { report } from '../common/listeners.ts';
+import { report } from '../listeners.ts';
 
 /**
  * Coordinates single-instance ownership of open local databases within a process between foreground and background tasks.

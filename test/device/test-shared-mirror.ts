@@ -3,7 +3,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect } from 'vitest';
 import { noticeFor } from '../../src/cloud/broadcast.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Poke } from '../../src/common/protocol.ts';
+import type { Poke } from '../../src/protocol/messages.ts';
 import { createProgram, program, pullRest, viewer } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';

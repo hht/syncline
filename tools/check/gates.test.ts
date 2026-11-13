@@ -65,8 +65,8 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
   const dir = writtenFiles({
     '.dependency-cruiser.json': JSON.stringify({ extends: join(repo, '.dependency-cruiser.json') }),
     'tsconfig.json': JSON.stringify({ include: ['src/**/*.ts', 'test/**/*.ts', 'tools/**/*.ts'] }),
-    'src/expo/native.ts': "import '../common/bridge.ts';\n",
-    'src/common/bridge.ts': "import '../cloud/server.ts';\nimport '../features/checksum/index.ts';\n",
+    'src/expo/native.ts': "import '../protocol/bridge.ts';\n",
+    'src/protocol/bridge.ts': "import '../cloud/server.ts';\nimport '../features/checksum/index.ts';\n",
     'src/cloud/server.ts': "import '../../tools/check/problem.ts';\n",
     'src/features/checksum/index.ts': '',
     'src/tables/a.ts': "import './b.ts';\n",
@@ -80,8 +80,8 @@ test('dependency-cruiser: blocks device-to-cloud imports, core-to-feature import
   expect(summary(result.problems).sort()).toEqual([
     'src/cloud/helper.ts:1 product-not-test',
     'src/cloud/server.ts:1 product-not-tools',
-    'src/common/bridge.ts:2 core-not-features',
     'src/expo/native.ts:1 device-not-cloud',
+    'src/protocol/bridge.ts:2 core-not-features',
     'src/tables/a.ts:1 no-circular',
   ]);
 });

@@ -3,8 +3,8 @@ import { env } from 'cloudflare:workers';
 import { afterAll, expect, test } from 'vitest';
 import { expiresHeader } from '../../src/cloudflare/forward.ts';
 import { subHeader, subscriptionHeader } from '../../src/cloudflare/shared-forward.ts';
-import { type Cookie, subprotocol } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { type Cookie, subprotocol } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { fannedOut } from '../worker/test-shared.ts';
 import { inbox } from '../worker/test-socket.ts';
 

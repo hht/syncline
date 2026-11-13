@@ -1,4 +1,4 @@
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 
 // Cloud oracle utilities: latest commit (commit log), per-client lmids (client table), decision status (recorded by recordDecisions).
 

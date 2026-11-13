@@ -1,6 +1,6 @@
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
-import { type Cookie, expired, ping, pullNeeded, socketLimit } from '../../src/common/protocol.ts';
+import { type Cookie, expired, ping, pullNeeded, socketLimit } from '../../src/protocol/messages.ts';
 import { type Declaration, schemaFingerprint, schemaHeader, schemaMismatch, schemaPrefix } from '../../src/tables/declaration.ts';
 import { connect, connectAll, object, online, pull, pullResponse, put, space, squat, url } from '../worker/test-space.ts';
 import type { TestSpace } from '../worker/test-worker.ts';

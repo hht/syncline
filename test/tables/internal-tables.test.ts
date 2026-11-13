@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { steps } from '../../src/tables/internal-tables.ts';
 import { Device } from '../support/test-device.ts';
 import { createWorkout, pulled, tables, upload, workout, workouts, write } from '../support/test-schema.ts';

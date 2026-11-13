@@ -5,7 +5,7 @@ import type { SynclineEvent } from '../../src/cloud/events.ts';
 import { evolve, nextDrop, retiredGrace } from '../../src/cloud/evolution.ts';
 import { Schedule } from '../../src/cloudflare/schedule.ts';
 import { Upkeep } from '../../src/cloudflare/upkeep.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
 import { fillCommits } from '../worker/test-reads.ts';
 import { object, online, space } from '../worker/test-space.ts';

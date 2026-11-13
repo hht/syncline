@@ -1,6 +1,6 @@
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
-import type { Op } from '../../src/common/protocol.ts';
+import type { Op } from '../../src/protocol/messages.ts';
 import { deviceDefinitions } from '../../src/tables/table-definitions.ts';
 import { Device } from '../support/test-device.ts';
 import { captureReported } from '../support/test-errors.ts';

@@ -1,6 +1,6 @@
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
-import type { Change } from '../common/protocol.ts';
-import { foldCase } from '../common/sql.ts';
+import type { Change } from '../protocol/messages.ts';
+import { foldCase } from '../sqlite/sql.ts';
 import { longFingerprintOf } from './fingerprint.ts';
 import { keyColumns } from './keys.ts';
 import { storageTypeOf } from './validation.ts';

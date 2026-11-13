@@ -1,7 +1,7 @@
 import type { Server } from '../../src/cloud/server.ts';
-import { bearer, bearerToken, subprotocol } from '../../src/common/protocol.ts';
-import { parsePullBody, parsePullRequest } from '../../src/common/pull-url.ts';
-import { versionConflict, versionParam } from '../../src/common/version.ts';
+import { bearer, bearerToken, subprotocol } from '../../src/protocol/messages.ts';
+import { parsePullBody, parsePullRequest } from '../../src/protocol/pull-url.ts';
+import { versionConflict, versionParam } from '../../src/protocol/version.ts';
 import { schemaConflict, schemaPrefix } from '../../src/tables/declaration.ts';
 import type { Answer } from './test-requests.ts';
 import type { CloudEnd } from './test-sockets.ts';

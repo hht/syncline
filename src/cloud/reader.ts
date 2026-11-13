@@ -1,7 +1,7 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { readRows } from '../common/limits.ts';
-import type { Cookie, Op, PullRange } from '../common/protocol.ts';
-import type { Query } from '../common/storage.ts';
+import { readRows } from '../protocol/limits.ts';
+import type { Cookie, Op, PullRange } from '../protocol/messages.ts';
+import type { Query } from '../sqlite/storage.ts';
 import { TableReads } from './batches.ts';
 import type { Commits } from './commits.ts';
 import { scopeOf } from './evolution.ts';

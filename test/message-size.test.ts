@@ -2,7 +2,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { Server, type Socket } from '../src/cloud/server.ts';
 import { Space } from '../src/cloud/space.ts';
-import { socketLimit } from '../src/common/protocol.ts';
+import { socketLimit } from '../src/protocol/messages.ts';
 import { RecordingSocket } from './support/test-sockets.ts';
 import { cloudStorage } from './support/test-storage.ts';
 

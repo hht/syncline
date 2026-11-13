@@ -1,6 +1,6 @@
-import { sharedWriteRows, writeRows } from '../common/limits.ts';
-import type { Cookie } from '../common/protocol.ts';
-import type { CloudStorage, Query } from '../common/storage.ts';
+import { sharedWriteRows, writeRows } from '../protocol/limits.ts';
+import type { Cookie } from '../protocol/messages.ts';
+import type { CloudStorage, Query } from '../sqlite/storage.ts';
 import { canonicalKey } from '../tables/keys.ts';
 import { type Changed, checkReported, limitRows, type Rows } from '../tables/rows.ts';
 import type { Validator } from '../tables/validation.ts';

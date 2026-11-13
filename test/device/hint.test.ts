@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk, Poke, Reset } from '../../src/common/protocol.ts';
-import type { PullRequest } from '../../src/common/pull-url.ts';
+import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
+import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import { program, schema, viewer } from '../support/test-catalog.ts';
 import { Device } from '../support/test-device.ts';
 import { cloudStorage, deviceStorage } from '../support/test-storage.ts';

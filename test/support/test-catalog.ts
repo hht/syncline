@@ -2,8 +2,8 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect } from 'vitest';
 import { type Bucket, type BucketRules, bucketId } from '../../src/cloud/buckets.ts';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk, Op, Poke, Reset } from '../../src/common/protocol.ts';
-import type { PullRequest } from '../../src/common/pull-url.ts';
+import type { Chunk, Op, Poke, Reset } from '../../src/protocol/messages.ts';
+import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import type { Shared } from './test-device.ts';
 import { cloudStorage } from './test-storage.ts';
 

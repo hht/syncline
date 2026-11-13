@@ -1,13 +1,13 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { notifyAll, report } from '../../src/common/listeners.ts';
-import type { Chunk, Cookie, Hint, Mutation, Poke, Reset } from '../../src/common/protocol.ts';
-import type { PullRequest } from '../../src/common/pull-url.ts';
 import { answerToken, decodeRows, encode, localWrite, validated } from '../../src/expo/client.ts';
 import { deserializeError, deserializeStatus } from '../../src/expo/errors.ts';
 import type { Execute } from '../../src/expo/remote-database.ts';
 import { type Delivered, type Network, type Schedule, Shell, timeout } from '../../src/expo/shell.ts';
 import type { SyncStatus } from '../../src/expo/status.ts';
 import type { Held } from '../../src/expo/syncline.ts';
+import { notifyAll, report } from '../../src/listeners.ts';
+import type { Chunk, Cookie, Hint, Mutation, Poke, Reset } from '../../src/protocol/messages.ts';
+import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import { type Incompatibility, readOnlyOf } from '../../src/tables/declaration.ts';
 import { deviceDefinitions, tableName } from '../../src/tables/table-definitions.ts';
 import { checkDeclared, type Validation, Validator } from '../../src/tables/validation.ts';

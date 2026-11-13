@@ -1,6 +1,6 @@
 import type { TableReads } from '../../../cloud/batches.ts';
 import { decodeScan, encodeScan, type Scan } from '../../../cloud/position.ts';
-import type { Checksum, ChecksumPart, Value } from '../../../common/protocol.ts';
+import type { Checksum, ChecksumPart, Value } from '../../../protocol/messages.ts';
 import { fingerprintOf } from '../../../tables/fingerprint.ts';
 import { plus, rangeRows, rowText } from '../common/checksum.ts';
 

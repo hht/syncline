@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { expect, test, vi } from 'vitest';
 import { expiresHeader, spaceHeader } from '../../src/cloudflare/forward.ts';
 import { SynclineSpace } from '../../src/cloudflare/index.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { object, online, put, space, url } from '../worker/test-space.ts';
 import { note, type TestSpace } from '../worker/test-worker.ts';
 

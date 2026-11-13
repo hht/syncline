@@ -1,5 +1,5 @@
 import { clientChars } from './limits.ts';
-import { type Change, type Cookie, type KeyRange, type Mutation, type Progress, pushMutations, type Value } from './protocol.ts';
+import { type Change, type Cookie, type KeyRange, type Mutation, type Progress, pushMutations, type Value } from './messages.ts';
 
 /**
  * Boundary parsing of what the cloud receives from devices: pushed mutations, plus the value checks pull requests share

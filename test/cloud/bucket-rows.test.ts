@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import type { Chunk } from '../../src/common/protocol.ts';
+import type { Chunk } from '../../src/protocol/messages.ts';
 import { admin, catalog, contents, day, program, pullAll, rules, subscribed, viewer } from '../support/test-catalog.ts';
 
 // Row counts per bucket in shared spaces: used to compute total rows for full-pull progress; updated on writes,

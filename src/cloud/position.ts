@@ -1,5 +1,5 @@
-import { cookie, isCount, isObject, isValues } from '../common/parse.ts';
-import type { Cookie, PullRange } from '../common/protocol.ts';
+import type { Cookie, PullRange } from '../protocol/messages.ts';
+import { cookie, isCount, isObject, isValues } from '../protocol/parse.ts';
 import { canonicalKey, type Key } from '../tables/keys.ts';
 
 // How reader positions serialize to cursor text, parse back from text, and validate incoming client cursors:

@@ -1,7 +1,7 @@
 import { real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
-import { parseMutations } from '../../src/common/parse.ts';
+import { parseMutations } from '../../src/protocol/parse.ts';
 import { Device } from '../support/test-device.ts';
 import { flush } from '../support/test-drive.ts';
 import { serving, write } from '../support/test-schema.ts';

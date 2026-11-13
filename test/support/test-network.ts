@@ -1,5 +1,5 @@
-import { ping, pong } from '../../src/common/protocol.ts';
-import { protocolVersion, versionMismatch } from '../../src/common/version.ts';
+import { ping, pong } from '../../src/protocol/messages.ts';
+import { protocolVersion, versionMismatch } from '../../src/protocol/version.ts';
 import type { Seams } from './test-bounds.ts';
 import type { Device } from './test-device.ts';
 import { admitSocket, answer, type Cloud, mismatched, tokens } from './test-entry.ts';

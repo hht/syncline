@@ -3,8 +3,8 @@ import { env, exports } from 'cloudflare:workers';
 import { expect, vi } from 'vitest';
 import { subscriptionHash } from '../../src/cloud/buckets.ts';
 import { subHeader, subscriptionHeader } from '../../src/cloudflare/shared-forward.ts';
-import { bearer, type Chunk, type Cookie, type Poke, subprotocol } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { bearer, type Chunk, type Cookie, type Poke, subprotocol } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { inbox } from './test-socket.ts';
 
 /**

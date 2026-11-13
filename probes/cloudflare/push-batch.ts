@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { type Chunk, type Cookie, type Mutation, type Poke, pushMutations } from '../../src/common/protocol.ts';
-import { pullURL } from '../../src/common/pull-url.ts';
+import { type Chunk, type Cookie, type Mutation, type Poke, pushMutations } from '../../src/protocol/messages.ts';
+import { pullURL } from '../../src/protocol/pull-url.ts';
 import { account, cloudflare, withWorker } from './deploy.ts';
 import { connect, next, sleep } from './device.ts';
 

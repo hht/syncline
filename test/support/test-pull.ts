@@ -1,8 +1,8 @@
 import { drizzle } from 'drizzle-orm/durable-sqlite';
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect } from 'vitest';
-import type { Chunk, Poke, Reset } from '../../src/common/protocol.ts';
-import type { Storage } from '../../src/common/storage.ts';
+import type { Chunk, Poke, Reset } from '../../src/protocol/messages.ts';
+import type { Storage } from '../../src/sqlite/storage.ts';
 import { Device, Space } from './test-checksum.ts';
 import { createWorkout, workout } from './test-schema.ts';
 import { cloudStorage, deviceStorage } from './test-storage.ts';

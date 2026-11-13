@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { notifyAll } from '../../src/common/listeners.ts';
+import { notifyAll } from '../src/listeners.ts';
 
 // Listener errors are reported without fatal aborts: browsers and Workers use reportError, React Native uses ErrorUtils.reportError.
 

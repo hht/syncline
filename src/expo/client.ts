@@ -1,5 +1,5 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { notifyAll, report } from '../common/listeners.ts';
+import { notifyAll, report } from '../listeners.ts';
 import { readOnlyOf } from '../tables/declaration.ts';
 import { deviceDefinitions, tableName } from '../tables/table-definitions.ts';
 import { checkDeclared, ValidationError, Validator } from '../tables/validation.ts';

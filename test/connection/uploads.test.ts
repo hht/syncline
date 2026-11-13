@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { socketLimit } from '../../src/common/protocol.ts';
+import { socketLimit } from '../../src/protocol/messages.ts';
 import { flush, withFakeTimers } from '../support/test-drive.ts';
 import { rustLimits } from '../support/test-rust.ts';
 import { workout, write } from '../support/test-schema.ts';

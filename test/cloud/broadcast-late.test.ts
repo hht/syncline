@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test, vi } from 'vitest';
-import { expired } from '../../src/common/protocol.ts';
+import { expired } from '../../src/protocol/messages.ts';
 import { program } from '../support/test-catalog.ts';
 import { captureReported } from '../support/test-errors.ts';
 import { hinted, setup, unsent } from './test-broadcast.ts';

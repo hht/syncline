@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { type Confirmed, Fanout } from '../../src/cloud/fanout.ts';
 import type { Round } from '../../src/cloud/shared.ts';
-import type { Cookie } from '../../src/common/protocol.ts';
+import type { Cookie } from '../../src/protocol/messages.ts';
 
 // Fanout across multiple shards (Send(s) and Ack in model/Fanout.tla): stalled shards delay only themselves; persists only when all shards acknowledge head; concurrent calls queue at most one round; identical starting points compute the round once.
 
