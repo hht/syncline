@@ -1,4 +1,3 @@
-import { pushBytes } from '../protocol/limits.ts';
 import {
   type Change,
   type Cookie,
@@ -19,6 +18,7 @@ import type { PullRequest } from '../protocol/pull-url.ts';
 import { fitsBytes } from '../protocol/size.ts';
 import { schemaFingerprint, schemaMismatch } from '../tables/declaration.ts';
 import { type Events, isolated, quiet } from './events.ts';
+import { pushBytes } from './limits.ts';
 import type { Oversized, Space } from './space.ts';
 import type { Transaction } from './transaction.ts';
 

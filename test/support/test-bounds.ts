@@ -1,5 +1,5 @@
+import { pullBytes, pushBytes } from '../../src/cloud/limits.ts';
 import { encodePosition, encodeScan } from '../../src/cloud/position.ts';
-import { pullBytes, pushBytes } from '../../src/protocol/limits.ts';
 import { type Op, ping, pong, pushMutations } from '../../src/protocol/messages.ts';
 import { opChars, utf8Bytes } from '../../src/protocol/size.ts';
 import { protocolVersion } from '../../src/protocol/version.ts';

@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
 import { retiredGrace } from '../../src/cloud/evolution.ts';
+import { readRows, truncateBytes, truncateRows } from '../../src/cloud/limits.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { readRows, truncateBytes, truncateRows, writeRows } from '../../src/protocol/limits.ts';
+import { writeRows } from '../../src/protocol/limits.ts';
 import { chunkLimit, type Poke, socketLimit } from '../../src/protocol/messages.ts';
 import type { PullRequest } from '../../src/protocol/pull-url.ts';
 import { expectBounded, fillCommits, fillRows, measured, type Reads, readBound, scale } from '../worker/test-reads.ts';

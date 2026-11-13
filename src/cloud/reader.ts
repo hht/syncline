@@ -1,10 +1,10 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { readRows } from '../protocol/limits.ts';
 import type { Cookie, Op, PullRange } from '../protocol/messages.ts';
 import type { Query } from '../sqlite/storage.ts';
 import { TableReads } from './batches.ts';
 import type { Commits } from './commits.ts';
 import { scopeOf } from './evolution.ts';
+import { readRows } from './limits.ts';
 import { encodePosition, landedAt, type Position, rangesOf, recognize } from './position.ts';
 import { type Budget, Step, type Visible } from './read-step.ts';
 

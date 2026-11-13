@@ -1,9 +1,10 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test, vi } from 'vitest';
 import type { SynclineEvent } from '../../src/cloud/events.ts';
+import { pushBytes } from '../../src/cloud/limits.ts';
 import { Server } from '../../src/cloud/server.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { pushBytes, writeBytes } from '../../src/protocol/limits.ts';
+import { writeBytes } from '../../src/protocol/limits.ts';
 import { type Mutation, pullNeeded } from '../../src/protocol/messages.ts';
 import { parseMutations } from '../../src/protocol/parse.ts';
 import { utf8Bytes } from '../../src/protocol/size.ts';

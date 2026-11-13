@@ -1,7 +1,7 @@
 import { exports } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
+import { pullBytes } from '../../src/cloud/limits.ts';
 import { forward } from '../../src/cloudflare/forward.ts';
-import { pullBytes } from '../../src/protocol/limits.ts';
 import { bearer, subprotocol } from '../../src/protocol/messages.ts';
 import { pullURL } from '../../src/protocol/pull-url.ts';
 import { protocolVersion, versionMismatch } from '../../src/protocol/version.ts';

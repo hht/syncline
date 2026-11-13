@@ -3,23 +3,13 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { defaultShards, reconnectRate } from '../src/cloud/broadcast.ts';
 import { Buckets, bucketBytes, rulesPerTable } from '../src/cloud/buckets.ts';
+import { commitFloor, nameBytes, readRows, sharedWriteRows } from '../src/cloud/limits.ts';
 import { defaultConnections } from '../src/cloud/server.ts';
 import { defaultRows } from '../src/cloud/shared.ts';
 import { Space } from '../src/cloud/space.ts';
 import { receiveTimeout as shellReceiveTimeout } from '../src/expo/shell.ts';
 import { defaultExportBudget, defaultExportDelay, maxExportDelay } from '../src/features/exports.ts';
-import {
-  commitFloor,
-  keyBytes,
-  nameBytes,
-  readRows,
-  sharedWriteRows,
-  subscriptionBytes,
-  tableNameChars,
-  writeBytes,
-  writeKeyBytes,
-  writeRows,
-} from '../src/protocol/limits.ts';
+import { keyBytes, subscriptionBytes, tableNameChars, writeBytes, writeKeyBytes, writeRows } from '../src/protocol/limits.ts';
 import {
   expired,
   invalidPush,

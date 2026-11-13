@@ -1,4 +1,3 @@
-import { readRows } from '../protocol/limits.ts';
 import type { Chunk, Cookie, Poke, Progress, Reset, Value } from '../protocol/messages.ts';
 import { isProgress } from '../protocol/parse.ts';
 import type { PullRequest } from '../protocol/pull-url.ts';
@@ -9,6 +8,7 @@ import { bucketsAs, type TableReads } from './batches.ts';
 import type { BucketRows, Tally } from './bucket-rows.ts';
 import { type BucketRules, type Buckets, boundBuckets, type Subscription } from './buckets.ts';
 import { type Commits, changedRows, type Keys } from './commits.ts';
+import { readRows } from './limits.ts';
 import { landedAt, type Position } from './position.ts';
 import type { Begun, Reader } from './reader.ts';
 

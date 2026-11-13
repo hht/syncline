@@ -1,9 +1,9 @@
-import { readRows } from '../protocol/limits.ts';
 import { quote, quoteAll } from '../sqlite/sql.ts';
 import type { CloudStorage, Query } from '../sqlite/storage.ts';
 import { rowId } from '../tables/keys.ts';
 import { bucketsAs } from './batches.ts';
 import type { Buckets, Subscription } from './buckets.ts';
+import { readRows } from './limits.ts';
 
 /**
  * Tracks row counts per bucket in a shared space (used to compute total rows for full-pull progress):

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { readRows } from '../../src/protocol/limits.ts';
+import { readRows } from '../../src/cloud/limits.ts';
 import { cabinet } from '../support/test-cabinet.ts';
 
 // Shard broadcast rounds that carry no rows, so shards push hints and devices pull over HTTP instead.

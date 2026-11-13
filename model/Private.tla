@@ -581,7 +581,7 @@ HandlePushOf(src, m) ==
        THEN /\ net' = net \ {m}
             /\ UNCHANGED <<sData, sCommits, sHist, sLowHist, nonceOf, nextNonce, gapSeen, sConns, dups, errs>>
        ELSE \/ Handled(m, m.muts, FALSE)
-            \* Batch workload budget exceeded (writeRows in limits.ts, accumulated row changes): processes prefix, stopping after executed write, pokes as usual without disconnect;
+            \* Batch workload budget exceeded (writeRows in the protocol limits, accumulated row changes): processes prefix, stopping after executed write, pokes as usual without disconnect;
             \* device pushes remaining writes after confirmation (Push enabled anytime in model)
             \/ \E n \in 1..(Len(m.muts) - 1) : Handled(m, SubSeq(m.muts, 1, n), TRUE)
             \/ /\ errs < MaxStorageErrors

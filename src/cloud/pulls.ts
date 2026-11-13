@@ -1,10 +1,10 @@
-import { readRows } from '../protocol/limits.ts';
 import type { Checksum, Chunk, Poke, Progress } from '../protocol/messages.ts';
 import { isProgress } from '../protocol/parse.ts';
 import type { PullRequest } from '../protocol/pull-url.ts';
 import type { TableReads } from './batches.ts';
 import type { Commits } from './commits.ts';
 import { type HeldWrites, heldIn } from './held.ts';
+import { readRows } from './limits.ts';
 import { progressAfter } from './progress.ts';
 import type { Begun, Reader } from './reader.ts';
 

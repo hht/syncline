@@ -1,7 +1,8 @@
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
+import { sharedWriteRows } from '../../src/cloud/limits.ts';
 import { Space } from '../../src/cloud/space.ts';
-import { sharedWriteRows, writeKeyBytes, writeRows } from '../../src/protocol/limits.ts';
+import { writeKeyBytes, writeRows } from '../../src/protocol/limits.ts';
 import { Device } from '../support/test-device.ts';
 import { write } from '../support/test-schema.ts';
 import { cloudStorage, countStatements, deviceStorage, measureReads } from '../support/test-storage.ts';

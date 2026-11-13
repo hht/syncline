@@ -1,9 +1,9 @@
-import { batchRows, commitFloor, readBytes, truncateBytes, truncateRows } from '../protocol/limits.ts';
 import type { Cookie } from '../protocol/messages.ts';
 import { utf8Bytes } from '../protocol/size.ts';
 import { type Query, valueBytes } from '../sqlite/storage.ts';
 import type { Key } from '../tables/keys.ts';
 import { within } from './batches.ts';
+import { batchRows, commitFloor, readBytes, truncateBytes, truncateRows } from './limits.ts';
 
 /**
  * Records and queries commit log entries for a sync space.

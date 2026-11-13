@@ -1,10 +1,10 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { type Events, isolated, quiet } from '../cloud/events.ts';
+import { pullBytes } from '../cloud/limits.ts';
 import type { SpaceChecksum } from '../cloud/pulls.ts';
 import { type Quota, Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
 import type { Transaction } from '../cloud/transaction.ts';
-import { pullBytes } from '../protocol/limits.ts';
 import { type Change, ping, pong, subprotocol, unsupportedMessage } from '../protocol/messages.ts';
 import { type PullRequest, parsePullBody, parsePullRequest } from '../protocol/pull-url.ts';
 import { type CloudStorage, queryOf } from '../sqlite/storage.ts';

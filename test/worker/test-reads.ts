@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { expect } from 'vitest';
-import { readRows } from '../../src/protocol/limits.ts';
+import { readRows } from '../../src/cloud/limits.ts';
 import type { CloudStorage, Cursor } from '../../src/sqlite/storage.ts';
 
 // Scale gate metering: wraps storage inside a real Durable Object to count rows read by requests using DO cursor rowsRead.
