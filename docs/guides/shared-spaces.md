@@ -201,6 +201,14 @@ Downloads check the token every time. A live connection keeps the old buckets un
 
 Adding buckets downloads only the new buckets; removing buckets [downloads everything again](../reference/edge-cases.md#removing-buckets-downloads-everything-again).
 
+### Data every user reads
+
+With `userID`, a user switch clears the whole space, rows every user can read included. To keep large data that every user reads in full, put it in a shared space of its own and open that space without `userID`. A user switch then keeps its rows and does not download them again.
+
+- Leave out `userID` only when the `verify` you pass to that space's [`forwardShared`](../reference/api.md#forwardsharedrequest-route-verify) returns the same buckets for every user. Otherwise, after a switch to a user missing any of the previous user's buckets, those rows stay readable until the space downloads again.
+- Each shared space has its own three classes, route, and wrangler bindings: repeat steps 3 to 5 under other names, adding the new classes under a new migration tag.
+- A foreign key cannot point into another space, and spaces sync independently: writes to two spaces can reach a device at different times.
+
 ## 7. Develop locally
 
 - Pass `allowCleartext: true` to `openSyncline`. It applies to shared spaces too.
