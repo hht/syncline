@@ -22,7 +22,8 @@ Hold the protocol to four properties only: never stalls, never loses data, event
 ## Directory layout
 
 ```
-src/            TypeScript: cloud (cloud/, cloudflare/), device JS bindings (expo/), table declarations (tables/), pluggable features (features/), test helpers (test/)
+src/            TypeScript that ships: cloud (cloud/, cloudflare/), device JS bindings (expo/), table declarations (tables/), pluggable features (features/)
+test/           TypeScript tests: a directory per module or behavior tested, cross-module tests at the root, helpers shared across directories (support/), the test Worker (worker/)
 rust/           Device side: core (local database and sync state machine, no networking or timers), native (iOS and Android threads and networking), wasm (web Worker)
 ios/ android/   Native Expo module shells; compile rust/native at build time
 model/          TLA+ protocol models and configurations
@@ -64,7 +65,7 @@ The single check entrypoint is `pnpm check` (the local git hook runs it on chang
 - `pnpm check`: runs gates in two parallel batches (Rust-compiling gates finish first), printing only `file:line rule message` with full logs in `.check/<gate>.log`; `--changed` checks only files modified or untracked relative to `HEAD` (used by pre-commit); the full run also measures coverage against the thresholds in `tools/check/coverage.ts`, listing uncovered lines in `.check/test.log`.
 - `pnpm q <command>`: prints a concise summary with full logs in `.q/`.
 - `pnpm release <version>`: publishes a release; see Commits.
-- `pnpm postinstall`: regenerates Workers types from `src/cloudflare/wrangler.jsonc`; runs automatically on install.
+- `pnpm postinstall`: regenerates Workers types from `test/worker/wrangler.jsonc`; runs automatically on install.
 - `pnpm model`, `pnpm model:setup`, `pnpm model:big`, `pnpm model:trace`: slow gates for protocol models, excluded from `pnpm check`; run `pnpm model` after changing model logic (comment-only changes skip it) and require it to be fully green before committing; see "How to run" in [Models and model checking](docs/internals/model.md) for when to run each. Estimate duration before long model runs and ask the user first if a run takes tens of minutes or longer.
 
 ## Commits

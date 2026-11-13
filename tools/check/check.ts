@@ -68,7 +68,7 @@ const gates: Gate[] = [
   // Icons by check type: 🎨 format and style 🔷 types 🧱 layers 🧹 dead code 👯 duplicates 🧪 tests 🏷️ naming 💬 comments 🔤 english 📄 documentation 🦀 Rust
   { name: 'biome', icon: '🎨', run: biome(root) },
   { name: 'tsc', icon: '🔷', run: typecheck(root, ['.', 'tsconfig.cloudflare.json', 'tsconfig.workers.json', 'examples/cloudflare']) },
-  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'probes', 'tools', 'examples']) },
+  { name: 'depcruise', icon: '🧱', run: layers(root, ['src', 'test', 'probes', 'tools', 'examples']) },
   { name: 'knip', icon: '🧹', run: deadCode(root) },
   // Report from 30 tokens: shared logic across modules should be extracted to one place; gates, dev scripts, and AGENTS.md follow .jscpd.json at 50.
   // Guides and the API reference are skipped: their code blocks are excerpts of examples/ by design (gate docs), and their translations repeat them.
@@ -79,7 +79,7 @@ const gates: Gate[] = [
     icon: '👯',
     run: duplicates(
       root,
-      ['src', 'probes', 'tools', 'docs', 'rust', 'README.md', 'AGENTS.md'],
+      ['src', 'test', 'probes', 'tools', 'docs', 'rust', 'README.md', 'AGENTS.md'],
       [
         {
           path: '.',

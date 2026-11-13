@@ -3,14 +3,14 @@
   // Building wasm before tests uses mise to locate its installed LLVM, not an npm package.
   "ignoreBinaries": ["mise"],
   // Platform tests run in workerd with test-worker.ts; live Cloudflare probes run from CLI (probes/cloudflare); vitest.workerd.config.ts include
-  // overrides knip's default test entries, so src/**/*.test.ts is explicitly listed as an entry.
+  // overrides knip's default test entries, so test/**/*.test.ts is explicitly listed as an entry.
   "entry": [
-    "src/cloudflare/test-worker.ts",
+    "test/worker/test-worker.ts",
     // Vitest setup file the full check enables through an environment variable.
-    "src/test/rust-coverage.ts",
+    "test/support/rust-coverage.ts",
     // Local cloud the native Rust tests start with node.
     "tools/dev/local-cloud.ts",
-    "src/**/*.test.ts",
+    "test/**/*.test.ts",
     "probes/cloudflare/worker.ts",
     "probes/cloudflare/push-size.ts",
     "probes/cloudflare/push-batch.ts",
@@ -24,7 +24,7 @@
     "examples/cloudflare/setup.ts",
     "examples/app/*.ts"
   ],
-  "project": ["src/**/*.{ts,mjs}", "tools/**/*.ts", "probes/**/*.ts", "examples/**/*.ts"],
+  "project": ["src/**/*.{ts,mjs}", "test/**/*.ts", "tools/**/*.ts", "probes/**/*.ts", "examples/**/*.ts"],
   // Gates invoke these tools via node_modules/.bin paths undetected by knip; cloudflare:workers is a runtime built-in, not an npm package.
   "ignoreDependencies": ["@biomejs/biome", "dependency-cruiser", "jscpd", "cloudflare"]
 }

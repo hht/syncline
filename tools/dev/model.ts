@@ -169,7 +169,7 @@ const exec = (
 /** Runs private and shared space simulations, recording seed traces under scratch/traces/<seed>; returns trace directory and seed names. */
 async function recordTraces(scratch: string) {
   const traces = join(scratch, 'traces');
-  const simulations = ['src/test/simulation', 'src/test/shared-simulation.test.ts'];
+  const simulations = ['test/simulation', 'test/shared-simulation.test.ts'];
   const simulated = await exec('pnpm', ['vitest', 'run', '--project', 'fast', ...simulations], {
     cwd: root,
     env: { SIMULATION_TRACE: traces },
@@ -216,8 +216,8 @@ async function checkTrace(
 
 /**
  * Trace validation (following Microsoft CCF trace validation): deterministic simulation records execution traces per seed,
- * one for private spaces (src/test/test-trace.ts, validated against TracePrivate.tla) and one per device for shared spaces
- * (src/test/test-shared-trace.ts, validated against TraceShared.tla); TLC searches for an execution matching every step,
+ * one for private spaces (test/support/test-trace.ts, validated against TracePrivate.tla) and one per device for shared spaces
+ * (test/support/test-shared-trace.ts, validated against TraceShared.tla); TLC searches for an execution matching every step,
  * where a match violates the Unmatched invariant. Seeds match simulation defaults (starting from SIMULATION_SEED, default 0);
  * runs traceJobs workers in parallel, each using an isolated scratch directory (TLC unpacks standard modules into tmpdir, causing collisions if shared).
  * Uses single-pass depth-first search (StateDeque): once a matching execution is found, BFS would unnecessarily expand all paths at that depth.

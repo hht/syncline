@@ -28,7 +28,6 @@ export default defineConfig({
     coverage: {
       provider: 'istanbul',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/test-*.ts', 'src/test/**'],
       reporter: ['lcovonly'],
       reportsDirectory: '.check/coverage',
     },
@@ -40,12 +39,12 @@ export default defineConfig({
           // only have to catch hangs.
           testTimeout: 60_000,
           hookTimeout: 60_000,
-          include: ['{src,tools}/**/*.test.ts'],
+          include: ['{test,tools}/**/*.test.ts'],
           // Compiles Rust device side to wasm for tests.
           globalSetup: ['src/build-wasm.mjs'],
-          setupFiles: process.env.SYNCLINE_COVERAGE === undefined ? [] : ['src/test/rust-coverage.ts'],
+          setupFiles: process.env.SYNCLINE_COVERAGE === undefined ? [] : ['test/support/rust-coverage.ts'],
           // Cloud tests run in the Workers runtime (vitest.workerd.config.ts).
-          exclude: ['**/node_modules/**', 'src/**/*.workerd.test.ts'],
+          exclude: ['**/node_modules/**', 'test/**/*.workerd.test.ts'],
         },
       },
       'vitest.workerd.config.ts',

@@ -13,7 +13,9 @@
   "include": [
     "vitest.workerd.config.ts",
     "src/cloudflare",
-    "src/**/*.workerd.test.ts",
+    "test/cloudflare",
+    "test/worker",
+    "test/**/*.workerd.test.ts",
     "probes/cloudflare/worker.ts",
     "probes/cloudflare/shared-worker.ts"
   ]
