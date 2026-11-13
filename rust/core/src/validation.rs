@@ -97,7 +97,7 @@ fn problem(column: &Column, value: &Value, valid_json: bool) -> Option<String> {
             if let Some(values) = &column.values
                 && !values.contains(text)
             {
-                return Some(format!("must be one of {}", values.join(", ")));
+                return Some(format!("must be one of: {}", values.join(", ")));
             }
             if let Some(length) = column.length
                 && text.encode_utf16().count() > length
@@ -197,7 +197,7 @@ mod tests {
             ("runsField", "must be an integer"),
             ("doneField", "must be 0 or 1"),
             ("weightField", "must be a finite number"),
-            ("kindField", "must be one of standard, custom"),
+            ("kindField", "must be one of: standard, custom"),
             ("codeField", "exceeds 2 characters"),
             ("extraField", "must be valid JSON"),
         ];
