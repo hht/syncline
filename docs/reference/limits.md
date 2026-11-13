@@ -2,7 +2,7 @@
 
 English | [简体中文](zh-CN/limits.md)
 
-Read [Schema](#schema) and [Writes](#writes) before you design your tables. Each limit says what happens when you go past it.
+Read [Schema](#schema) and [Writes](#writes) before you design your tables. Each limit says what happens when you go past it. Rare situations are in [Edge cases](edge-cases.md).
 
 ## Schema
 
@@ -23,7 +23,7 @@ An unsupported type throws when the app opens the database. A changed storage ty
 - Table names hold at most 64 characters.
 - Table names ignore case: `Note` and `note` are the same table. Keep the spelling a table was first created with.
 - Don't start a table name with `_syncline_`, and don't name a column `_extra`. Syncline reserves both.
-- Don't use a name every JavaScript object has, such as `constructor` or `toString`.
+- A few more names are refused: see [Names every JavaScript object has](edge-cases.md#names-every-javascript-object-has-cannot-be-used).
 
 Breaking a rule throws when the app opens the database, except a table name spelled differently from the stored table, which fails opening the same way as a changed storage type. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
 
@@ -36,8 +36,6 @@ Breaking a rule throws when the app opens the database, except a table name spel
 - The primary key of a synced row takes at most 512 bytes encoded as JSON (UTF-8).
 
 An insert that leaves out a primary key column of a synced table fails, unless the column has a default. `autoIncrement` on a synced table throws when the app opens the database. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
-
-`autoIncrement` on a local-only table does not stop keys from being reused: after the row with the largest key is deleted, the next insert gets that key again.
 
 A foreign key to another column fails opening the private space: `waitForReady()` and `sync()` reject, and `downloadError` is set. In the cloud, `SynclineSpace` and `SynclineSharedSpace` throw.
 
@@ -57,10 +55,9 @@ Breaking a rule throws when the app opens the database.
 - The synced columns of one row total at most 1,900,000 bytes. Only local writes check this; a server write past Cloudflare's 2 MB row limit fails.
 - Text must be valid UTF-16. Lone surrogates are refused.
 - Numbers must be finite. NaN is refused, and so is an invalid `Date`, which becomes NaN. A query given a NaN parameter throws too.
-- BigInt values are refused. A query or write given one throws an error of the engine's own, not `ValidationError`.
-- `-0` is stored as `0`.
+- Integer columns hold values within ±9,007,199,254,740,991, the range JavaScript numbers hold exactly.
 
-A local write breaking a rule throws and rolls back. A server write breaking a text or number rule throws `ValidationError`, except for values given as SQL expressions or filled in by `$defaultFn`.
+A local write breaking a rule throws and rolls back. A server write breaking a text or number rule throws `ValidationError`, except that text and NaN given as SQL expressions or filled in by `$defaultFn` are not checked, and that [an integer too large for SQLite](edge-cases.md#an-integer-too-large-for-sqlite-can-fail-a-server-write-with-the-engines-own-error) can fail with the engine's own error.
 
 ## Writes
 
@@ -157,10 +154,6 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 - **Changing tokens.** Call `reconnect()` when a user's permissions change. In shared spaces, live updates follow the old access until at most a minute after the old token expires; downloads check the token every time.
 - **Web.** Only one browser tab per site can open the database. The tab keeps it until it closes or reloads.
 - **Download progress** is an estimate.
-- **Large tables in the cloud.** Building an index on a very large table can run past the CPU time limit. Raise `limits.cpu_ms` in wrangler if that happens.
-- **Scheduled tasks.** A task that keeps resetting the object pauses for a day after 3 tries in a row, and the failure is reported.
-- **Corrupted local state.** Only Syncline may change its own tables (`_syncline_*`). If a pending write stored there cannot be read back, the device cannot sync or open the database. Delete the local database to recover; pending writes are lost.
-- **Pending count.** If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, and `sync()` rejects with the error: calls waiting at that moment, and a call whose own read fails. The write still uploads.
 
 ## Connection errors
 
@@ -187,48 +180,3 @@ The cloud closes a connection with codes such as these. Devices handle them on t
 - **React:** `syncline/react` needs `react` ^19.3.0 and `@tanstack/react-query` ^5.104.0.
 - **Background sync:** `syncline/expo/background` needs `expo-background-task` ~58.0.11 and `expo-task-manager` ~58.0.12.
 - **Drizzle:** `drizzle-orm` 1.0.0-rc.4.
-
-## Edge cases
-
-Rare situations. Most apps never meet them.
-
-### Tables entering and leaving sync
-
-- A table that leaves the private space without being retired keeps its rows until it returns or the signed-in user changes.
-- Retiring a table drops it only if some space declared it when that space last opened. Pending writes do not stop it.
-- A table a shared space stops declaring is wiped when that space opens. So is a table that turns local-only from a shared space.
-- A table removed from `localOnly` that was never synced is left alone. So are the tables of a shared space the app no longer opens.
-- A table returning to sync, moving to another space, or already holding rows when a space first declares it is wiped before any read and downloaded again. Pending writes are kept.
-- Renaming a synced table onto the name of another declared table goes undetected. The space keeps its rows as the other table's.
-- A table moving between synced and local-only keeps the key behavior it was created with. One created local-only still fills in a missing integer key after it becomes synced, the same key on every device, so give every insert its key. One created synced still refuses a missing key after it becomes local-only.
-
-### Devices
-
-- Switching users zeroes the wiped rows on disk. Rows deleted earlier may stay in the file's free space until overwritten.
-- An app that writes on about 48,000 launches without ever syncing can no longer download.
-- An app update that changes columns or indexes of tables being downloaded restarts the download.
-- A value the local column type cannot hold is set aside with a warning. A row arriving with one is hidden from queries.
-- Rolling back both the cloud and the app after devices synced a release that added a column keeps those devices retrying without syncing. They resume once the cloud declares the column again or the app lists it in `retired`. Pending writes are kept.
-- A silent disconnect while pings pause for a large upload goes unnoticed until the pause ends: up to about 2.3 hours for one 8 MiB write.
-- A write uploads in one piece: a disconnect during its upload starts it over on the next connection. On a link that drops before a write finishes uploading, that write and the writes after it never upload. Keep large content in object storage such as R2 and sync a reference to it.
-
-### Shared spaces
-
-- Adding buckets to a subscription downloads only the new buckets. Removing buckets downloads everything again; old rows stay visible until it lands.
-- Without `reconnect()`, a connection keeps filtering live updates by the old token until the next download.
-- Changing `shards` makes every connected device download once. When lowering it, devices on a removed shard get no live updates until up to a minute after their token expires.
-- After a deploy changes rules, online devices hear about it within 1 hour.
-- A server write cut short by a restart of the shared space (the write throws) may reach connected devices only when the space next handles a request, or at its hourly wake-up, up to 1 hour later. Retrying the write delivers it at once.
-- After a shared space is rebuilt, devices may first get old data from cache. The cloud then makes them download again.
-- One request can await about 625 publishes before reaching Cloudflare's subrequest limit. Shards past the limit get the change about 1 second later.
-- Rows a new rule places in a bucket over 256 bytes stay in the space, but no device can subscribe to that bucket.
-- Rarely, a connecting device can stay behind the latest change until the next change reaches it or its token expires and it reconnects. It takes, in order: a live update the cloud gave up on (it timed out, or the shared space restarted) reaching a shard after that shard restarted, then the shard failing to look up the latest change as the device connects.
-
-### Cloud
-
-- Cascading deletes read about twice the rows of a plain delete.
-- A foreign key added to an existing table makes cascading deletes scan the child table until its index is built.
-- `writeQuota` runs a batch larger than `burst` once the quota has refilled to `burst`.
-- `dailyWrites` runs a batch while under the cap, even if the batch goes past it.
-- A paused scheduled task still waits out the day after you deploy a fix. For a `scheduled` callback, `unschedule` then `schedule` runs it as planned.
-- A newly created space has no restorable history for about the first minute.

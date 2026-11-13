@@ -41,7 +41,7 @@ It returns a [`Syncline`](#syncline) at once and opens the database in the backg
 |---|---|---|
 | `name` | `string` | Database name. The file is `<name>.db`. Use one database per app. |
 | `userID` | `string` | ID of the signed-in user, a non-empty string. An app with one user passes a constant. See [Switching users](#switching-users). |
-| `schema` | `{ tableName: drizzleTable }` | Synced tables. Opening creates them and adds new columns. [Schema](limits.md#schema) lists what a table can declare. A table that already holds rows when first declared, such as one moved from `localOnly`, is wiped and downloaded: see [Tables entering and leaving sync](limits.md#tables-entering-and-leaving-sync). |
+| `schema` | `{ tableName: drizzleTable }` | Synced tables. Opening creates them and adds new columns. [Schema](limits.md#schema) lists what a table can declare. A table that already holds rows when first declared, such as one moved from `localOnly`, is wiped and downloaded: see [Tables entering and leaving sync](edge-cases.md#tables-entering-and-leaving-sync). |
 | `url` | `string` | Address of the private space's sync route: `https://`, without query parameters or `#`. The device connects to it and downloads from it. |
 | `token` | `() => Promise<string>` | Returns the user's token. See [Tokens](#tokens). |
 
@@ -50,10 +50,10 @@ It returns a [`Syncline`](#syncline) at once and opens the database in the backg
 
 | Option | Type | Description |
 |---|---|---|
-| `localOnly` | `{ tableName: drizzleTable }` | Tables kept on this device and never synced. Moving a table into or out of this list can wipe its rows: see [Tables entering and leaving sync](limits.md#tables-entering-and-leaving-sync). |
+| `localOnly` | `{ tableName: drizzleTable }` | Tables kept on this device and never synced. Moving a table into or out of this list can wipe its rows: see [Tables entering and leaving sync](edge-cases.md#tables-entering-and-leaving-sync). |
 | `validation` | `Map<drizzleTable, StandardSchema>` | A schema per table, checked on every write. It must answer synchronously: a schema that returns a Promise fails the write. |
 | `readOnly` | `drizzleTable[]` | Synced tables only the cloud writes. A local write to one throws and rolls back. Each must be in `schema` and can reference only read-only tables, or `openSyncline` throws. Pass the same list in the cloud. |
-| `retired` | `string[]` | Tables and columns (`'table.column'`) removed from sync for good. Opening drops the retired columns, and the retired tables a space declared when it last opened: see [Tables entering and leaving sync](limits.md#tables-entering-and-leaving-sync). Pass the same list in the cloud. A retired name can never be declared again, in any list or for a table of your own: use a new name. See [How do I change my schema?](faq.md#how-do-i-change-my-schema) |
+| `retired` | `string[]` | Tables and columns (`'table.column'`) removed from sync for good. Opening drops the retired columns, and the retired tables a space declared when it last opened: see [Tables entering and leaving sync](edge-cases.md#tables-entering-and-leaving-sync). Pass the same list in the cloud. A retired name can never be declared again, in any list or for a table of your own: use a new name. See [How do I change my schema?](faq.md#how-do-i-change-my-schema) |
 | `discardPending` | `boolean` | Drops the previous user's pending writes when `userID` changes. See [Switching users](#switching-users). |
 | `allowCleartext` | `boolean` | Accepts `http://` URLs for the private space and shared spaces. Tokens and rows travel unencrypted: use it only for local development, such as against `wrangler dev`. |
 | `checksumRowsPerDay` | `number` | Rows the daily [data check](limits.md#data-checks) may verify, default 1,000,000. The cloud reads them, which is billed. |
@@ -85,7 +85,7 @@ Each user has one private space: the `space` your cloud's `verify` returns for t
 
 Syncline calls `token` before each connection and, while connected, before each chunk it downloads. Cache the token if getting one is slow.
 
-- **Return a fresh token near expiration.** A device reconnects and calls `token` again between 1 and 4 minutes before its token expires. A token returned with 4 minutes or less left is [not renewed early](edge-cases.md#a-token-with-4-minutes-or-less-left-is-not-renewed-early).
+- **Return a fresh token near expiration.** A device reconnects and calls `token` again between 1 and 4 minutes before its token expires. A token returned with 4 minutes or less left is [not renewed early](edge-cases.md#a-token-close-to-expiry-is-not-renewed-early).
 - **A failure is retried.** If `token` throws, resolves to `undefined` or `null`, or takes more than 30 seconds, `downloadError` is set and the device retries with backoff.
 - **On sign-out, call `close()`.** Don't throw from `token`: the device would keep retrying.
 
@@ -193,7 +193,7 @@ It returns a `SharedSpace` with its own `name`, `waitForReady`, `status`, `onSta
 - **Its `waitForReady()` rejects** when the declaration is refused (a table name another space uses, or a retired name), the database failed to open, or the `url` is invalid.
 - **Its tables are created in the background.** If that fails, such as after a changed column type, `waitForReady()` still resolves. The failure shows in the space's `downloadError` while it retries.
 - **Each space reconnects on its own.** `syncline.reconnect()` reconnects only the private space. See [When permissions change](../guides/shared-spaces.md#when-permissions-change).
-- **Rarely met:** a user switch clears the rows [even when the space then fails to open](edge-cases.md#switching-users-clears-a-shared-space-even-when-it-then-fails-to-open), and tables that enter or leave a space are [wiped](limits.md#tables-entering-and-leaving-sync).
+- **Rarely met:** a user switch clears the rows [even when the space then fails to open](edge-cases.md#switching-users-clears-a-shared-space-even-when-it-then-fails-to-open), and tables that enter or leave a space are [wiped](edge-cases.md#tables-entering-and-leaving-sync).
 
 ### `SyncStatus`
 
@@ -389,7 +389,7 @@ Timers of your own. `schedule(name, at)` makes the object call `scheduled(name)`
 - **Names** must not start with `syncline:` and must be well-formed text, without lone surrogates.
 - **`scheduled(name)` can run more than once** for one `schedule`: if the object is reset during a run, it runs again. Make it safe to repeat.
 - **An error it throws is reported, not retried.** See [Errors in your cloud code](errors.md#errors-in-your-cloud-code).
-- **A task that resets the object delays it.** See Scheduled tasks under [Things to know](limits.md#things-to-know).
+- **A task that resets the object delays it.** See [A task that keeps resetting the object pauses for a day](edge-cases.md#a-task-that-keeps-resetting-the-object-pauses-for-a-day).
 
 ### `forward(request, namespace, verify)`
 

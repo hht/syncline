@@ -9,8 +9,8 @@
 pub const BASE_DELAY: f64 = 1000.0;
 pub const MAX_DELAY: f64 = 30_000.0;
 /// Proactively reconnects at least this long before token expiry, with random jitter up to `RENEW_SPREAD`
-const RENEW_BEFORE: f64 = 60_000.0;
-const RENEW_SPREAD: f64 = 180_000.0;
+pub const RENEW_BEFORE: f64 = 60_000.0;
+pub const RENEW_SPREAD: f64 = 180_000.0;
 
 /// Random float in [0, 1) provided by caller: mobile uses Rust RNG, wasm uses JS `Math.random`, tests use stub
 pub type Random = Box<dyn FnMut() -> f64>;

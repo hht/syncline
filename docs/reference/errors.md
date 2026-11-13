@@ -84,7 +84,7 @@ The app is ahead of the cloud. Sync retries with backoff, and pending writes are
 
 - The app declares a table or column the cloud does not have, or declares differently, such as with another type or key. Deploy the cloud with it.
 - The cloud runs an older Syncline release than the app. Deploy the cloud with the app's release.
-- The cloud dropped a table or column without retiring it, so the wait never ends. List it in `retired` on both sides. For a rollback of both sides, see [Edge cases](limits.md#devices).
+- The cloud dropped a table or column without retiring it, so the wait never ends. List it in `retired` on both sides. For a rollback of both sides, see [Rolling back both sides after a column was added stops syncing](edge-cases.md#rolling-back-both-sides-after-a-column-was-added-stops-syncing).
 
 ### `uploadError` shows code 1007
 
@@ -121,7 +121,7 @@ In a method of your `SynclineSpace`:
 - `mutate()` throws and rolls back when the write breaks a rule, such as a [limit](limits.md#size) or `ValidationError`.
 - `forward` and `forwardShared` throw when `verify` returns a value they cannot use, such as an `expiresAt` that is not a finite number or a bucket that breaks your rules. The device's request fails: `downloadError` shows it and the device retries with backoff.
 - An error thrown by your `scheduled(name)` goes to `reportError`, and the task is not run again. Call `schedule` inside it to retry.
-- A task of yours that keeps resetting the object pauses, and the failure goes to `reportError` (see Scheduled tasks in [Things to know](limits.md#things-to-know)).
+- A task of yours that keeps resetting the object pauses, and the failure goes to `reportError` (see [A task that keeps resetting the object pauses for a day](edge-cases.md#a-task-that-keeps-resetting-the-object-pauses-for-a-day)).
 
 ### Events
 

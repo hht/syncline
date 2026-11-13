@@ -65,6 +65,9 @@ type Limits = Record<
   | 'pushMax'
   | 'baseDelay'
   | 'maxDelay'
+  | 'renewBefore'
+  | 'renewSpread'
+  | 'safeInteger'
   | 'rowsPerDay'
   | 'interval',
   number

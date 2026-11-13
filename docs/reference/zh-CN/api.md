@@ -43,7 +43,7 @@ iOS、Android 和 Web 共用这个入口和它的选项。在 iOS 和 Android �
 |---|---|---|
 | `name` | `string` | 数据库名。文件是 `<name>.db`。每个应用用一个数据库。 |
 | `userID` | `string` | 已登录用户的 ID，非空字符串。只有一个用户的应用传一个常量。见[切换用户](#切换用户)。 |
-| `schema` | `{ tableName: drizzleTable }` | 同步表。打开时创建这些表并添加新列。[表结构](limits.md#表结构)列出表能声明什么。首次声明时已有数据的表，比如从 `localOnly` 移过来的表，会被清空并重新下载：见[表进出同步](limits.md#表进出同步)。 |
+| `schema` | `{ tableName: drizzleTable }` | 同步表。打开时创建这些表并添加新列。[表结构](limits.md#表结构)列出表能声明什么。首次声明时已有数据的表，比如从 `localOnly` 移过来的表，会被清空并重新下载：见[表进出同步](edge-cases.md#表进出同步)。 |
 | `url` | `string` | 私有空间同步路由的地址：`https://`，不带查询参数或 `#`。设备连接它，也从它下载。 |
 | `token` | `() => Promise<string>` | 返回用户的 token。见 [Token](#token)。 |
 
@@ -52,10 +52,10 @@ iOS、Android 和 Web 共用这个入口和它的选项。在 iOS 和 Android �
 
 | 选项 | 类型 | 说明 |
 |---|---|---|
-| `localOnly` | `{ tableName: drizzleTable }` | 只保存在这台设备上、从不同步的表。把表移入或移出这个列表可能清空它的行：见[表进出同步](limits.md#表进出同步)。 |
+| `localOnly` | `{ tableName: drizzleTable }` | 只保存在这台设备上、从不同步的表。把表移入或移出这个列表可能清空它的行：见[表进出同步](edge-cases.md#表进出同步)。 |
 | `validation` | `Map<drizzleTable, StandardSchema>` | 每张表一个 schema，每次写入都会检查。它必须同步给出结果：返回 Promise 的 schema 会让写入失败。 |
 | `readOnly` | `drizzleTable[]` | 只有云端写入的同步表。本地写入这些表会抛错并回滚。每张都必须在 `schema` 中，而且只能引用只读表，否则 `openSyncline` 抛错。在云端传同一个列表。 |
-| `retired` | `string[]` | 永久移出同步的表和列（`'table.column'`）。打开时删除已退役的列，以及某个空间上次打开时声明过的已退役的表：见[表进出同步](limits.md#表进出同步)。在云端传同一个列表。已退役的名字永远不能再声明，无论在哪个列表里，还是用于你自己的表：请换个新名字。见[怎么修改表结构？](faq.md#怎么修改表结构) |
+| `retired` | `string[]` | 永久移出同步的表和列（`'table.column'`）。打开时删除已退役的列，以及某个空间上次打开时声明过的已退役的表：见[表进出同步](edge-cases.md#表进出同步)。在云端传同一个列表。已退役的名字永远不能再声明，无论在哪个列表里，还是用于你自己的表：请换个新名字。见[怎么修改表结构？](faq.md#怎么修改表结构) |
 | `discardPending` | `boolean` | `userID` 改变时丢弃上一个用户待上传的写入。见[切换用户](#切换用户)。 |
 | `allowCleartext` | `boolean` | 私有空间和共享空间接受 `http://` 地址。token 和行以明文传输：只在本地开发时使用，比如连接 `wrangler dev`。 |
 | `checksumRowsPerDay` | `number` | 每日[数据校验](limits.md#数据校验)最多校验的行数，默认 1,000,000。云端会读取这些行，读取计费。 |
@@ -87,7 +87,7 @@ iOS、Android 和 Web 共用这个入口和它的选项。在 iOS 和 Android �
 
 Syncline 在每次连接前调用 `token`，连接期间每下载一块数据之前也会调用。如果获取 token 很慢，请缓存它。
 
-- **临近过期时返回新的 token。** 设备会在 token 过期前 1 到 4 分钟之间重新连接并再次调用 `token`。返回时剩余 4 分钟以内的 token [不会提前续期](edge-cases.md#剩余-4-分钟以内的-token-不会提前续期)。
+- **临近过期时返回新的 token。** 设备会在 token 过期前 1 到 4 分钟之间重新连接并再次调用 `token`。返回时剩余 4 分钟以内的 token [不会提前续期](edge-cases.md#快过期的-token-不会提前续期)。
 - **失败会重试。** 如果 `token` 抛错、解析为 `undefined` 或 `null`，或者超过 30 秒，就会设置 `downloadError`，设备按退避重试。
 - **退出登录时调用 `close()`。** 不要从 `token` 抛错：设备会一直重试。
 
@@ -195,7 +195,7 @@ Syncline 在每次连接前调用 `token`，连接期间每下载一块数据之
 - **它的 `waitForReady()` 被拒绝**：声明被拒绝（表名已被另一个空间使用，或用了已退役的名字）、数据库打开失败，或 `url` 无效时。
 - **它的表在后台创建。** 如果创建失败，比如某列类型被改了，`waitForReady()` 仍会解析。失败显示在该空间的 `downloadError` 中，同时它会重试。
 - **每个空间各自重新连接。** `syncline.reconnect()` 只重新连接私有空间。见[权限变化时](../../guides/zh-CN/shared-spaces.md#权限变化时)。
-- **很少遇到：** 切换用户会清除这些行，[即使空间随后打开失败](edge-cases.md#切换用户会清空共享空间即使它随后打开失败)；进入或离开空间的表会被[清空](limits.md#表进出同步)。
+- **很少遇到：** 切换用户会清除这些行，[即使空间随后打开失败](edge-cases.md#切换用户会清空共享空间即使它随后打开失败)；进入或离开空间的表会被[清空](edge-cases.md#表进出同步)。
 
 ### `SyncStatus`
 
@@ -391,7 +391,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 - **名字**不能以 `syncline:` 开头，并且必须是格式正确的文本，不含孤立代理项。
 - **一次 `schedule` 可能让 `scheduled(name)` 运行不止一次**：如果对象在运行期间被重置，它会再运行一次。让它可以安全地重复执行。
 - **它抛出的错误会被报告，不会重试。** 见[云端代码中的错误](errors.md#云端代码中的错误)。
-- **重置对象的任务会推迟它。** 见[需要知道的事](limits.md#需要知道的事)中的定时任务。
+- **重置对象的任务会推迟它。** 见[反复导致对象重置的任务会暂停一天](edge-cases.md#反复导致对象重置的任务会暂停一天)。
 
 ### `forward(request, namespace, verify)`
 

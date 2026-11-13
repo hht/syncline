@@ -1,9 +1,10 @@
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, numeric, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
 import { keyBytes } from '../../src/protocol/limits.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
+import { defineTables } from '../../src/tables/table-definitions.ts';
 import { ValidationError } from '../../src/tables/validation.ts';
 import { cabinet, contents, doc, landedRequest, project, pullAll, rules, schema, viewer } from '../support/test-cabinet.ts';
 import { cloudStorage } from '../support/test-storage.ts';
@@ -154,6 +155,25 @@ test('a server write storing NULL in a column declared not null, in a table crea
   const writing = () => space.mutate((tx) => tx.insert(memo, { id: 'm1', title: null as never }));
   expect(writing).toThrow(new ValidationError('memo', [{ path: ['title'], message: 'must not be null' }]));
   expect(storage.sql.exec('SELECT id FROM memo').toArray()).toEqual([]);
+});
+
+test('a server write of an integer beyond the safe range throws ValidationError, except one too large for SQLite in a STRICT table, which the engine refuses first', () => {
+  const counter = sqliteTable('counter', { id: text().primaryKey(), n: integer() });
+  // A cloud-only column of a type STRICT tables do not take makes the table Syncline creates not STRICT.
+  const loose = sqliteTable('counter', { id: text().primaryKey(), n: integer(), amount: numeric() });
+  const write = (cloudTable: typeof counter | typeof loose, n: number) => () => {
+    const storage = cloudStorage();
+    defineTables(storage, [cloudTable], [counter]);
+    new Space(storage, [counter]).mutate((tx) => tx.insert(counter, { id: 'c1', n }));
+  };
+  const invalid = new ValidationError('counter', [{ path: ['n'], message: 'must be an integer' }]);
+  expect(write(counter, 2 ** 53 + 2)).toThrow(invalid);
+  expect(write(loose, 1e20)).toThrow(invalid);
+  expect(write(counter, 1e20)).toThrow(
+    expect.objectContaining({
+      cause: expect.objectContaining({ message: expect.stringContaining('cannot store REAL value in INTEGER column') }),
+    }),
+  );
 });
 
 test('a server write whose primary key serializes over keyBytes throws ValidationError naming its size, as the device does, and stores nothing', () => {

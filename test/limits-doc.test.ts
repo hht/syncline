@@ -30,9 +30,24 @@ import { cloudStorage } from './support/test-storage.ts';
 // Documentation limits for integrators match code constants: each statement is computed dynamically from constants; modifying constants without updating documentation fails. Device-side values are read from the Rust core.
 // Every number the document writes in digits stands in such a statement, or in one listed as given by no constant of this repository.
 
-const { receiveTimeout, pingAfter, pongWithin, slowestRate, baseDelay, maxDelay, maxRowBytes, rowsPerDay, interval } = rustLimits();
+const {
+  receiveTimeout,
+  pingAfter,
+  pongWithin,
+  slowestRate,
+  baseDelay,
+  maxDelay,
+  maxRowBytes,
+  rowsPerDay,
+  interval,
+  renewBefore,
+  renewSpread,
+  safeInteger,
+} = rustLimits();
 
-const limits = readFileSync(new URL('../docs/reference/limits.md', import.meta.url), 'utf8');
+const reference = (path: string) => readFileSync(new URL(`../docs/reference/${path}`, import.meta.url), 'utf8');
+// Limits states the rules; Edge cases holds the rare situations, with numbers of their own.
+const limits = `${reference('limits.md')}\n${reference('edge-cases.md')}`;
 const peers: Record<string, string> = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).peerDependencies;
 /** A number as the document writes it, with its separators. */
 const numbers = /\d+(?:[.,:/-]\d+)*/g;
@@ -130,6 +145,11 @@ const stated = [
   `on about ${thousands(valueBytes / clientEntry)} launches without ever syncing`,
   `up to about ${(writeBytes / slowestRate / 3600).toFixed(1)} hours for one ${mib(writeBytes)} write`,
   `in a bucket over ${count(bucketBytes)} bytes`,
+  `Integer columns hold values within ±${count(safeInteger)}`,
+  `between ${renewBefore / 60_000} and ${minutes(renewBefore + renewSpread)} before its token expires`,
+  `only when the token had more than ${minutes(renewBefore + renewSpread)} left`,
+  `closes the connection with code ${expired}, which shows in \`downloadError\``,
+  `return tokens with more than ${minutes(renewBefore + renewSpread)} left`,
   // The schedule's reset limit and a shared space's hourly wake and retry delay sit in modules typed for the Workers runtime, out of
   // this test's reach: the tests of those modules hold the three numbers.
   'pauses for a day after 3 tries in a row',
@@ -151,13 +171,14 @@ const outside = [
   'any point in the last 30 days',
   'a compatibility date of 2026-04-07 or later',
   'object storage such as R2',
+  'such as `text({ length: 40 })`',
 ];
 
-test.each(stated)('limits.md states: %s', (sentence) => {
+test.each(stated)('limits.md or edge-cases.md states: %s', (sentence) => {
   expect(limits).toContain(sentence);
 });
 
-test('every number limits.md writes in digits stands in a statement tied to the code, or in one listed as given by no constant', () => {
+test('every number limits.md and edge-cases.md write in digits stands in a statement tied to the code, or in one listed as given by no constant', () => {
   let rest = limits;
   for (const sentence of [...stated, ...outside]) {
     expect(rest).toContain(sentence);
@@ -171,10 +192,9 @@ test('checksum verification waits a full day after completing a round', () => {
   expect(limits).toContain('a full day after the previous round completed');
 });
 
-test('the Chinese translation states the same numbers as the English limits', () => {
-  const translation = readFileSync(new URL('../docs/reference/zh-CN/limits.md', import.meta.url), 'utf8');
+test.each(['limits.md', 'edge-cases.md'])('the Chinese translation of %s states the same numbers as the English', (path) => {
   const sorted = (text: string) => (text.match(numbers) ?? []).sort();
-  expect(sorted(translation)).toEqual(sorted(limits));
+  expect(sorted(reference(`zh-CN/${path}`))).toEqual(sorted(reference(path)));
 });
 
 test('Rust device-side limits match cloud limits', () => {
