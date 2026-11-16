@@ -389,6 +389,7 @@ Timers of your own. `schedule(name, at)` makes the object call `scheduled(name)`
 - **Names** must not start with `syncline:` and must be well-formed text, without lone surrogates.
 - **`scheduled(name)` can run more than once** for one `schedule`: if the object is reset during a run, it runs again. Make it safe to repeat.
 - **An error it throws is reported, not retried.** See [Errors in your cloud code](errors.md#errors-in-your-cloud-code).
+- **Give its requests to other services a timeout.** Timed work that falls due while it runs waits until it returns, such as exports, background steps, and retried live updates of a shared space.
 - **A task that resets the object delays it.** See [A task that keeps resetting the object pauses for a day](edge-cases.md#a-task-that-keeps-resetting-the-object-pauses-for-a-day).
 
 ### `forward(request, namespace, verify)`
@@ -405,6 +406,7 @@ Answers sync requests for private spaces in your Worker's `fetch`. It takes the 
 
 - **`namespace`** is the Durable Object namespace of your `SynclineSpace` class.
 - **`verify(token)`** returns `{ space, expiresAt }` for a token you accept, with `expiresAt` in epoch milliseconds, or `undefined` to refuse it. A refused token is answered with 401.
+- **Refuse a token by returning `undefined`, not by throwing.** Catch what your token library throws for an expired or invalid token. Unless your `fetch` catches it, an error thrown from `verify` is answered with 500 instead of 401: the device's `downloadError` shows a 500, or on the web only a network error, and your Worker logs an uncaught error on every attempt.
 - **It throws when `expiresAt` is not a finite number**: a mistake in `verify`.
 - **Web apps on any origin can sync through it.** It answers the browser's CORS preflight and lets any origin read its responses.
 
@@ -510,7 +512,7 @@ Answers sync requests for a shared space in your Worker's `fetch`.
 ```
 
 - **`route`** is `{ entry, broadcast, space, definition }`: your entrypoint, the broadcast namespace, the name of the shared space, and its `SharedDefinition`.
-- **`verify(token)`** returns `{ buckets, expiresAt }` for a token you accept, or `undefined` to refuse it. A refused token is answered with 401.
+- **`verify(token)`** returns `{ buckets, expiresAt }` for a token you accept, or `undefined` to refuse it. A refused token is answered with 401. As with `forward`, refuse by returning `undefined`, not by throwing.
 - **`entry` is `ctx.exports.<YourEntry>` itself.** Syncline calls it with the subscription as props, and an entry reached without props throws.
 - **`buckets`** are the buckets the user reads: `[ruleName, ...params]`, with a string for a text column and a number for an integer column.
 - **It throws for a mistake in `verify`**: a bucket that breaks the rules, a bucket over 256 bytes, a subscription over 8,192 bytes encoded as JSON, or an `expiresAt` that is not a finite number.
