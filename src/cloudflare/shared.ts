@@ -7,7 +7,7 @@ import { nameBytes } from '../cloud/limits.ts';
 import type { Round } from '../cloud/shared.ts';
 import { Space } from '../cloud/space.ts';
 import { withTimeout } from '../cloud/timeout.ts';
-import type { Transaction } from '../cloud/transaction.ts';
+import type { ServerWrite } from '../cloud/transaction.ts';
 import { type Chunk, type Poke, ping, pong, type Reset, socketLimit, subprotocol } from '../protocol/messages.ts';
 import { type PullRequest, parsePullRequest } from '../protocol/pull-url.ts';
 import { utf8Bytes } from '../protocol/size.ts';
@@ -170,12 +170,13 @@ export class SynclineSharedSpace<Env = unknown> extends ScheduledObject<Env> {
   /**
    * Executes a server write: called from integrator methods, commits synchronously, and dispatches the round in parallel to all broadcast shards,
    * awaiting delivery of a round covering this commit; rolls back and rethrows on execution error.
+   * `write` must run synchronously: one returning a Promise (an async function) throws and rolls back, as does any `tx` call after `write` returns.
    * Throwing does not guarantee the write was not committed (for example, if the actor is reset after committing while delivering notices), so retries must be idempotent.
    * Schedules a retry only when a shard did not take its round. A delivery cut by a reset of the object (deploy or timeout) resumes from the
    * persisted version when the object next starts, on any request or at the hourly wakeup at the latest: the commit and the persisted version
    * already record that it is owed, and arming an alarm before every delivery would bill each write 4 more rows.
    */
-  protected readonly mutate = async (write: (tx: Transaction) => void) => {
+  protected readonly mutate = async <R>(write: ServerWrite<R>) => {
     // Clients connect to broadcast shards; fanout rounds are delivered separately, so mutate commits directly.
     const base = this.#space.head();
     this.#space.mutate(write, 0);

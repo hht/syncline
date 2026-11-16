@@ -4,7 +4,7 @@ import { pullBytes } from '../cloud/limits.ts';
 import type { SpaceChecksum } from '../cloud/pulls.ts';
 import { type Quota, Server } from '../cloud/server.ts';
 import { Space } from '../cloud/space.ts';
-import type { Transaction } from '../cloud/transaction.ts';
+import type { ServerWrite } from '../cloud/transaction.ts';
 import { type Change, ping, pong, subprotocol, unsupportedMessage } from '../protocol/messages.ts';
 import { type PullRequest, parsePullBody, parsePullRequest } from '../protocol/pull-url.ts';
 import { type CloudStorage, queryOf } from '../sqlite/storage.ts';
@@ -169,9 +169,10 @@ export class SpaceObject<Env = unknown> extends ScheduledObject<Env> {
    * Bound each write (e.g. batch imports to a few thousand rows): platform storage operations have a timeout that resets the actor
    * and returns an error to the caller even if the write already committed, so retries must be idempotent (`tx.insert` only inserts missing rows).
    * Cannot be called over RPC because functions become async stubs across RPC boundaries while `write` must run synchronously.
+   * A `write` returning a Promise (an async function) throws and rolls back, as does any `tx` call after `write` returns.
    * @see https://developers.cloudflare.com/durable-objects/observability/troubleshooting/ (storage operation exceeded timeout)
    */
-  protected readonly mutate = (write: (tx: Transaction) => void) => this.#afterWrite(() => this.#server.mutate(write));
+  protected readonly mutate = <R>(write: ServerWrite<R>) => this.#afterWrite(() => this.#server.mutate(write));
 
   /** Returns held writes (awaiting repair): unexecutable client pushes with their raw changes, reason, commit version, and timestamp; returns at most `limit` items after version `after`. */
   protected readonly held = (batch?: { limit?: number; after?: number }) => this.#space.held(batch);

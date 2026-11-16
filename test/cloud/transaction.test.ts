@@ -2,6 +2,7 @@ import { integer, numeric, primaryKey, sqliteTable, text } from 'drizzle-orm/sql
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
 import { Space } from '../../src/cloud/space.ts';
+import type { Transaction } from '../../src/cloud/transaction.ts';
 import { keyBytes } from '../../src/protocol/limits.ts';
 import type { Chunk } from '../../src/protocol/messages.ts';
 import { defineTables } from '../../src/tables/table-definitions.ts';
@@ -203,4 +204,42 @@ test('a shared space server write that catches a failed statement and goes on wr
     { op: 'put', table: 'project', key: { id: 'p2' }, row: { id: 'p2', status: 'published' } },
     { op: 'del', table: 'project', key: { id: 'p1' } },
   ]);
+});
+
+test.for([
+  [
+    'before its first write',
+    async (tx: Transaction) => {
+      await tx.select().from(note);
+      tx.insert(note, { id: 'n1', body: 'b' });
+    },
+  ],
+  [
+    'between its writes',
+    async (tx: Transaction) => {
+      tx.insert(note, { id: 'n1', body: 'b' });
+      await tx.select().from(note);
+      tx.insert(note, { id: 'n2', body: 'b' });
+    },
+  ],
+] as const)('an async server write awaiting %s throws and stores nothing, and its writes after the await throw', async ([, write]) => {
+  const storage = cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT)');
+  const space = new Space(storage, [note]);
+  const base = space.head();
+  let pending: Promise<void> = Promise.resolve();
+  const thrown = (() => {
+    try {
+      space.mutate((tx) => (pending = write(tx)));
+    } catch (error) {
+      return error;
+    }
+  })();
+  const late = await pending.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(storage.sql.exec('SELECT id FROM note').toArray()).toEqual([]);
+  expect(space.head()).toEqual(base);
+  expect(thrown).toEqual(new Error('A server write returned a Promise: write must run synchronously, so await before calling mutate'));
+  expect(late).toEqual(new Error('Transaction is closed: tx was used after its server write returned'));
 });

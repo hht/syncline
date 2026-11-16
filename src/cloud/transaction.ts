@@ -27,6 +27,12 @@ export type Transaction = {
 };
 
 /**
+ * The `write` a server write (`mutate`) runs: synchronous, so TypeScript reports one returning a Promise (an async function),
+ * whose writes after its first await would run after the transaction ends.
+ */
+export type ServerWrite<R> = (tx: Transaction) => R extends PromiseLike<unknown> ? never : R;
+
+/**
  * Throws if a column value about to be stored would not read back as written: SQLite stores a lone surrogate as-is and reads it back
  * replaced, so the row would never match itself again, and stores NaN (which Drizzle makes of an invalid Date) as NULL.
  * Checks the values Drizzle binds; SQL expressions are not inspected.
@@ -70,6 +76,29 @@ function changes(table: SQLiteTable, row: Record<string, unknown>) {
 }
 
 /**
+ * Returns tx with every method throwing once close is called: a call after the server write returned (an async write past its await)
+ * would run outside its commit, unrecorded and unvalidated.
+ */
+function closable(tx: Transaction) {
+  let closed = false;
+  const guarded = Object.fromEntries(
+    Object.entries(tx as unknown as Record<string, (...args: never[]) => unknown>).map(([name, method]) => [
+      name,
+      (...args: never[]) => {
+        if (closed) throw new Error('Transaction is closed: tx was used after its server write returned');
+        return method(...args);
+      },
+    ]),
+  ) as Transaction;
+  return {
+    tx: guarded,
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+/**
  * Reports touched table names and primary keys to changed on insert and update (for the cloud to record modified rows).
  *
  * Reported keys use the values returned from RETURNING, mapped to their storage column types (for example, string "5" to integer 5),
@@ -77,6 +106,7 @@ function changes(table: SQLiteTable, row: Record<string, unknown>) {
  * Deletions are batched in pending until the next read/write or until flush is called, then passed to deleting as an array per table
  * (for cascading deletes and commit recording).
  * When deleting handles the batch, it returns true; otherwise rows are deleted individually here.
+ * After close is called, every tx method throws.
  */
 export function transaction(
   db: Database,
@@ -90,7 +120,7 @@ export function transaction(
     /** Emits the existing stored primary key before an insert or update if the row already exists (used by shared spaces to record prior bucket membership). */
     before?: ((table: string, key: Key) => void) | undefined;
   },
-): { tx: Transaction; flush: () => void } {
+): { tx: Transaction; flush: () => void; close: () => void } {
   /** Passes the stored primary key of an existing row to before. */
   const prior = (table: SQLiteTable, { name, stored, where }: ReturnType<typeof locate>) => {
     if (!before) return;
@@ -149,5 +179,5 @@ export function transaction(
       else pending.set(table, [fields]);
     },
   } as Transaction;
-  return { tx, flush };
+  return { ...closable(tx), flush };
 }
