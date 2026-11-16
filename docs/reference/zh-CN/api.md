@@ -391,6 +391,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 - **名字**不能以 `syncline:` 开头，并且必须是格式正确的文本，不含孤立代理项。
 - **一次 `schedule` 可能让 `scheduled(name)` 运行不止一次**：如果对象在运行期间被重置，它会再运行一次。让它可以安全地重复执行。
 - **它抛出的错误会被报告，不会重试。** 见[云端代码中的错误](errors.md#云端代码中的错误)。
+- **给它对其他服务的请求设置超时。** 它运行期间到期的定时工作要等它返回，比如导出、后台步骤，以及共享空间重试的实时更新。
 - **重置对象的任务会推迟它。** 见[反复导致对象重置的任务会暂停一天](edge-cases.md#反复导致对象重置的任务会暂停一天)。
 
 ### `forward(request, namespace, verify)`
@@ -407,6 +408,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 
 - **`namespace`** 是你的 `SynclineSpace` 类的 Durable Object 命名空间。
 - **`verify(token)`** 对你接受的 token 返回 `{ space, expiresAt }`，`expiresAt` 为 epoch 毫秒；返回 `undefined` 表示拒绝。被拒绝的 token 得到 401 应答。
+- **拒绝 token 要返回 `undefined`，不要抛错。** 捕获你的 token 库对过期或无效 token 抛出的错误。除非你的 `fetch` 捕获了它，`verify` 抛出的错误得到的是 500 而不是 401 应答：设备的 `downloadError` 显示 500，Web 上只显示网络错误，你的 Worker 每次尝试都会记录一个未捕获的错误。
 - **`expiresAt` 不是有限数时它会抛错**：这是 `verify` 的错误。
 - **任何来源的 Web 应用都能通过它同步。** 它应答浏览器的 CORS 预检请求，并允许任何来源读取它的响应。
 
@@ -512,7 +514,7 @@ export class SharedEntry extends SynclineSharedEntry<Env> {
 ```
 
 - **`route`** 是 `{ entry, broadcast, space, definition }`：你的入口、广播命名空间、共享空间的名字，以及它的 `SharedDefinition`。
-- **`verify(token)`** 对你接受的 token 返回 `{ buckets, expiresAt }`，返回 `undefined` 表示拒绝。被拒绝的 token 得到 401 应答。
+- **`verify(token)`** 对你接受的 token 返回 `{ buckets, expiresAt }`，返回 `undefined` 表示拒绝。被拒绝的 token 得到 401 应答。与 `forward` 相同，拒绝要返回 `undefined`，不要抛错。
 - **`entry` 就是 `ctx.exports.<YourEntry>` 本身。** Syncline 以订阅作为 props 调用它，不带 props 访问入口会抛错。
 - **`buckets`** 是用户读取的桶：`[ruleName, ...params]`，文本列用字符串，整数列用数字。
 - **`verify` 出错时它会抛错**：桶违反规则、桶超过 256 字节、订阅按 JSON 编码后超过 8,192 字节，或 `expiresAt` 不是有限数。

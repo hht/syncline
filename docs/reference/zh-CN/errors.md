@@ -133,7 +133,7 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 - schema 违反[表结构](limits.md#表结构)中写明由云端检查的规则时，`SynclineSpace` 和 `SynclineSharedSpace` 抛错。
 - 访问 `SynclineSharedSpace` 时没有用名字，或名字对它的分片来说太长，它也会抛错（见[共享空间](limits.md#共享空间)）。
 - 写入违反规则时，`mutate()` 抛错并回滚，比如超出[限制](limits.md#大小)或 `ValidationError`。
-- `verify` 返回它们无法使用的值时，`forward` 和 `forwardShared` 抛错，比如 `expiresAt` 不是有限数，或某个桶违反了你的规则。设备的请求会失败：`downloadError` 显示它，设备按退避间隔重试。
+- `verify` 返回它们无法使用的值时，`forward` 和 `forwardShared` 抛错，比如 `expiresAt` 不是有限数，或某个桶违反了你的规则。设备的请求以 HTTP 500 失败，`downloadError` 会显示它（Web 上只显示为网络错误），设备按退避间隔重试。
 - 你的 `scheduled(name)` 抛出的错误会交给 `reportError`，这个任务不会再执行。要重试，在其中调用 `schedule`。
 - 你的任务反复导致对象重置时会被暂停，失败交给 `reportError`（见[反复导致对象重置的任务会暂停一天](edge-cases.md#反复导致对象重置的任务会暂停一天)）。
 

@@ -131,7 +131,7 @@ In a method of your `SynclineSpace`:
 - `SynclineSpace` and `SynclineSharedSpace` throw when the schema breaks a rule that [Schema](limits.md#schema) says the cloud checks.
 - `SynclineSharedSpace` also throws when reached without a name, or with a name too long for its shards (see [Shared spaces](limits.md#shared-spaces)).
 - `mutate()` throws and rolls back when the write breaks a rule, such as a [limit](limits.md#size) or `ValidationError`.
-- `forward` and `forwardShared` throw when `verify` returns a value they cannot use, such as an `expiresAt` that is not a finite number or a bucket that breaks your rules. The device's request fails: `downloadError` shows it and the device retries with backoff.
+- `forward` and `forwardShared` throw when `verify` returns a value they cannot use, such as an `expiresAt` that is not a finite number or a bucket that breaks your rules. The device's request fails with HTTP 500, which `downloadError` shows (on the web, only as a network error), and the device retries with backoff.
 - An error thrown by your `scheduled(name)` goes to `reportError`, and the task is not run again. Call `schedule` inside it to retry.
 - A task of yours that keeps resetting the object pauses, and the failure goes to `reportError` (see [A task that keeps resetting the object pauses for a day](edge-cases.md#a-task-that-keeps-resetting-the-object-pauses-for-a-day)).
 

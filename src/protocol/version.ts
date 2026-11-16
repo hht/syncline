@@ -5,6 +5,9 @@
 
 /**
  * Wire protocol version incremented only on breaking wire changes.
+ * A change is breaking when a cloud of the current version refuses or misreads it. Such a cloud answers an unknown pull parameter or pull
+ * body field with 400 (parsePullRequest, parsePullBody), failing every request carrying it until the cloud is upgraded, and ignores
+ * unknown push fields, dropping whatever a new one means.
  * Device passes `v=version` in pull and connection URLs, isolating edge cache keys across protocol revisions.
  * Version mismatches return HTTP 409 or close WebSockets with code 4002.
  * Newer cloud prompts app upgrades; older cloud triggers retry with backoff.
