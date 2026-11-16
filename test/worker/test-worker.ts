@@ -8,6 +8,7 @@ import {
   SynclineSharedEntry,
   SynclineSharedSpace,
   SynclineSpace,
+  type Transaction,
 } from 'syncline/cloudflare';
 
 // Test Worker: private space with note and tag tables (and read-only plan) forwarded via {@link forward}; shared cabinet space (/cabinet)
@@ -144,6 +145,26 @@ export class TestSpace extends SynclineSpace<Env> {
       if (fail) throw new Error('Import failed');
     });
   }
+
+  /** Server write passed as an async function inserting notes after awaiting a read; returns what it threw (see {@link outcome}). */
+  importNotesAfterRead(notes: { id: string; text: string }[]) {
+    return outcome(
+      async (tx) => {
+        await tx.select().from(note);
+        for (const row of notes) tx.insert(note, row);
+      },
+      // @ts-expect-error An async write returns a Promise, which TypeScript reports.
+      (write) => this.mutate(write),
+    );
+  }
+}
+
+/** Passes an async server write to mutate, returning the messages mutate threw and the write threw after its await (undefined when none). */
+async function outcome(write: (tx: Transaction) => Promise<void>, mutate: (write: (tx: Transaction) => Promise<void>) => unknown) {
+  let late: Promise<void> = Promise.resolve();
+  const message = (error: unknown) => (error as Error).message;
+  const refused = await (async () => mutate((tx) => (late = write(tx))))().then(() => undefined, message);
+  return { refused, late: await late.then(() => undefined, message) };
 }
 
 const project = sqliteTable('project', { id: text().primaryKey(), status: text().notNull() });
@@ -177,6 +198,18 @@ export class TestCabinet extends SynclineSharedSpace<Env> {
   /** Server write: records why a project was removed, in a column devices never receive. */
   remove(id: string, reason: string) {
     return this.mutate((tx) => tx.update(cloudProject, { id, removed: reason }));
+  }
+
+  /** Server write passed as an async function upserting a project after awaiting a read; returns what it threw (see {@link outcome}). */
+  publishAfterRead(id: string) {
+    return outcome(
+      async (tx) => {
+        await tx.select().from(project);
+        tx.upsert(project, { id, status: 'published' });
+      },
+      // @ts-expect-error An async write returns a Promise, which TypeScript reports.
+      (write) => this.mutate(write),
+    );
   }
 
   /** Server write: deletes a project (changing nothing if it is missing). */

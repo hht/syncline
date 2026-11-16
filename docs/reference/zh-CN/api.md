@@ -358,7 +358,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 
 #### `mutate(write)`
 
-一次服务端写入：在一个事务中同步运行 `write(tx)`。
+一次服务端写入：在一个事务中同步运行 `write(tx)`。`write` 不能是 async 函数：TypeScript 会对返回 Promise 的 `write` 报错，运行时它也会抛错并回滚，`write` 返回之后再调用 `tx` 的方法也会抛错。
 
 ```ts
   addNote(id: string, body: string) {
@@ -467,7 +467,7 @@ export class SharedSpace extends SynclineSharedSpace<Env> {
 
 - **`broadcast`** 是一个从 `env` 返回广播命名空间的函数。
 - **`cloud`、`validation`、`onEvent` 和 `retired`** 与 `SynclineSpace` 上的相同。`rules` 中的 `where` 也可以读取只在云端的列。
-- **`mutate(write)` 是写入的唯一途径**，从你自己的方法中调用。在这里它返回一个 Promise：请 await 它。
+- **`mutate(write)` 是写入的唯一途径**，从你自己的方法中调用。在这里它返回一个 Promise：请 await 它。`write` 本身仍须同步。
 - **`schedule`、`unschedule` 和 `scheduled`** 与 `SynclineSpace` 上的相同，它的 alarm 也以同样方式管理。
 - **按名字访问对象**（`getByName` 或 `idFromName`）。它的广播分片以它的名字命名，所以不带名字的 ID（`idFromString`、`newUniqueId`）会抛错，名字长到放不下分片名时也会抛错。见[共享空间](limits.md#共享空间)。
 

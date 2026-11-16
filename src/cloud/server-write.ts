@@ -34,7 +34,7 @@ export function writeOnServer({ db, query, rows, bucketsBefore }: Context, write
     (table: string, key: Record<string, Value>, names?: string[]) => changed(table, key, bucketsBefore && firstOf(table, key, names ?? [])),
     { room: changed.room, maxRows: changed.maxRows },
   );
-  const { tx, flush } = transaction(db, {
+  const { tx, flush, close } = transaction(db, {
     before:
       bucketsBefore &&
       ((table, key) => {
@@ -52,6 +52,13 @@ export function writeOnServer({ db, query, rows, bucketsBefore }: Context, write
       return true;
     },
   });
-  write(tx);
-  flush();
+  try {
+    const result: unknown = write(tx);
+    // An async write runs past its first await after this transaction ends, so it is refused whole rather than committed in part.
+    if (result instanceof Promise)
+      throw new Error('A server write returned a Promise: write must run synchronously, so await before calling mutate');
+    flush();
+  } finally {
+    close();
+  }
 }

@@ -356,7 +356,7 @@ The Durable Object class of private spaces: one object per user. Extend it and c
 
 #### `mutate(write)`
 
-A server write: runs `write(tx)` synchronously in one transaction.
+A server write: runs `write(tx)` synchronously in one transaction. `write` must not be async: TypeScript reports one that returns a Promise, which also throws and rolls back, and any `tx` call after `write` returns throws.
 
 ```ts
   addNote(id: string, body: string) {
@@ -465,7 +465,7 @@ export class SharedSpace extends SynclineSharedSpace<Env> {
 
 - **`broadcast`** is a function returning the broadcast namespace from `env`.
 - **`cloud`, `validation`, `onEvent`, and `retired`** work as on `SynclineSpace`. A `where` in `rules` can read cloud-only columns too.
-- **`mutate(write)` is the only way to write**, from your own methods. Here it returns a Promise: await it.
+- **`mutate(write)` is the only way to write**, from your own methods. Here it returns a Promise: await it. `write` itself stays synchronous.
 - **`schedule`, `unschedule`, and `scheduled`** work as on `SynclineSpace`, and its alarm is managed the same way.
 - **Reach the object by name** (`getByName` or `idFromName`). Its broadcast shards are named after it, so an ID without a name (`idFromString`, `newUniqueId`) throws, and so does a name too long for its shard names. See [Shared spaces](limits.md#shared-spaces).
 
