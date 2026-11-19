@@ -1,4 +1,4 @@
-import { expect, test, vi } from 'vitest';
+import { expect, onTestFinished, test, vi } from 'vitest';
 
 import type { HostMessage } from '../../src/expo/worker.ts';
 
@@ -6,13 +6,14 @@ import type { HostMessage } from '../../src/expo/worker.ts';
 
 const removed = vi.hoisted((): string[] => []);
 const freed = vi.hoisted(() => ({ count: 0 }));
-/** What mounting OPFS throws when the Worker loads, if anything (another tab's Worker holding the files). */
-const mounting = vi.hoisted(() => ({ error: undefined as unknown }));
+/** What mounting OPFS throws, if anything (another Worker holding the files), for how many more mounts, and how many mounts ran. */
+const mounting = vi.hoisted(() => ({ error: undefined as unknown, failures: Infinity, count: 0 }));
 vi.mock('../../rust/target/web/syncline_wasm.js', () => ({
   default: async () => undefined,
   Files: {
     install: async () => {
-      if (mounting.error !== undefined) throw mounting.error;
+      mounting.count += 1;
+      if (mounting.error !== undefined && mounting.failures-- > 0) throw mounting.error;
       return {
         open: () => {
           // A call of type panic traps like a Rust panic does in WebAssembly; a trap leaves the Rust value borrowed,
@@ -141,14 +142,9 @@ test('a core panic (WebAssembly trap) marks the Worker broken, whether opening o
   expect(await call(5, { type: 'panic', id: 2 })).toEqual({ type: 'broken', error: expect.objectContaining({ message: 'unreachable' }) });
 });
 
-// Each case loads a fresh Worker, whose OPFS mount fails: every open replies with the reason. Runs last: the failing mount stays armed
-// and every load adds its error listeners to the scope.
+// Each case loads a fresh Worker, whose OPFS mount fails: every open replies with the reason. Runs after the tests using the first
+// Worker: each load replaces it and adds its error listeners to the scope.
 test.each([
-  {
-    failure: 'another tab holds the database files',
-    error: new Error('NoModificationAllowedError: Access Handles cannot be created'),
-    message: 'Local database is open in another tab: web supports only one tab at a time; close other tabs and reload',
-  },
   {
     failure: 'OPFS is unavailable',
     error: new Error('SecurityError: The operation is insecure'),
@@ -156,11 +152,50 @@ test.each([
   },
   { failure: 'mounting throws a non-Error value', error: 'storage refused', message: 'storage refused' },
 ])('a Worker whose OPFS mount fails because $failure replies to open with the reason', async ({ error, message }) => {
-  mounting.error = error;
+  Object.assign(mounting, { error, failures: Infinity });
   vi.resetModules();
   await import('../../src/expo/worker.ts');
   expect(await call(9, { type: 'open', id: 1, name: 'worker-locked', options: {} })).toEqual({
     instance: 9,
     received: [{ type: 'reply', id: 1, error: expect.objectContaining({ message }) }],
+  });
+});
+
+/** What mounting OPFS throws while another Worker holds the files. */
+const held = new Error('NoModificationAllowedError: Access Handles cannot be created');
+
+/** Loads a fresh Worker, under fake timers, whose OPFS mounts fail as held `failures` times; returns the number of messages posted before. */
+async function heldWorker(failures: number) {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  Object.assign(mounting, { error: held, failures, count: 0 });
+  vi.resetModules();
+  await import('../../src/expo/worker.ts');
+  return posted.length;
+}
+
+test("after a reload, a Worker waits for the files the previous page's Worker still holds until that Worker ends", async () => {
+  const before = await heldWorker(7);
+  scope.onmessage?.({ data: { instance: 11, call: { type: 'open', id: 1, name: 'worker-handover', options: {} } } });
+  // 8 attempts, waiting 300 ms times the attempt number after each failure: 8.4 s in all.
+  await vi.advanceTimersByTimeAsync(8399);
+  expect(posted.length).toBe(before);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(posted.slice(before)).toEqual([{ instance: 11, received: [{ type: 'reply', id: 1 }] }]);
+  expect(mounting.count).toBe(8);
+});
+
+test('a tab another tab keeps out fails to open after 8.4 s, and opens without reloading once that tab closes', async () => {
+  const before = await heldWorker(Infinity);
+  scope.onmessage?.({ data: { instance: 12, call: { type: 'open', id: 1, name: 'worker-held', options: {} } } });
+  await vi.advanceTimersByTimeAsync(8400);
+  const message = 'Local database is open in another tab: web supports only one tab at a time; close other tabs and reload';
+  expect(posted.slice(before)).toEqual([
+    { instance: 12, received: [{ type: 'reply', id: 1, error: expect.objectContaining({ message }) }] },
+  ]);
+  mounting.error = undefined;
+  expect(await call(13, { type: 'open', id: 1, name: 'worker-held', options: {} })).toEqual({
+    instance: 13,
+    received: [{ type: 'reply', id: 1 }],
   });
 });

@@ -17,7 +17,7 @@ pub(in crate::socket) enum Unconnected {
     Unreachable(String),
 }
 
-/// Maximum duration for each of TCP connect, TLS handshake, and WebSocket handshake: the core schedules a deadline for the first incoming message as soon as it requests a connection, so this timeout prevents a blocked connect thread from hanging indefinitely
+/// Maximum duration for each of TCP connect, TLS handshake, and WebSocket handshake, so none of them holds the connect thread indefinitely. Address resolution has no timeout: it blocks until the system resolver gives up, while the deadline the core schedules for the first incoming message reconnects meanwhile
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Parsed connection target: handshake request, host, port, and whether TLS is used

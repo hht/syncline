@@ -51,15 +51,24 @@ function forwardErrors() {
   });
 }
 
-/** Loads wasm and mounts OPFS; rejects if another tab (its Worker) holds the database file. */
+/**
+ * Loads wasm and mounts OPFS, waiting while another Worker holds the files as SQLite's OPFS VFS does: after a reload, the previous
+ * page's Worker holds them until its current task ends. Rejects if another tab keeps holding them.
+ * SQLite waits 300 ms times the attempt number between 6 attempts (4.5 s in all); 8 attempts wait 8.4 s, since Chromium (Edge 157)
+ * ends a busy previous Worker up to 5.2 s after the new one starts.
+ * @see https://github.com/sqlite/sqlite/blob/version-3.51.0/ext/wasm/api/sqlite3-opfs-async-proxy.js#L293-L316
+ */
 async function load() {
   await initWasm({ module_or_path: wasmUrl });
-  try {
-    return await Files.install();
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('NoModificationAllowedError'))
-      throw new Error('Local database is open in another tab: web supports only one tab at a time; close other tabs and reload');
-    throw error;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await Files.install();
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes('NoModificationAllowedError'))) throw error;
+      if (attempt === 8)
+        throw new Error('Local database is open in another tab: web supports only one tab at a time; close other tabs and reload');
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+    }
   }
 }
 
@@ -73,7 +82,13 @@ const failureOf = (error: unknown) => {
 };
 
 forwardErrors();
-const files = load();
+/** Mounted OPFS files; a failed mount is dropped so the next open or delete mounts again (the other tab may have closed since). */
+let files: Promise<Files> | undefined;
+const mounted = () =>
+  (files ??= load().catch((error: unknown) => {
+    files = undefined;
+    throw error;
+  }));
 let open: Opened | undefined;
 
 /** Closes the active database: stops sync and closes sockets, timers, and the database; the tab keeps holding the database files. */
@@ -88,7 +103,7 @@ function closeOpen() {
 /** Opens database: closes any active unclosed database first, rejecting subsequent calls to prevent dangling sync state. */
 async function openLibrary(instance: number, name: string, options: unknown) {
   closeOpen();
-  const db = (await files).open(name);
+  const db = (await mounted()).open(name);
   const host = { randomUUID: () => crypto.randomUUID(), random: Math.random };
   let instructions: string;
   try {
@@ -108,7 +123,7 @@ async function closeLibrary(instance: number, name: string, remove: boolean) {
   if (open?.instance === instance) closeOpen();
   if (!remove) return;
   if (open?.name === name) throw new Error(`Local database ${name} is still open from another session: close it before deleting`);
-  (await files).remove(name);
+  (await mounted()).remove(name);
 }
 
 async function handle(instance: number, call: HostMessage['call']) {

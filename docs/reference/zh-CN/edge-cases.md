@@ -125,6 +125,22 @@ Syncline 自己的表（`_syncline_*`）只能由 Syncline 修改。其中保存
 
 读取待上传写入数失败时，`status().pending` 保持上一次的值，直到读取成功；此时正在等待的 `sync()` 和自己读取失败的 `sync()` 都会以这个错误被拒绝。写入仍会上传。
 
+### 引擎 panic 后，先关闭数据库再重新打开
+
+Syncline 引擎 panic 属于 bug。调用会失败，`downloadError` 在 iOS 和 Android 上显示 `Syncline sync thread panicked`，在 Web 上显示 `Syncline core panicked`。已经完成的写入会保留。
+
+在 iOS 和 Android 上，打开之后才 panic 的实例仍处于打开状态：在对它调用 `close()` 之前，再次打开同名数据库会抛错，后台的 `syncOnce` 也会一直在它上面失败。在 Web 上，下一次 `openSyncline` 会启动一个新的引擎。
+
+### Android 会随应用一起备份数据库
+
+在 Android 上，数据库位于应用的 `databases` 目录，Auto Backup 默认包含这个目录。应用的备份数据超过 25 MB 时，Android 不会备份其中任何内容。
+
+要让其他数据继续备份，在备份规则的 `database` 域中排除 `<name>.db`、`<name>.db-wal` 和 `<name>.db-shm`。从备份恢复是安全的：设备会上传它保存的写入，云端每次写入只执行一次。见 [Auto Backup](https://developer.android.com/identity/data/autobackup)。
+
+### iOS 完全数据保护会让设备锁定期间无法同步
+
+在 iOS 上，数据库文件采用应用的数据保护等级。使用完全保护（`NSFileProtectionComplete`）时，设备锁定期间文件无法读写，因此 Syncline 在设备解锁前无法同步。见 [`complete`](https://developer.apple.com/documentation/foundation/fileprotectiontype/complete)。
+
 ## 共享空间
 
 ### 切换用户会清空共享空间，即使它随后打开失败

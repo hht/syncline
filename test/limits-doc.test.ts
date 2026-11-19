@@ -162,6 +162,8 @@ const outside = [
   'a compatibility date of 2026-04-07 or later',
   'object storage such as R2',
   'such as `text({ length: 40 })`',
+  'A site keeps at most 5 databases',
+  "While an app's backup data is over 25 MB",
 ];
 
 test.each(stated)('limits.md or edge-cases.md states: %s', (sentence) => {
