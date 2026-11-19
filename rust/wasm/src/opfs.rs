@@ -9,7 +9,7 @@ use crate::{Database, sql};
 use rusqlite::{Connection, OpenFlags};
 use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_rs::vfs::VfsFilesManager;
-use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfg, OpfsSAHPoolUtil, install};
+use sqlite_wasm_vfs::sahpool::{OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolUtil, install};
 use wasm_bindgen::prelude::*;
 
 const VFS: &str = "opfs-sahpool";
@@ -36,13 +36,19 @@ impl Files {
     /// Opens (or creates) database `name`, backed by `/{name}.db`.
     ///
     /// # Errors
-    /// Returns an error if SQLite cannot open the database.
-    #[expect(
-        clippy::unused_self,
-        reason = "holding Files guarantees VFS is installed before opening a database"
-    )]
+    /// Returns an error if creating the database would leave no free file for a write's rollback journal, or if SQLite cannot open it.
     pub fn open(&self, name: &str) -> Result<Database, JsError> {
-        Database::of(Connection::open_with_flags_and_vfs(path(name), OpenFlags::default(), VFS).map_err(sql)?)
+        let file = path(name);
+        // Each database keeps a pooled file and a write's rollback journal takes another, so a database taking the last free file
+        // would fail every write in every database.
+        let error = |error: OpfsSAHError| JsError::new(&error.to_string());
+        if !self.pool.contains(&file).map_err(error)? && self.pool.len().map_err(error)? + 2 > self.pool.capacity() {
+            return Err(JsError::new(&format!(
+                "web keeps at most {} local databases per site: delete one before opening another",
+                self.pool.capacity() - 1
+            )));
+        }
+        Database::of(Connection::open_with_flags_and_vfs(file, OpenFlags::default(), VFS).map_err(sql)?)
     }
 
     /// Removes the database file and rollback journal for `name` (database must be closed first).
