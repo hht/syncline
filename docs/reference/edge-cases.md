@@ -123,6 +123,22 @@ Only Syncline may change its own tables (`_syncline_*`). If a pending write stor
 
 If reading the number of pending writes fails, `status().pending` keeps the previous number until a later read works, and `sync()` rejects with the error: calls waiting at that moment, and a call whose own read fails. The write still uploads.
 
+### After a panic, close the database before opening it again
+
+A panic in Syncline's engine is a bug. Calls fail, and `downloadError` shows `Syncline sync thread panicked` on iOS and Android, or `Syncline core panicked` on the web. Writes already made are kept.
+
+On iOS and Android, an instance that panics after opening stays open: opening the name again throws until you call `close()` on it, and a background `syncOnce` keeps failing on it. On the web, the next `openSyncline` starts a fresh engine.
+
+### Android backs up the database with the app
+
+On Android, the database is in the app's `databases` directory, which Auto Backup includes by default. While an app's backup data is over 25 MB, Android backs up none of it.
+
+To keep backing up your other data, exclude `<name>.db`, `<name>.db-wal`, and `<name>.db-shm` in the `database` domain of your backup rules. Restoring a backup is safe: the device uploads the writes it holds, and the cloud runs each write once. See [Auto Backup](https://developer.android.com/identity/data/autobackup).
+
+### iOS Complete data protection stops sync while the device is locked
+
+On iOS, the database file takes the app's Data Protection class. With Complete protection (`NSFileProtectionComplete`), files cannot be read or written while the device is locked, so Syncline cannot sync until the device is unlocked. See [`complete`](https://developer.apple.com/documentation/foundation/fileprotectiontype/complete).
+
 ## Shared spaces
 
 ### Switching users clears a shared space even when it then fails to open
