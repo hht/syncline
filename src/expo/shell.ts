@@ -5,8 +5,9 @@ import type { SerializedError, SerializedStatus } from './errors.ts';
  *
  * Used in the web Worker and tests (the same responsibilities are handled by native Rust threads on mobile). Dispatches inputs to the core
  * via `control`, translates emitted instructions into WebSocket operations, HTTP requests, and timers, and forwards notifications (replies,
- * changed tables, held writes, sync status, reported errors, token requests, and write validations) upward. Incoming token and validation
- * responses are passed back in via `send`.
+ * changed tables, held writes, sync status, reported errors, token requests, and write validations) upward, each core batch at once so a
+ * reply arrives with the status and changes of the same step, as native hosts deliver them. Incoming token and validation responses are
+ * passed back in via `send`.
  * The core performs no network I/O or timing; this layer does not know sync rules. WebSockets, HTTP requests, and timers use numeric IDs
  * assigned by the core.
  * Events arriving while executing instructions are queued in `#inbox` and processed after the current batch finishes, preserving
@@ -119,7 +120,7 @@ export class Shell {
   readonly #socket: NonNullable<Network['socket']>;
   readonly #fetch: Fetch;
   readonly #schedule: Schedule;
-  readonly #deliver: (instruction: Delivered) => void;
+  readonly #deliver: (instructions: Delivered[]) => void;
   readonly #sockets = new Map<number, WebSocket>();
   readonly #requests = new Map<number, AbortController>();
   readonly #timers = new Map<number, () => void>();
@@ -128,7 +129,7 @@ export class Shell {
   #busy = false;
   #closed = false;
 
-  constructor(core: { control(input: string, now: number): string }, network: Network, deliver: (instruction: Delivered) => void) {
+  constructor(core: { control(input: string, now: number): string }, network: Network, deliver: (instructions: Delivered[]) => void) {
     this.#core = core;
     this.#socket = network.socket ?? ((url, protocols) => new WebSocket(url, protocols));
     // Wraps fetch to preserve global context and avoid "Illegal invocation" in browsers.
@@ -146,7 +147,7 @@ export class Shell {
   send(input: Input) {
     if (this.#closed) {
       // Late inputs (token answers, timers, socket events) must not drive a core that a newer shell may now be driving.
-      if (typeof input.id === 'number') this.#deliver({ type: 'reply', id: input.id, error: { message: 'Local database is closed' } });
+      if (typeof input.id === 'number') this.#deliver([{ type: 'reply', id: input.id, error: { message: 'Local database is closed' } }]);
       return;
     }
     this.#inbox.push(input);
@@ -167,7 +168,9 @@ export class Shell {
   }
 
   #executeAll(instructions: string) {
-    for (const instruction of JSON.parse(instructions) as Instruction[]) this.#execute(instruction);
+    const delivered: Delivered[] = [];
+    for (const instruction of JSON.parse(instructions) as Instruction[]) this.#execute(instruction, delivered);
+    if (delivered.length > 0) this.#deliver(delivered);
   }
 
   /**
@@ -183,7 +186,7 @@ export class Shell {
     this.#requests.clear();
   }
 
-  #execute(instruction: Instruction) {
+  #execute(instruction: Instruction, delivered: Delivered[]) {
     switch (instruction.type) {
       case 'connect':
         return this.#connect(instruction.socket, instruction.url, instruction.protocols);
@@ -212,7 +215,7 @@ export class Shell {
         this.#timers.delete(instruction.timer);
         return;
       default:
-        return this.#deliver(instruction);
+        return void delivered.push(instruction);
     }
   }
 

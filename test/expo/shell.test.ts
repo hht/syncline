@@ -181,7 +181,7 @@ test('after close, inputs no longer reach the core: calls are answered "Local da
       },
     },
     {},
-    (instruction) => delivered.push(instruction),
+    (instructions) => delivered.push(...instructions),
   );
   closed.close();
   closed.send({ type: 'query', id: 3 });
