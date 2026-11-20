@@ -113,7 +113,7 @@ async function openLibrary(instance: number, name: string, options: unknown) {
     if (!(error instanceof WebAssembly.RuntimeError)) db.free();
     throw error;
   }
-  const shell = new Shell(db, {}, (instruction) => post({ instance, received: [instruction] }));
+  const shell = new Shell(db, {}, (received) => post({ instance, received }));
   open = { instance, name, db, shell };
   return () => shell.begin(instructions);
 }

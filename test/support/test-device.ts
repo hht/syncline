@@ -95,7 +95,9 @@ export class Device {
         fetch: (url, init) => (this.#network.fetch ?? fetch)(url, init),
         schedule: (run, delay) => (this.#network.schedule ?? timeout)(run, delay),
       },
-      (instruction) => this.#deliver(instruction),
+      (instructions) => {
+        for (const instruction of instructions) this.#deliver(instruction);
+      },
     );
     this.#calls.shell = this.#shell;
     this.#shell.begin(opened);
