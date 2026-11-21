@@ -13,8 +13,8 @@ pub struct Effects {
     pub reports: Vec<String>,
     /// Local writes held by the cloud.
     pub held: Vec<Held>,
-    /// Indicates a new local write has committed (triggers push on connections).
-    pub wrote: bool,
+    /// Client and id of the first local write committed since effects were drained (triggers push on connections).
+    pub wrote: Option<(String, i64)>,
     /// Staged pull chunks were cleared: schedules multi-step database shrinking.
     pub shrink: bool,
 }

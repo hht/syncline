@@ -1,4 +1,4 @@
-//! Events on a connected WebSocket: delivers pokes to device, pushes next batch upon confirming in-flight batch,
+//! Events on a connected WebSocket: delivers pokes to device, pushes local writes (held back by an open upload delay window) and the next batch upon confirming in-flight batch,
 //! pulls continuously when behind, runs checksum verification upon catch-up, proactively reconnects before token expiry
 //! per cloud advice, monitors heartbeat timeouts, and categorizes cloud close codes.
 //! Once an attempt is superseded or cancelled, all subsequent messages and callbacks on it are ignored.
@@ -111,6 +111,28 @@ impl Connection {
         self.broken(ctx, attempt, Failure::new(error));
     }
 
+    /// Notifies of new local write (client and id): pending count in status updated and pushes out, unless the write opens an upload delay
+    /// window (none while `sync()` or `resync()` calls wait, which resolve only once nothing is pending)
+    pub fn wrote(&mut self, ctx: &mut Context, written: (String, i64)) {
+        if !self.started {
+            return;
+        }
+        if let Some(local) = self.local_or_report(ctx) {
+            self.status.local(ctx.out, true, local);
+        }
+        if !self.status.waiting() {
+            self.window.wrote(ctx.out, &self.channel, written);
+        }
+        self.push(ctx);
+    }
+
+    /// Closes the upload delay window, pushing the writes it held back
+    pub(super) fn close_window(&mut self, ctx: &mut Context) {
+        if self.window.close(ctx.out) {
+            self.push(ctx);
+        }
+    }
+
     /// Pushes first batch of pending writes; informs heartbeat once sent
     pub(super) fn push(&mut self, ctx: &mut Context) {
         let Some(link) = self.link.as_ref().filter(|link| link.open) else {
@@ -121,11 +143,14 @@ impl Connection {
         let channel = self.channel.clone();
         let mirror = crate::sync::mirror::Mirror(&channel);
         let device = &*ctx.device;
+        let window = &self.window;
         let bytes = self.pushes.push(ctx.out, socket, |limit| {
-            mirror.pending(device, limit).unwrap_or_else(|error| {
+            let mut pending = mirror.pending(device, limit).unwrap_or_else(|error| {
                 failed = Some(error);
                 Vec::new()
-            })
+            });
+            window.cut(&mut pending);
+            pending
         });
         // Reconnecting pushes again once the socket opens: reporting alone would leave the write pending while connected
         if let Some(error) = failed {

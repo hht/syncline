@@ -26,14 +26,17 @@ function fakeSocket() {
 
 /**
  * Synced device connected to a mock WebSocket with fake timers; random configures backoff jitter,
- * token provides auth tokens, beforeSocket fires before each WebSocket creation, respond alters each HTTP pull response.
+ * token provides auth tokens, beforeSocket fires before each WebSocket creation, respond alters each HTTP pull response,
+ * uploadDelay delays uploads.
  */
 export async function heartbeat({
   random = () => 0,
   token = async () => 'valid',
   beforeSocket = () => undefined,
   respond = (response) => response,
+  uploadDelay,
 }: {
+  uploadDelay?: number;
   random?: () => number;
   token?: () => Promise<string>;
   beforeSocket?: () => void;
@@ -51,6 +54,7 @@ export async function heartbeat({
     url: 'https://sync.test/space',
     token,
     random,
+    ...(uploadDelay !== undefined && { uploadDelay }),
     fetch: async (address: string) => {
       fetched.push(address);
       return new Response(JSON.stringify(respond(space.pull(device.private.pullRequest(), 1_000_000))));

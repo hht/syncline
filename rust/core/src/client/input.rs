@@ -46,6 +46,7 @@ pub enum Input {
         url: String,
         #[serde(default)]
         allow_cleartext: bool,
+        upload_delay: Option<f64>,
     },
     /// Claims a shared space (`tables` contains compiled definitions), creating and upgrading tables.
     Shared {

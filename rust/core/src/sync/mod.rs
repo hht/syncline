@@ -14,6 +14,7 @@ pub mod mirror;
 mod pull;
 pub mod pushes;
 pub mod status;
+mod upload_window;
 pub mod wire;
 
 use crate::device::Device;

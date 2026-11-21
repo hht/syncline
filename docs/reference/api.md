@@ -57,6 +57,7 @@ It returns a [`Syncline`](#syncline) at once and opens the database in the backg
 | `discardPending` | `boolean` | Drops the previous user's pending writes when `userID` changes. See [Switching users](#switching-users). |
 | `allowCleartext` | `boolean` | Accepts `http://` URLs for the private space and shared spaces. Tokens and rows travel unencrypted: use it only for local development, such as against `wrangler dev`. |
 | `checksumRowsPerDay` | `number` | Rows the daily [data check](limits.md#data-checks) may verify, default 1,000,000. The cloud reads them, which is billed. |
+| `uploadDelay` | `number` | Milliseconds a write waits before it uploads, so writes made meanwhile upload together and are usually [billed as one](limits.md#things-to-know). Later writes don't extend the wait, and `sync()` and `resync()` upload at once. Other devices see writes up to this much later, or later still while the app is suspended. A positive integer of at most 2147483647, or `openSyncline` throws. |
 
 </details>
 

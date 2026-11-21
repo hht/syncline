@@ -55,7 +55,8 @@ impl Client {
             | Timer::Beat { ref channel, .. }
             | Timer::Renewal { ref channel, .. }
             | Timer::PullWait { ref channel }
-            | Timer::TokenTimeout { ref channel, .. } => {
+            | Timer::TokenTimeout { ref channel, .. }
+            | Timer::Upload { ref channel } => {
                 let channel = channel.clone();
                 self.with(&channel, jobs, now, |connection, ctx| connection.fired(ctx, &timer));
             }

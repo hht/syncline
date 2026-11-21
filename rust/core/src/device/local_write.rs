@@ -77,11 +77,11 @@ impl Device {
     pub fn commit_write(&mut self) -> Result<(), Error> {
         if let Some((changes, recorded)) = self.finished.take() {
             let changeset = self.recorder.run(&mut self.db, &changes, Some(&recorded))?;
-            self.uploads.add(self.db.connection(), &changes, &changeset)?;
+            let written = self.uploads.add(self.db.connection(), &changes, &changeset)?;
             for change in changeset::parse(&changeset)? {
                 self.effects.touch(change.table());
             }
-            self.effects.wrote = true;
+            self.effects.wrote.get_or_insert(written);
         }
         self.db.connection().execute_batch(&format!("RELEASE {WRITE}"))?;
         self.writing = false;
@@ -100,7 +100,7 @@ impl Device {
         self.writing = false;
         self.finished = None;
         self.effects.touched.clear();
-        self.effects.wrote = false;
+        self.effects.wrote = None;
         let stopped = Recorder::stop(&mut self.db, &mut self.recording);
         if self.db.in_transaction() {
             crate::savepoint::rollback(self.db.connection(), WRITE)?;

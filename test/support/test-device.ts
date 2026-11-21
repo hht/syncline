@@ -49,6 +49,7 @@ export type ConnectionOptions = {
   url: string;
   token: () => Promise<string>;
   allowCleartext?: boolean;
+  uploadDelay?: number;
   socket?: (url: string, protocols: string[]) => WebSocket;
   fetch?: Fetch;
   schedule?: Schedule;
@@ -116,8 +117,9 @@ export class Device {
     this.#random = random ?? Math.random;
     this.#attached.set(channel, attachment);
     try {
-      const { url, allowCleartext } = attachment.options;
-      this.#calls.now({ type: 'connect', channel, url, ...(allowCleartext && { allowCleartext }) });
+      const { url, allowCleartext, uploadDelay } = attachment.options;
+      // JSON leaves out an unset uploadDelay
+      this.#calls.now({ type: 'connect', channel, url, allowCleartext: allowCleartext === true, uploadDelay });
     } catch (error) {
       this.#attached.delete(channel);
       throw error;

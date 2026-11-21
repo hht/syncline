@@ -117,6 +117,12 @@ impl StatusFeed {
         self.settle(out, None);
     }
 
+    /// Whether app calls wait for catch-up.
+    #[must_use]
+    pub fn waiting(&self) -> bool {
+        !self.waiters.is_empty()
+    }
+
     /// Fails all waiters with `error`.
     pub fn fail(&mut self, out: &mut Out, error: &Failure) {
         self.settle(out, Some(error));

@@ -51,6 +51,7 @@ impl Connection {
             Timer::Beat { beat, .. } => self.beat(ctx, beat),
             // Dropping the link cancels its renewal
             Timer::Renewal { .. } => self.reconnect(ctx),
+            Timer::Upload { .. } => self.close_window(ctx),
             // The client handles these itself and routes only connection timers here
             Timer::Resume(_) | Timer::Stuck => {}
         }

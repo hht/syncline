@@ -282,8 +282,11 @@ export class Client {
     };
     // The shared call goes out at once, queued behind open: queries issued after it then run after a user switch cleared the rows.
     // Calls on the space wait for it to connect (the core rejects them before connect) and fail with the reason it could not.
+    const { allowCleartext, uploadDelay } = this.#options;
+    // Only the private space uploads writes
+    const delay = !shared && uploadDelay !== undefined && { uploadDelay };
     const connected = Promise.all([this.#opened, share && this.call(share)])
-      .then(() => this.call({ type: 'connect', channel: name, url, ...(this.#options.allowCleartext && { allowCleartext: true }) }))
+      .then(() => this.call({ type: 'connect', channel: name, url, ...(allowCleartext && { allowCleartext: true }), ...delay }))
       .then(() => this.#send({ type: 'start', channel: name }));
     connected.catch((error: Error) => this.failed(name, error));
     const after = <T>(call: Call) => connected.then(() => this.call<T>(call));

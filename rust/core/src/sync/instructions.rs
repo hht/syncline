@@ -107,6 +107,8 @@ pub enum Timer {
     PullWait { channel: String },
     /// Token request timeout for a space
     TokenTimeout { channel: String, request: u32 },
+    /// Upload delay window closing for a space
+    Upload { channel: String },
     /// Background task resumed across yield boundaries
     Resume(Work),
     /// Stalled behind active local write for too long

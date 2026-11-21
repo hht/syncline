@@ -59,6 +59,7 @@ iOS、Android 和 Web 共用这个入口和它的选项。在 iOS 和 Android �
 | `discardPending` | `boolean` | `userID` 改变时丢弃上一个用户待上传的写入。见[切换用户](#切换用户)。 |
 | `allowCleartext` | `boolean` | 私有空间和共享空间接受 `http://` 地址。token 和行以明文传输：只在本地开发时使用，比如连接 `wrangler dev`。 |
 | `checksumRowsPerDay` | `number` | 每日[数据校验](limits.md#数据校验)最多校验的行数，默认 1,000,000。云端会读取这些行，读取计费。 |
+| `uploadDelay` | `number` | 一次写入等待多少毫秒后再上传，期间的写入会一起上传，通常[按一次写入计费](limits.md#需要知道的事)。之后的写入不会延长等待，`sync()` 和 `resync()` 会立即上传。其他设备最多晚这么久看到写入，应用被挂起时还会更晚。必须是不超过 2147483647 的正整数，否则 `openSyncline` 会抛错。 |
 
 </details>
 
