@@ -4,20 +4,21 @@ import { writeRows } from '../protocol/limits.ts';
 import { type Change, type Chunk, type Cookie, chunkLimit, type Poke, type Reset } from '../protocol/messages.ts';
 import { type Pushed, parseChanges } from '../protocol/parse.ts';
 import type { PullRequest } from '../protocol/pull-url.ts';
-import { type CloudStorage, isTransient, type Query, Reject } from '../sqlite/storage.ts';
-import { type Declaration, readOnlyIn, readOnlyOf, withoutRetired } from '../tables/declaration.ts';
+import type { CloudStorage, Query } from '../sqlite/storage.ts';
+import { type Declaration, readOnlyIn, readOnlyOf } from '../tables/declaration.ts';
 import { prepareInternalTables } from '../tables/internal-tables.ts';
 import { Rows } from '../tables/rows.ts';
 import { type Validation, Validator } from '../tables/validation.ts';
 import { BucketRows } from './bucket-rows.ts';
 import { Buckets } from './buckets.ts';
 import { type CommitContext, commitWrite } from './commit-write.ts';
-import { Commits, type Keys, type Used } from './commits.ts';
+import { Commits, type Keys } from './commits.ts';
 import { DailyWrites } from './daily-writes.ts';
 import { type Events, isolated, quiet } from './events.ts';
 import { evolveOnOpen, reviseRules } from './evolution.ts';
 import { HeldWrites, heldIn } from './held.ts';
 import { pull, type SpaceChecksum } from './pulls.ts';
+import { PushedWrites } from './pushed-writes.ts';
 import { Reader } from './reader.ts';
 import { writeOnServer } from './server-write.ts';
 import { bucketsBefore, defaultRows, pullShared, type Round, type Shared, type Subscribed, sharedRound } from './shared.ts';
@@ -91,6 +92,7 @@ export class Space {
   readonly #readOnly: ReadonlySet<string>;
   /** Prior head cookie before scope changes on open (entered tables, bucket rule revisions); undefined if unchanged. */
   readonly evolvedFrom: Cookie | undefined;
+  readonly #writes: PushedWrites;
 
   constructor(storage: CloudStorage, tables: SQLiteTable[], options: SpaceOptions = {}) {
     const { validation, shared, events = quiet, retired, readOnly = [], commitFloor, checksum, pushRows = writeRows } = options;
@@ -123,19 +125,30 @@ export class Space {
     this.declaration = evolved.declaration;
     this.retired = evolved.retired;
     this.evolvedFrom = this.#log.head().version === opened.version ? undefined : opened;
+    this.#writes = new PushedWrites({
+      context: this.#context,
+      daily: this.#daily,
+      held: this.#held,
+      events: this.#events,
+      declaration: this.declaration,
+      retired: this.retired,
+      readOnly: this.#readOnly,
+    });
   }
 
   /**
    * Executes a batch of pushed client mutations sequentially.
    *
    * Skips already-processed mutation IDs; executes mutation IDs matching lmid + 1.
+   * Consecutive put and patch writes of one client with contiguous IDs commit as one write (a run, see PushedWrites.execute).
    * If mutation ID is greater than lmid + 1 and marked first (earliest pending write on that client after PITR rolled back confirmed writes),
    * advances lmid across the gap and executes within the same transaction (Process in TLA+ models).
    * Permanent client mutation identity (client, id) is preserved without renumbering.
    * Other gaps (missing prior writes without first) are skipped and emit write.skipped.
    * Non-executable writes and malformed mutations are held and advance lmid.
    * Transient storage errors (isTransient) throw without advancing lmid for the failing write, preserving earlier committed writes.
-   * Workload accumulates billed row writes up to pushRows, stopping after the cap-reaching write while the client pushes remainder (HandlePush in TLA+ models).
+   * Workload accumulates billed row writes up to pushRows, stopping after the cap-reaching write or run while the client pushes remainder (HandlePush in TLA+ models);
+   * a run changes at most the rows left.
    * Returns poke notice for online devices confirming executed writes, or Oversized if JSON payload exceeds limit.
    * @see https://doc.replicache.dev/reference/server-push
    * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/util/sqlite.c%2B%2B
@@ -152,7 +165,8 @@ export class Space {
     const known = new Map<string, number>();
     const executed = new Map<string, number>();
     const start = this.#daily.written;
-    for (const mutation of mutations) {
+    for (let at = 0; at < mutations.length; at += 1) {
+      const mutation = mutations[at] as Pushed;
       const { client, id, first } = mutation;
       const lmid = known.get(client) ?? this.#log.lmid(client);
       known.set(client, lmid);
@@ -161,47 +175,16 @@ export class Space {
         this.#events({ type: 'write.skipped', client, id, lmid });
         continue;
       }
-      head = this.#daily.measure((used) => this.#apply(mutation, used, written));
-      known.set(client, id);
-      executed.set(client, id);
+      const step = this.#writes.execute(mutations, at, this.#pushRows - (this.#daily.written - start), written);
+      head = step.head;
+      at += step.decided - 1;
+      known.set(client, id + step.decided - 1);
+      executed.set(client, id + step.decided - 1);
       if (this.#daily.written - start >= this.#pushRows) break;
     }
     if (executed.size === 0) return undefined;
     // Confirms mutation IDs processed across clients in this batch.
     return this.#notify(base, head, { lmids: Object.fromEntries(executed), ...heldIn(this.#held.since(base.version)) }, written);
-  }
-
-  /** Executes a single pushed client write, holding it on failure; used reports cumulative daily writes. Returns head cookie. */
-  #apply(mutation: Pushed, used: () => Used, written: WrittenRows): Cookie {
-    const { client, id, changes } = mutation;
-    try {
-      // Malformed changes (client bug or version mismatch): held without execution, advancing lmid.
-      if ('malformed' in mutation) throw new Reject(mutation.malformed);
-      const kept = withoutRetired(mutation.changes, this.retired, this.declaration, (names) =>
-        this.#events({ type: 'values.dropped', client, id, names }),
-      );
-      const readOnly = readOnlyIn(kept, this.#readOnly);
-      if (readOnly) throw new Reject(`Table ${readOnly} is read-only and cannot be modified by pushed client mutations.`);
-      return written.record((touched) =>
-        commitWrite(this.#context, client, id, (changed) => this.#rows.write(this.#query, kept, changed), { used, touched }),
-      );
-    } catch (error) {
-      // Transient storage errors propagate without advancing lmid; client retries with backoff. Permanent errors advance lmid and hold the write.
-      if (isTransient(error)) throw error;
-      // Non-executable writes: rolls back, records a keyless commit advancing lmid, and stores raw mutation in _syncline_held.
-      // Bounded so the held row fits the 2 MB DO row limit whatever the message echoes (names, Standard Schema inputs). A cut inside a
-      // surrogate pair needs no repair: workerd stores the lone surrogate and reads it back as U+FFFD, so devices receive it well-formed.
-      const reason = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
-      const held = commitWrite(
-        this.#context,
-        client,
-        id,
-        () => this.#held.add(this.#log.head().version + 1, { client, id, reason }, changes),
-        { used },
-      );
-      this.#events({ type: 'write.held', client, id, reason });
-      return held;
-    }
   }
 
   /**

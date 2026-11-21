@@ -163,27 +163,30 @@ impl UploadQueue {
     }
 
     /// Records a local write, determining its id in the database within the same transaction: next id after this client's last pending mutation, or following confirmed id if empty.
+    /// Returns the client and id recorded.
     /// Not counted in memory: if commit fails after disk flush, in-memory counter state is ambiguous; duplicate mutation ids would be treated as already processed and discarded by cloud.
     /// Errors if changes exceed `WRITE_BYTES`, causing caller to rollback the write (byte count measured by SQLite, consistent across platforms).
     ///
     /// # Errors
     /// Returns an error if writing to database fails or write is too large.
-    pub fn add(&self, db: &Connection, changes: &[Change], changeset: &[u8]) -> Result<(), Error> {
+    pub fn add(&self, db: &Connection, changes: &[Change], changeset: &[u8]) -> Result<(String, i64), Error> {
         let text = changes_json(changes);
         // A client's id increases with seq: scanning backward from last row finds the highest id.
-        let bytes: i64 = db
+        let (bytes, id): (i64, i64) = db
             .prepare_cached(
                 "INSERT INTO _syncline_pending (client, id, changes, changeset)
              VALUES (?1, max(?2, coalesce((SELECT id FROM _syncline_pending WHERE client = ?1 ORDER BY seq DESC LIMIT 1), 0)) + 1, ?3, ?4)
-             RETURNING octet_length(changes)",
+             RETURNING octet_length(changes), id",
             )?
-            .query_row(params![self.client, self.confirmed, text, changeset], |row| row.get(0))?;
+            .query_row(params![self.client, self.confirmed, text, changeset], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
         if bytes > WRITE_BYTES {
             return Err(Error::Failed(format!(
                 "local write is too large ({bytes} bytes, limit 8 MiB) and was rolled back; split into smaller writes"
             )));
         }
-        Ok(())
+        Ok((self.client.clone(), id))
     }
 
     /// Returns whether `lmids` confirms any pending mutations: single statement scans pending mutations once (catch-up on connect carries all clients with commits past cookie, potentially hundreds).

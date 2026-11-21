@@ -1,6 +1,6 @@
 //! Maintains continuous synchronization with cloud for a space: connects over WebSocket
 //! with cookie in URL, receiving catch-up first, then sequential live pokes;
-//! uploads all pending writes upon connecting, then after each local write (cloud deduplicates by mutation ID; resends are safe).
+//! uploads all pending writes upon connecting, then after each local write or its upload delay window (cloud deduplicates by mutation ID; resends are safe).
 //! Pulls over HTTP first when cookie is missing or reset; pulls continuously when hint is received while connected;
 //! reconnects with exponential backoff and jitter on disconnect.
 //! Each connection attempt carries a unique ID (attempt): token request, pull, heartbeat, and connection messages
@@ -22,6 +22,7 @@ use crate::sync::mirror::Mirror;
 use crate::sync::pull::Pull;
 use crate::sync::pushes::Pushes;
 use crate::sync::status::{Local, StatusFeed, SyncStatus, set_local};
+use crate::sync::upload_window::UploadWindow;
 use crate::sync::{Context, Job};
 
 /// Active connection attempt: attempt ID and cancellation flag (stop, disconnect, reconnect)
@@ -86,11 +87,13 @@ pub struct Connection {
     opened: Opened,
     /// Connection attempt waiting for shared space table creation after acquiring token
     waiting_open: Option<(u64, String)>,
+    pub(super) window: UploadWindow,
 }
 
 impl Connection {
     /// Synchronization for a space (not yet started); handshake is present only for private space. Fails if sync URL contains query string or fragment: pull parameters are appended dynamically and cloud does not recognize other query parameters.
     /// Fails if sync URL is not HTTPS (HTTP needs `allow_cleartext`): native networking runs on rustls, outside the platform cleartext policies.
+    /// `upload_delay` delays uploading local writes (see `UploadWindow`).
     ///
     /// # Errors
     /// Sync URL contains query string or fragment, or is not HTTPS (HTTP needs `allow_cleartext`).
@@ -99,6 +102,7 @@ impl Connection {
         channel: &str,
         url: &str,
         allow_cleartext: bool,
+        upload_delay: Option<f64>,
         handshake: Option<Handshake>,
         opened: Opened,
     ) -> Result<Self, Failure> {
@@ -130,6 +134,7 @@ impl Connection {
             token: None,
             opened,
             waiting_open: None,
+            window: UploadWindow::new(upload_delay),
         })
     }
 
@@ -158,6 +163,7 @@ impl Connection {
     /// Disconnects and stops reconnecting; pending `sync()` calls fail. Can be restarted via start.
     pub fn stop(&mut self, ctx: &mut Context) {
         self.started = false;
+        self.window.close(ctx.out);
         self.abort(ctx.out);
         self.status.update(ctx.out, false, SyncStatus::offline);
         self.status.fail(ctx.out, &Failure::new("sync has stopped"));
@@ -188,6 +194,8 @@ impl Connection {
             return;
         }
         self.status.wait(ctx.out, id);
+        // Waiting calls resolve once nothing is pending: delayed writes upload now, and writes made meanwhile open no window
+        self.close_window(ctx);
         if self.reconnecting.is_some() {
             self.connect(ctx);
         }
@@ -205,6 +213,8 @@ impl Connection {
         }
         self.status.update(ctx.out, true, SyncStatus::offline);
         self.status.wait(ctx.out, id);
+        // Pushes resume once the resync lands, and the write that opened the window may be discarded
+        self.window.close(ctx.out);
         let attempt = self.begin(ctx.out);
         self.clearing = Some(attempt);
         ctx.jobs.push(Job::Resync {
@@ -234,17 +244,6 @@ impl Connection {
         }
         self.status.update(ctx.out, true, |status| status.connected = false);
         self.connect(ctx);
-    }
-
-    /// Notifies of new local write: pending count in status updated and pushes out
-    pub fn wrote(&mut self, ctx: &mut Context) {
-        if !self.started {
-            return;
-        }
-        if let Some(local) = self.local_or_report(ctx) {
-            self.status.local(ctx.out, true, local);
-        }
-        self.push(ctx);
     }
 
     /// Called when shared space table setup completes (or fails): resumes waiting attempt

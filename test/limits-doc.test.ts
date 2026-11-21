@@ -64,12 +64,16 @@ const thousands = (value: number) => count(Math.floor(value / 1000) * 1000);
 
 const note = sqliteTable('note', { id: text().primaryKey() });
 
-/** Row writes billed for one upload of `writes` writes changing `rows` rows each of a table without indexes, as the daily cap counts them. */
-function billed(writes: number, rows: number) {
+/**
+ * Row writes billed for uploading `writes` writes changing `rows` rows each of a table without indexes, as the daily cap counts them:
+ * together in one upload, or one upload each (apart); same has every write change the same rows.
+ */
+function billed(writes: number, rows: number, { apart = false, same = false } = {}) {
   const space = new Space(cloudStorage('CREATE TABLE note (id TEXT PRIMARY KEY)'), [note]);
   const changes = (write: number) =>
-    Array.from({ length: rows }, (_, row) => ({ op: 'put' as const, table: 'note', row: { id: `${write}-${row}` } }));
-  space.push(Array.from({ length: writes }, (_, write) => ({ client: 'c1', id: write + 1, changes: changes(write) })));
+    Array.from({ length: rows }, (_, row) => ({ op: 'put' as const, table: 'note', row: { id: `${same ? 0 : write}-${row}` } }));
+  const mutations = Array.from({ length: writes }, (_, write) => ({ client: 'c1', id: write + 1, changes: changes(write) }));
+  for (const batch of apart ? mutations.map((mutation) => [mutation]) : [mutations]) space.push(batch);
   return space.pushedToday();
 }
 
@@ -125,7 +129,9 @@ const stated = [
   `exports for at most ${minutes(defaultExportBudget)} per alarm (\`exportBudget\`)`,
   // Things to know
   `An uploaded write is billed ${billed(1, 1) - 1} row writes besides the rows it changes`,
-  `One \`write\` of 100 rows costs ${billed(1, 100)}; 100 writes of one row each cost ${billed(100, 1)}.`,
+  `One \`write\` of 100 rows costs ${billed(1, 100)}.`,
+  `100 writes of one row each cost ${billed(100, 1)}, and 100 writes to the same row cost ${billed(100, 1, { same: true })}.`,
+  `Uploaded one at a time, 100 writes of one row each cost ${billed(100, 1, { apart: true })}.`,
   // Requirements
   `\`expo\` ${peers.expo}.`,
   `\`react\` ${peers.react} and \`@tanstack/react-query\` ${peers['@tanstack/react-query']}.`,

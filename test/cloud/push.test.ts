@@ -45,10 +45,11 @@ test('storage error (not mutation flaw) after earlier writes committed: committe
   const space = new Space(cloud, [note]);
   failNoteWrite(cloud, 2);
 
-  expect(() => space.push([put('c1', 1), put('c1', 2), put('c1', 3)])).toThrow('disk I/O error');
-  expect(notes(cloud)).toEqual(['c1-1']);
+  // Writes of different clients, which never join one run (one commit), so the first commits alone.
+  expect(() => space.push([put('a', 1), put('b', 1), put('c', 1)])).toThrow('disk I/O error');
+  expect(notes(cloud)).toEqual(['a-1']);
   expect(space.held()).toEqual([]);
-  expect(space.push([put('c1', 2), put('c1', 3)])?.lmids).toEqual({ c1: 3 });
+  expect(space.push([put('b', 1), put('c', 1)])?.lmids).toEqual({ b: 1, c: 1 });
 });
 
 test('value cannot fit cloud table (type mismatch across ends, single value exceeding 2 MB): mutation flaw holds write, advances lmid, subsequent writes execute normally', () => {
@@ -158,7 +159,7 @@ test('push processing fails after earlier writes committed: closes pusher with 1
   failNoteWrite(cloud, 2);
   tablet.sent.length = 0;
 
-  expect(() => server.receive(phone, JSON.stringify([put('c1', 1), put('c1', 2)]))).toThrow('disk I/O error');
+  expect(() => server.receive(phone, JSON.stringify([put('c1', 1), put('c2', 1)]))).toThrow('disk I/O error');
   expect(phone.closed).toEqual([1011]);
   expect(tablet.closed).toEqual([]);
   expect(tablet.sent.map((text) => JSON.parse(text))).toEqual([{ hint: { version: 1, nonce: expect.any(Number) } }]);
@@ -225,13 +226,15 @@ test('write quota: batch exceeding available tokens (burst at most, however long
   }
 });
 
-test('a pushed write bills 2 rows besides the rows it changes, as limits.md tells integrators: grouping rows in one write saves them', () => {
+test('a pushed write bills 2 rows besides the rows it changes, as limits.md tells integrators: grouping rows in one write, or writes in one push, saves them', () => {
   const space = new Space(cloudStorage(createNote), [note]);
   const rows = (ids: string[]) => ids.map((id) => ({ op: 'put' as const, table: 'note', row: { id } }));
   space.push([{ client: 'c1', id: 1, changes: rows(['a', 'b', 'c']) }]);
   expect(space.pushedToday()).toBe(3 + 2);
-  space.push([put('c1', 2), put('c1', 3), put('c1', 4)]);
+  for (const id of [2, 3, 4]) space.push([put('c1', id)]);
   expect(space.pushedToday()).toBe(5 + 3 * (1 + 2));
+  space.push([put('c1', 5), put('c1', 6), put('c1', 7)]);
+  expect(space.pushedToday()).toBe(14 + 3 + 2);
 });
 
 test('device push billed row writes today (UTC): server writes and duplicates excluded; resumes from commit log across object restart, resets to 0 next day', () => {
@@ -242,7 +245,8 @@ test('device push billed row writes today (UTC): server writes and duplicates ex
     space.mutate((tx) => tx.insert(note, { id: 's1' }));
     expect(space.pushedToday()).toBe(0);
     // Each write writes one note row, one client row, and one commit log row (test storage counts SQLite touched rows, excluding indexes).
-    space.push([put('c1', 1), put('c1', 2)]);
+    space.push([put('c1', 1)]);
+    space.push([put('c1', 2)]);
     expect(space.pushedToday()).toBe(6);
     space.push([put('c1', 2)]);
     expect(space.pushedToday()).toBe(6);

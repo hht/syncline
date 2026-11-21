@@ -283,7 +283,9 @@ test('handles schema fingerprints: serves pull on match, returns 412 on mismatch
 
 test('tracks daily rowsWritten on commit log records and retains counts across hibernation', async () => {
   const { name, phone: device } = await online(1);
-  device.push(stamp, { id: 2, changes: [put('note', { id: 'n2', text: 'brick wall' })] });
+  device.push(stamp);
+  await device.next();
+  device.push({ id: 2, changes: [put('note', { id: 'n2', text: 'brick wall' })] });
   await device.next();
   await evictDurableObject(object(name));
   const used = await runInDurableObject(object(name), (_: TestSpace, state) =>

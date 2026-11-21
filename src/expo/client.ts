@@ -1,9 +1,9 @@
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { notifyAll, report } from '../listeners.ts';
-import { readOnlyOf } from '../tables/declaration.ts';
-import { deviceDefinitions, tableName } from '../tables/table-definitions.ts';
+import { deviceDefinitions } from '../tables/table-definitions.ts';
 import { checkDeclared, ValidationError, Validator } from '../tables/validation.ts';
 import { deserializeError, deserializeStatus } from './errors.ts';
+import { opening } from './opening.ts';
 import type { Delivered } from './shell.ts';
 import { offline, type SyncStatus } from './status.ts';
 import type { Channel, Held, LocalDatabase, OpenOptions, Schema } from './syncline.ts';
@@ -11,7 +11,7 @@ import type { Channel, Held, LocalDatabase, OpenOptions, Schema } from './syncli
 /**
  * Drives the client-side synchronization interface identically across iOS, Android, and web.
  * Forwards calls to engine; emits changes, held writes, and status to subscribers; resolves tokens and validates writes;
- * encodes tables as metadata on open; and marshals parameters/results via JSON (Uint8Array for BLOBs, explicit infinities, NaN refused).
+ * and marshals parameters/results via JSON (Uint8Array for BLOBs, explicit infinities, NaN refused).
  * What this module must not know: Host platform implementation, storage location, or internal sync protocol mechanics.
  */
 
@@ -41,28 +41,6 @@ export function encode(value: unknown) {
 /** Reconstructs Uint8Array from byte-array BLOB values in query result rows. */
 export const decodeRows = (rows: unknown[][]) =>
   rows.map((row) => row.map((value) => (Array.isArray(value) ? Uint8Array.from(value) : value)));
-
-/** Serializes opening options for the core: encodes tables as metadata; leaves daily checksum rows to core defaults unless specified. */
-function opening<S extends Schema>(options: OpenOptions<S>) {
-  const { schema, localOnly = {}, retired = [], readOnly = [], validation, userID, discardPending, checksumRowsPerDay } = options;
-  // Without an owner the core records and clears nothing, so the next user to sign in would read this one's rows
-  if (typeof userID !== 'string' || userID === '') throw new TypeError(`userID must be a non-empty string, got ${JSON.stringify(userID)}`);
-  const tables = Object.values(schema);
-  const localTables = Object.values(localOnly);
-  checkDeclared(tables);
-  return {
-    config: {
-      synced: deviceDefinitions(tables),
-      localOnly: deviceDefinitions(localTables, { localOnly: true }),
-      readOnly: [...readOnlyOf(tables, readOnly)],
-      retired,
-      schemas: [...tables, ...localTables].filter((table) => validation?.has(table)).map(tableName),
-    },
-    owner: userID,
-    ...(discardPending && { discardPending }),
-    checksum: checksumRowsPerDay === undefined ? {} : { rowsPerDay: checksumRowsPerDay },
-  };
-}
 
 /** In-memory state tracked per sync channel: status snapshot (initialized to connecting), subscriber callbacks, and token getter. */
 type Space = { status: SyncStatus; listeners: Set<(status: SyncStatus) => void>; token: () => Promise<string> };
@@ -304,8 +282,11 @@ export class Client {
     };
     // The shared call goes out at once, queued behind open: queries issued after it then run after a user switch cleared the rows.
     // Calls on the space wait for it to connect (the core rejects them before connect) and fail with the reason it could not.
+    const { allowCleartext, uploadDelay } = this.#options;
+    // Only the private space uploads writes
+    const delay = !shared && uploadDelay !== undefined && { uploadDelay };
     const connected = Promise.all([this.#opened, share && this.call(share)])
-      .then(() => this.call({ type: 'connect', channel: name, url, ...(this.#options.allowCleartext && { allowCleartext: true }) }))
+      .then(() => this.call({ type: 'connect', channel: name, url, ...(allowCleartext && { allowCleartext: true }), ...delay }))
       .then(() => this.#send({ type: 'start', channel: name }));
     connected.catch((error: Error) => this.failed(name, error));
     const after = <T>(call: Call) => connected.then(() => this.call<T>(call));

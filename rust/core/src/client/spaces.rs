@@ -102,6 +102,7 @@ impl Client {
         channel: &str,
         url: &str,
         allow_cleartext: bool,
+        upload_delay: Option<f64>,
         jobs: &mut Vec<Job>,
         now: f64,
     ) -> Result<(), Failure> {
@@ -118,7 +119,7 @@ impl Client {
             )
         };
         let mut ctx = self.context(jobs, now);
-        let connection = Connection::new(&mut ctx, channel, url, allow_cleartext, handshake, opened)?;
+        let connection = Connection::new(&mut ctx, channel, url, allow_cleartext, upload_delay, handshake, opened)?;
         connection.announce(ctx.out);
         self.connections.insert(channel.to_owned(), connection);
         Ok(())

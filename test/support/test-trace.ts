@@ -18,9 +18,9 @@ export type Message = { t: string; b?: number; c?: number; n?: number; s?: numbe
 
 /**
  * Model action: a is action name, d is 1-based device index (0 for global), k is restore target version,
- * optional indicates skippable action in model.
+ * optional indicates skippable action in model, j lists the positions in a push batch of writes that joined a run.
  */
-type Act = { a: string; d: number; k: number; optional: boolean } & Required<Omit<Message, 's' | 'sub'>>;
+type Act = { a: string; d: number; k: number; optional: boolean; j: number[] } & Required<Omit<Message, 's' | 'sub'>>;
 
 type Line = { step: string; acts: Act[]; cookie: number[]; pending: number[]; staged: number[]; head: number };
 
@@ -90,7 +90,14 @@ export class Tracer {
   add(a: string, index?: number, { optional = false, k = 0, message }: { optional?: boolean; k?: number; message?: Message } = {}) {
     const { t = '', b = -2, c = -2, n = -2 } = message ?? {};
     // Shared space trace validation records s; private space does not.
-    this.#acts.push({ a, d: index === undefined ? 0 : index + 1, k, optional, t, b, c, n });
+    this.#acts.push({ a, d: index === undefined ? 0 : index + 1, k, optional, t, b, c, n, j: [] });
+  }
+
+  /** Records the positions of writes that joined a run in the push batch the cloud just handled (its HandlePush in this step). */
+  joined(positions: number[]) {
+    const push = this.#acts.findLast(({ a }) => a === 'HandlePush');
+    if (push) push.j = positions;
+    else if (positions.length > 0) throw new Error('writes joined a run in a push the trace did not record');
   }
 
   /** Post-step observation: records observable state across devices and cloud head. */
@@ -112,8 +119,8 @@ export class Tracer {
     mkdirSync(dir, { recursive: true });
     const record = ({ step, acts, cookie, pending, staged, head: version }: Line) => {
       const list = acts.map(
-        ({ a, d, k, optional, t, b, c, n }) =>
-          `[a |-> "${a}", d |-> ${d}, k |-> ${k}, o |-> ${optional ? 'TRUE' : 'FALSE'}, t |-> "${t}", b |-> ${b}, c |-> ${c}, n |-> ${n}]`,
+        ({ a, d, k, optional, t, b, c, n, j }) =>
+          `[a |-> "${a}", d |-> ${d}, k |-> ${k}, o |-> ${optional ? 'TRUE' : 'FALSE'}, t |-> "${t}", b |-> ${b}, c |-> ${c}, n |-> ${n}, j |-> {${j.join(', ')}}]`,
       );
       const name = step.replace(/[^\w+.#]/g, '').slice(0, 60);
       return `  [step |-> "${name}", acts |-> <<${list.join(', ')}>>, cookie |-> <<${cookie.join(', ')}>>, pending |-> <<${pending.join(', ')}>>, staged |-> <<${staged.join(', ')}>>, head |-> ${version}]`;

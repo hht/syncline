@@ -158,8 +158,8 @@ test('duplicate pushes execute once, and writes with gap mutation IDs wait until
   if (!first || !second) throw new Error('expected two pending writes');
 
   expect(space.push([second])).toBeUndefined();
-  const poke = space.push([first, second]);
-  expect(poke?.cookie.version).toBe(2);
+  // Both commit once, as one run.
+  expect(space.push([first, second])?.lmids).toEqual({ [first.client]: second.id });
   expect(space.push([first, second])).toBeUndefined();
 });
 

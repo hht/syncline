@@ -57,6 +57,7 @@ It returns a [`Syncline`](#syncline) at once and opens the database in the backg
 | `discardPending` | `boolean` | Drops the previous user's pending writes when `userID` changes. See [Switching users](#switching-users). |
 | `allowCleartext` | `boolean` | Accepts `http://` URLs for the private space and shared spaces. Tokens and rows travel unencrypted: use it only for local development, such as against `wrangler dev`. |
 | `checksumRowsPerDay` | `number` | Rows the daily [data check](limits.md#data-checks) may verify, default 1,000,000. The cloud reads them, which is billed. |
+| `uploadDelay` | `number` | Milliseconds a write waits before it uploads, so writes made meanwhile upload together and are usually [billed as one](limits.md#things-to-know). Later writes don't extend the wait, and `sync()` and `resync()` upload at once. Other devices see writes up to this much later, or later still while the app is suspended. A positive integer of at most 2147483647, or `openSyncline` throws. |
 
 </details>
 
@@ -318,7 +319,7 @@ The Durable Object class of private spaces: one object per user. Extend it and c
 | Option | Type | Description |
 |---|---|---|
 | `cloud` | `{ tableName: drizzleTable }` | Cloud-side definitions of synced tables, which can add cloud-only columns, and tables only the cloud has. See [Cloud tables](#cloud-tables). |
-| `validation` | `Map<drizzleTable, StandardSchema>` | As on devices. The cloud checks uploaded writes and server writes with it. A schema must answer synchronously. |
+| `validation` | `Map<drizzleTable, StandardSchema>` | As on devices. The cloud checks uploaded writes and server writes with it; writes uploaded together are checked on their final rows (see [Held writes](errors.md#held-writes)). A schema must answer synchronously. |
 | `readOnly` | `drizzleTable[]` | Synced tables only server writes change. Pass the same list on devices. See [Read-only tables](#read-only-tables). |
 | `retired` | `string[]` | Tables and columns (`'table.column'`) removed from sync for good. Pass the same list on devices. A retired name can never be declared again. |
 | `onEvent` | `(event: SynclineEvent) => void` | Called for cloud events, for logs and alerts. See [Events](errors.md#events). |

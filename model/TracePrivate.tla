@@ -14,7 +14,9 @@
 (* incorrect. Checks control flow only without comparing written values:   *)
 (* simulation writes map to 'inc' on the single row of table 1, as do      *)
 (* backend writes; table 2 (Later) is cloud-only, then enters and leaves   *)
-(* sync.                                                                   *)
+(* sync. A push records which writes joined a run (j, J in Process),       *)
+(* fixing the cut points the model leaves open, which a long batch would   *)
+(* otherwise multiply beyond search.                                       *)
 (***************************************************************************)
 EXTENDS Private, TraceLog
 
@@ -57,7 +59,7 @@ Keep(x) ==
 Do(x) ==
     \/ x.a = "Mutate" /\ Mutate(D[x.d], 1, "inc")
     \/ x.a = "Push" /\ Push(D[x.d])
-    \/ x.a = "HandlePush" /\ \E m \in net : Is(x, m) /\ HandlePushOf(D[x.d], m)
+    \/ x.a = "HandlePush" /\ \E m \in net : Is(x, m) /\ HandlePushOf(D[x.d], m, x.j)
     \/ x.a = "Connect" /\ Connect(D[x.d])
     \/ x.a = "PullReq" /\ PullReq(D[x.d])
     \* Computed response matches: message type, base version, and target version

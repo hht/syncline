@@ -53,6 +53,9 @@
 (* push; corrupted local row (detected by checksum, repaired by range      *)
 (* pull); manual resync (disconnects, full-pulls from scratch, preserves   *)
 (* pending writes, reconnects after catching up).                          *)
+(* Runs: cloud may execute consecutive writes of one client in a batch   *)
+(* with contiguous mutation IDs (inc only) as one commit with lmid at the *)
+(* last, only if every write succeeds; otherwise executes them one by one.*)
 (* Backend writes (imports, server writes): cloud executes a write locally,*)
 (* recording a commit and poking devices just like device writes.          *)
 (* Sync scope: scope table tracks whether each table is synced and its     *)
@@ -194,14 +197,18 @@ At(v) == IF v = sLow.v THEN sLow ELSE [v |-> v, n |-> sCommits[v].nonce]
 \* All cookies on current history (formulated independently of OnHist for property P8a)
 HistCookies == {sLow} \cup {[v |-> i, n |-> sCommits[i].nonce] : i \in (sLow.v + 1)..Len(sCommits)}
 
-\* Commit log entry: touched keys, dropped tables drop. syn, in, since, key, op, uid are ghost:
-\* synced tables (expected device rows) and scope table at commit time (used on restore), client write itself (P2, P8k, P8r, P11)
-Entry(nonce, client, mid, key, op, keys, uid) ==
-    [nonce |-> nonce, client |-> client, mid |-> mid, key |-> key, op |-> op, keys |-> keys, drop |-> {},
-     uid |-> uid, syn |-> sSynced, in |-> sIn, since |-> sSince]
+\* Write executed by a commit: mutation ID, key, op; uid is ghost (P8k, P8r, P11)
+Step(mid, uid, key, op) == [mid |-> mid, uid |-> uid, key |-> key, op |-> op]
+\* Commit log entry: touched keys, dropped tables drop, mid of its last write. steps, syn, in, since are ghost:
+\* writes executed in order (several for a run, P1, P2, P8k, P8r, P11), synced tables (expected device rows) and scope table at commit time (used on restore)
+Entry(nonce, client, steps, keys) ==
+    [nonce |-> nonce, client |-> client, mid |-> steps[Len(steps)].mid, steps |-> steps, keys |-> keys, drop |-> {},
+     syn |-> sSynced, in |-> sIn, since |-> sSince]
+\* Device writes executed by commits at versions is
+UidsIn(is) == UNION {{sCommits[i].steps[j].uid : j \in 1..Len(sCommits[i].steps)} : i \in is} \ {NoUid}
 \* Commit for scope change (client is Backend, keyless): dropped tables drop, updated scope table
 Rescoped(cs, drop, in, since) ==
-    [Entry(nextNonce, Backend, Lmid(cs, Backend) + 1, NoKey, "none", {}, NoUid)
+    [Entry(nextNonce, Backend, <<Step(Lmid(cs, Backend) + 1, NoUid, NoKey, "none")>>, {})
         EXCEPT !.drop = drop, !.syn = SyncedOf(in), !.in = in, !.since = since]
 
 \* Poke; onHist is ghost, allowing P8a to check incremental pokes are sent only to cookies on current history
@@ -209,19 +216,41 @@ Poke(d, conn, base, cookie, lm, patch) ==
     [type |-> "poke", to |-> d, conn |-> conn, base |-> base, cookie |-> cookie, lmids |-> lm,
      patch |-> patch, onHist |-> base \in HistCookies]
 
-\* Processes batch of mutations sequentially: skips duplicates; processes mutations sequentially following lmid;
-\* jumps lmid then processes if id > lmid + 1 and mutation is first pending on client (PITR rolled back earlier confirmed writes);
-\* skips future mutations with gaps (records gapSeen). Rejections also advance mutation ID
-RECURSIVE Process(_, _, _, _, _, _, _)
-Process(data, cs, hist, nonce, gap, ms, first) ==
-    IF ms = <<>> THEN [data |-> data, cs |-> cs, hist |-> hist, nonce |-> nonce, gap |-> gap]
+\* Executes steps in order as one write: ok only if every step succeeds (inc only grows, so a failing step means a failing final state); keys modified
+RECURSIVE ExecAll(_, _, _)
+ExecAll(t, syn, ss) ==
+    IF ss = <<>> THEN [ok |-> TRUE, t |-> t, keys |-> {}]
+    ELSE LET r == Exec(t, syn, Head(ss).key, Head(ss).op)
+             rest == ExecAll(r.t, syn, Tail(ss))
+         IN [ok |-> r.ok /\ rest.ok, t |-> rest.t, keys |-> (IF r.w THEN {Head(ss).key} ELSE {}) \cup rest.keys]
+
+\* Processes batch of mutations sequentially, returning the outcome (a set: empty if J asks for a join that cannot happen): skips duplicates;
+\* processes mutations sequentially following lmid; jumps lmid then processes if id > lmid + 1 and mutation is first pending on client
+\* (PITR rolled back earlier confirmed writes); skips future mutations with gaps (records gapSeen). Rejections also advance mutation ID.
+\* Run: the executed mutation at batch position at joins the commit of the previous mutation in the batch (open) if at is in J, which requires
+\* both to be inc writes of the same client with contiguous IDs and the joined writes all to succeed from the version before that commit
+\* (HandlePushOf tries every J: limits end runs at points the model does not track; trace validation fixes J to the runs the cloud formed)
+RECURSIVE Process(_, _, _, _, _, _, _, _, _, _)
+Process(data, cs, hist, nonce, gap, ms, first, open, at, J) ==
+    IF ms = <<>> THEN {[data |-> data, cs |-> cs, hist |-> hist, nonce |-> nonce, gap |-> gap]}
     ELSE LET m == Head(ms)
              l == Lmid(cs, m.client)
-         IN IF m.mid <= l THEN Process(data, cs, hist, nonce, gap, Tail(ms), first)
-            ELSE IF m.mid > l + 1 /\ m.mid # first[m.client] THEN Process(data, cs, hist, nonce, TRUE, Tail(ms), first)
-            ELSE LET r == Exec(data, sSynced, m.key, m.op)
-                     e == Entry(nonce, m.client, m.mid, m.key, m.op, IF r.w THEN {m.key} ELSE {}, m.uid)
-                 IN Process(r.t, Append(cs, e), Append(hist, r.t), nonce + 1, gap, Tail(ms), first)
+             step == Step(m.mid, m.uid, m.key, m.op)
+         IN IF m.mid <= l \/ (m.mid > l + 1 /\ m.mid # first[m.client])
+            THEN IF at \in J THEN {} ELSE Process(data, cs, hist, nonce, gap \/ m.mid > l, Tail(ms), first, FALSE, at + 1, J)
+            ELSE IF at \notin J
+            THEN LET r == Exec(data, sSynced, m.key, m.op)
+                 IN Process(r.t, Append(cs, Entry(nonce, m.client, <<step>>, IF r.w THEN {m.key} ELSE {})), Append(hist, r.t), nonce + 1, gap,
+                            Tail(ms), first, TRUE, at + 1, J)
+            ELSE LET last == cs[Len(cs)]
+                     steps == Append(last.steps, step)
+                     run == ExecAll(HistAt(hist, Len(hist) - 1), sSynced, steps)
+                 IN IF /\ open /\ last.client = m.client /\ last.mid + 1 = m.mid
+                       /\ \A j \in 1..Len(steps) : steps[j].op = "inc"
+                       /\ run.ok
+                    THEN Process(run.t, [cs EXCEPT ![Len(cs)] = [last EXCEPT !.mid = m.mid, !.steps = steps, !.keys = run.keys]],
+                                 [hist EXCEPT ![Len(hist)] = run.t], nonce, gap, Tail(ms), first, TRUE, at + 1, J)
+                    ELSE {}
 
 \* ---------------------------------------------------------------- Reader
 \* Position: full (starts with full pull), f (round start, CNil for first round of full pull), h (watermark), at (scan key),
@@ -560,9 +589,9 @@ Record(r) ==
     /\ gapSeen' = (gapSeen \/ r.gap)
 
 \* Processes ms (all or prefix) from push batch m, commits, and notifies online devices; partial requires at least one executed write to ensure progress
-Handled(m, ms, partial) ==
-    LET r == Process(sData, sCommits, sHist, nextNonce, FALSE, ms, m.first)
-        base == HeadOf(sCommits)
+Handled(m, ms, partial, J) ==
+    \E r \in Process(sData, sCommits, sHist, nextNonce, FALSE, ms, m.first, FALSE, 1, J) :
+    LET base == HeadOf(sCommits)
         patch == [k \in UNION {r.cs[i].keys : i \in (Len(sCommits) + 1)..Len(r.cs)} |-> r.data[k]]
     IN /\ partial => Len(r.cs) > Len(sCommits)
        /\ Record(r)
@@ -575,20 +604,19 @@ Handled(m, ms, partial) ==
 \* Processes push batch; pushes on old connections discarded (including pre-PITR pushes); duplicates producing no new commits omit pokes (partitioned by device for per-device fairness).
 \* Storage error (disk full, IO error, unrelated to write validity): retains first n committed writes; uncommitted writes not processed without advancing mutation ID;
 \* n = all models error building poke. Closes pusher connection (reconnects with catch-up and repushes); sends hints to other connected devices if commits were recorded without pokes, prompting HTTP pull
-HandlePushOf(src, m) ==
+HandlePushOf(src, m, J) ==
     /\ m.type = "push" /\ m.from = src
     /\ IF m.conn \notin sConns
        THEN /\ net' = net \ {m}
             /\ UNCHANGED <<sData, sCommits, sHist, sLowHist, nonceOf, nextNonce, gapSeen, sConns, dups, errs>>
-       ELSE \/ Handled(m, m.muts, FALSE)
+       ELSE \/ Handled(m, m.muts, FALSE, J)
             \* Batch workload budget exceeded (writeRows in the protocol limits, accumulated row changes): processes prefix, stopping after executed write, pokes as usual without disconnect;
             \* device pushes remaining writes after confirmation (Push enabled anytime in model)
-            \/ \E n \in 1..(Len(m.muts) - 1) : Handled(m, SubSeq(m.muts, 1, n), TRUE)
+            \/ \E n \in 1..(Len(m.muts) - 1) : Handled(m, SubSeq(m.muts, 1, n), TRUE, J)
             \/ /\ errs < MaxStorageErrors
                /\ errs' = errs + 1
-               /\ \E n \in 0..Len(m.muts) :
-                     LET r == Process(sData, sCommits, sHist, nextNonce, FALSE, SubSeq(m.muts, 1, n), m.first)
-                         others == {e \in Devices : dConn[e] \in sConns \ {m.conn}}
+               /\ \E n \in 0..Len(m.muts) : \E r \in Process(sData, sCommits, sHist, nextNonce, FALSE, SubSeq(m.muts, 1, n), m.first, FALSE, 1, J) :
+                     LET others == {e \in Devices : dConn[e] \in sConns \ {m.conn}}
                          hinted == IF Len(r.cs) = Len(sCommits) THEN {}
                                    ELSE {[type |-> "hint", to |-> e, conn |-> dConn[e], cookie |-> HeadOf(r.cs)] : e \in others}
                      IN /\ Record(r)
@@ -597,7 +625,7 @@ HandlePushOf(src, m) ==
     /\ UNCHANGED <<sLow, sIn, sSince, devVars, dConn, nextConn,
                    muts, dels, crashes, deploys, restores, backups, drops, bwrites, returns, hints, chunks, truncs, corrupts, refetches,
                    bSnap, ghostVars>>
-HandlePush(src) == \E m \in net : HandlePushOf(src, m)
+HandlePush(src) == \E m \in {x \in net : x.type = "push"} : \E J \in SUBSET (2..Len(m.muts)) : HandlePushOf(src, m, J)
 
 \* Handles pull: without cursor opens new position (full pull if cookie is off current history); with cursor validates it (Valid), falling back to full pull if invalid.
 \* Emits final chunk (reads remaining rows, echoes cursor for device staging validation) or intermediate chunk (bounded by MaxChunks, sliced at arbitrary budget point):
@@ -693,7 +721,7 @@ Restore(k) ==
            entered == {t \in Tables : sIn[t] /\ ~inAt[t]}
            gone == {t \in Tables : ~sIn[t] /\ inAt[t]}
            since2 == [t \in Tables |-> IF t \in entered THEN k + 1 ELSE sinceAt[t]]
-           cut == {sCommits[i].uid : i \in (k + 1)..Len(sCommits)} \ {NoUid}
+           cut == UidsIn((k + 1)..Len(sCommits))
        IN /\ sData' = data /\ sLow' = lowAt
           /\ IF entered \cup gone = {}
              THEN /\ sCommits' = cs /\ sHist' = SubSeq(sHist, 1, k) /\ sLowHist' = SubSeq(sLowHist, 1, k)
@@ -729,7 +757,7 @@ BackendWrite(k, op) ==
     /\ bwrites' = bwrites + 1
     /\ dels' = IF op = "del" THEN dels + 1 ELSE dels
     /\ sData' = Run(sData, k, op).t
-    /\ RecordEntry(Entry(nextNonce, Backend, Lmid(sCommits, Backend) + 1, k, op, {k}, NoUid), sData')
+    /\ RecordEntry(Entry(nextNonce, Backend, <<Step(Lmid(sCommits, Backend) + 1, NoUid, k, op)>>, {k}), sData')
     \* Output gate: pokes are sent only after commits are persisted
     /\ net' = net \cup {Poke(d, dConn[d], HeadOf(sCommits), HeadOf(sCommits'),
                              LmidsSince(sCommits', Len(sCommits)), [j \in {k} |-> sData'[j]])
@@ -810,19 +838,24 @@ BaseOf(c) == IF c = CNil THEN DevInit ELSE nonceOf[c.n].t
 \* Expected device rows at cookie version: rows in synced tables at that version that remain synced (unsynced devices expect all rows, matching fresh install)
 VisOf(c) == (IF c = CNil THEN Keys ELSE nonceOf[c.n].vis) \cap sSynced
 
-\* P1: Mutation IDs for the same client in commit log are strictly monotonic without duplicates
+\* P1: Mutation IDs for the same client in commit log are strictly monotonic without duplicates; a commit's writes have contiguous IDs ending at its mid
 P1_AtMostOnceInOrder ==
-    \A i, j \in 1..Len(sCommits) :
-        (i < j /\ sCommits[i].client = sCommits[j].client) => sCommits[j].mid > sCommits[i].mid
+    /\ \A i, j \in 1..Len(sCommits) :
+          (i < j /\ sCommits[i].client = sCommits[j].client) => sCommits[j].steps[1].mid > sCommits[i].mid
+    /\ \A i \in 1..Len(sCommits) : \A j \in 1..Len(sCommits[i].steps) :
+          sCommits[i].steps[j].mid = sCommits[i].mid - Len(sCommits[i].steps) + j
 
-\* P2 (No lost writes): every device write that advanced mutation ID executed against previous cloud version: recorded touched keys when modifying rows;
-\*     unmodified tables occur only from business rejection, absent rows, or modifying non-synced tables (storage errors do not advance mutation ID).
+\* P2 (No lost writes): every device write that advanced mutation ID executed against previous cloud version, in order with the other writes of its commit:
+\*     recorded touched keys when modifying rows; unmodified tables occur only from business rejection, absent rows, or modifying non-synced tables
+\*     (storage errors do not advance mutation ID); a rejected write is never part of a run (each write held alone: in the model a write
+\*     that fails alone also fails in any run, see model-assumptions.md).
 \*     Compares synced tables only: non-synced rows may be modified directly on cloud without commits
 P2_NoLostWrite ==
     \A i \in 1..Len(sCommits) : sCommits[i].client # Backend =>
-        LET r == Exec(HistAt(sHist, i - 1), sCommits[i].syn, sCommits[i].key, sCommits[i].op)
+        LET r == ExecAll(HistAt(sHist, i - 1), sCommits[i].syn, sCommits[i].steps)
         IN /\ \A x \in sCommits[i].syn : sHist[i][x] = r.t[x]
-           /\ sCommits[i].keys = IF r.w THEN {sCommits[i].key} ELSE {}
+           /\ sCommits[i].keys = r.keys
+           /\ Len(sCommits[i].steps) > 1 => r.ok
 
 \* P3: Pushes never exhibit mutation ID gaps (future mutations that are not client's earliest pending write); gaps indicate implementation defects; cloud skips and logs them
 P3_NoGap == ~gapSeen
@@ -856,7 +889,7 @@ P7_AckedDropped ==
             \A i \in 1..Len(dPending[d]) : dPending[d][i].mid > Lmid(sCommits, dPending[d][i].client)
 
 \* Committed writes (on current history, including truncated commits); all writes ever originated by devices
-CommittedUids == {sCommits[i].uid : i \in 1..Len(sCommits)} \ {NoUid}
+CommittedUids == UidsIn(1..Len(sCommits))
 EverWritten == 1..(nextUid - 1)
 
 \* P8k (Pending writes preserved across recovery): every write originated by a device is either retained in pending writes of some device (or backup) or committed on current history;
@@ -864,7 +897,7 @@ EverWritten == 1..(nextUid - 1)
 P8k_PendingKept == \A u \in EverWritten : u \in PendingAnywhere \cup CommittedUids \cup rolled \cup lostByBackup
 
 \* P8r (Rolled-back writes do not revive): a write rolled back by restore appears in commit log again only if retained in pending writes of some device (or backup) at restore time and replayed/pushed afterwards
-P8r_NoRevival == \A i \in 1..Len(sCommits) : sCommits[i].uid \notin forbidden
+P8r_NoRevival == CommittedUids \cap forbidden = {}
 
 \* P8a: Incremental delivery (pokes, incremental final chunks) sent only to devices with cookies on current cloud history (prevents silent forks after server restore)
 P8a_IncrementalOnHistory ==
@@ -877,7 +910,8 @@ P10_ScopeOnly ==
 
 \* P11: Each client write appears at most once in commit log (including truncated commits), even across PITR, backup restore, and cloning
 P11_ExecutedOnce ==
-    \A i, j \in 1..Len(sCommits) : (i < j /\ sCommits[i].uid # NoUid) => sCommits[i].uid # sCommits[j].uid
+    \A i, j \in 1..Len(sCommits) : \A a \in 1..Len(sCommits[i].steps), b \in 1..Len(sCommits[j].steps) :
+        (<<i, a>> # <<j, b>> /\ sCommits[i].steps[a].uid # NoUid) => sCommits[i].steps[a].uid # sCommits[j].steps[b].uid
 
 \* P9: After faults cease, all devices eventually have empty pending queues and converge with cloud synced tables
 P9_Converges == <>[](\A d \in Devices : dPending[d] = <<>> /\ \A k \in sSynced : dTables[d][k] = sData[k])

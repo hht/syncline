@@ -77,6 +77,12 @@ export type OpenOptions<S extends Schema = Schema> = {
   readOnly?: SQLiteTable[];
   /** Maximum number of rows verified daily by online checksums (default 1,000,000). */
   checksumRowsPerDay?: number;
+  /**
+   * Milliseconds a local write waits before it uploads, so writes made meanwhile upload together and are billed as one (a positive
+   * integer of at most 2^31 - 1, or openSyncline throws). Later writes do not extend the wait, and `sync()` and `resync()` upload at once.
+   * Unset: writes upload at once.
+   */
+  uploadDelay?: number;
 };
 
 const channelOf = (channel: Channel) => ({

@@ -54,6 +54,23 @@ test('open carries the user ID, discardPending, and checksum budget given to ope
     ).toThrow('userID must be a non-empty string');
 });
 
+test('connect carries the upload delay given to openSyncline, and nothing without one', async () => {
+  await openedWith({ uploadDelay: 800 });
+  await flush();
+  expect(worker().last('connect').call).toMatchObject({ channel: '', uploadDelay: 800 });
+  await openedWith();
+  await flush();
+  expect(worker().last('connect').call).not.toHaveProperty('uploadDelay');
+});
+
+test.for([0, 1.5, -1, 2 ** 31, Number.NaN, Number.POSITIVE_INFINITY])(
+  'openSyncline throws for uploadDelay %d: a positive integer of at most 2^31 - 1 milliseconds',
+  (uploadDelay) => {
+    const options = { name: 'web-test', schema: { note }, url: 'https://sync.test/space', token: async () => 'valid', userID: 'u1' };
+    expect(() => openSyncline({ ...options, uploadDelay })).toThrow('uploadDelay must be a positive integer');
+  },
+);
+
 test('openSyncline refuses autoIncrement on a synced table and on a shared space table, and carries a local-only table using it', async () => {
   const counted = sqliteTable('counted', { id: integer().primaryKey({ autoIncrement: true }) });
   await expect(openedWith({ schema: { counted } })).rejects.toThrow('Column counted.id is autoIncrement');

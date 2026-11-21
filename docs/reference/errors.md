@@ -120,6 +120,8 @@ Some errors take a mistake or an unusual release sequence, so most apps never me
 
 A pushed write that fails to run is held, not dropped. The device keeps syncing.
 
+Consecutive writes uploaded together run as one and are checked on their final rows. A write that breaks a rule on its own, such as one pointing at a row a later write creates, is then not held. If the final rows break a rule, each write runs on its own and only the failing ones are held.
+
 In a method of your `SynclineSpace`:
 
 1. List held writes with `held()`. Each has its `reason` and the original `changes`.

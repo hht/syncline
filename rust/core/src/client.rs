@@ -144,8 +144,9 @@ impl Client {
                 channel,
                 url,
                 allow_cleartext,
+                upload_delay,
             } => {
-                let connected = self.connect(&channel, &url, allow_cleartext, jobs, now);
+                let connected = self.connect(&channel, &url, allow_cleartext, upload_delay, jobs, now);
                 self.reply(id, connected.map(|()| Json::Null));
             }
             Input::Shared { id, name, tables, owner } => {
@@ -214,9 +215,9 @@ impl Client {
         if effects.shrink {
             self.out.schedule(Timer::Resume(Work::Shrink), 0.0);
         }
-        if effects.wrote {
+        if let Some(written) = effects.wrote {
             let mut jobs = Vec::new();
-            self.with("", &mut jobs, now, Connection::wrote);
+            self.with("", &mut jobs, now, |connection, ctx| connection.wrote(ctx, written));
             self.enqueue_jobs(jobs);
         }
     }

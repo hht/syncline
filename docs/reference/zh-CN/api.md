@@ -59,6 +59,7 @@ iOS、Android 和 Web 共用这个入口和它的选项。在 iOS 和 Android �
 | `discardPending` | `boolean` | `userID` 改变时丢弃上一个用户待上传的写入。见[切换用户](#切换用户)。 |
 | `allowCleartext` | `boolean` | 私有空间和共享空间接受 `http://` 地址。token 和行以明文传输：只在本地开发时使用，比如连接 `wrangler dev`。 |
 | `checksumRowsPerDay` | `number` | 每日[数据校验](limits.md#数据校验)最多校验的行数，默认 1,000,000。云端会读取这些行，读取计费。 |
+| `uploadDelay` | `number` | 一次写入等待多少毫秒后再上传，期间的写入会一起上传，通常[按一次写入计费](limits.md#需要知道的事)。之后的写入不会延长等待，`sync()` 和 `resync()` 会立即上传。其他设备最多晚这么久看到写入，应用被挂起时还会更晚。必须是不超过 2147483647 的正整数，否则 `openSyncline` 会抛错。 |
 
 </details>
 
@@ -320,7 +321,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 | 选项 | 类型 | 说明 |
 |---|---|---|
 | `cloud` | `{ tableName: drizzleTable }` | 同步表在云端的定义，可以添加只在云端的列，以及只有云端才有的表。见[云端表](#云端表)。 |
-| `validation` | `Map<drizzleTable, StandardSchema>` | 与设备上相同。云端用它检查上传的写入和服务端写入。schema 必须同步给出结果。 |
+| `validation` | `Map<drizzleTable, StandardSchema>` | 与设备上相同。云端用它检查上传的写入和服务端写入；一起上传的写入按最终的行检查（见[被暂扣的写入](errors.md#被暂扣的写入)）。schema 必须同步给出结果。 |
 | `readOnly` | `drizzleTable[]` | 只有服务端写入才能改变的同步表。在设备上传同一个列表。见[只读表](#只读表)。 |
 | `retired` | `string[]` | 永久移出同步的表和列（`'table.column'`）。在设备上传同一个列表。已退役的名字永远不能再声明。 |
 | `onEvent` | `(event: SynclineEvent) => void` | 云端事件发生时调用，用于日志和告警。见[事件](errors.md#事件)。 |
