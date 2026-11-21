@@ -14,10 +14,11 @@ import { cloudStorage } from '../support/test-storage.ts';
 const note = sqliteTable('note', { id: text().primaryKey() });
 const createNote = 'CREATE TABLE note (id TEXT PRIMARY KEY)';
 
-const put = (id: number, ...rows: string[]): Mutation => ({
-  client: 'c1',
-  id,
-  changes: (rows.length > 0 ? rows : [`n${id}`]).map((row) => ({ op: 'put', table: 'note', row: { id: row } })),
+// Each write comes from its own client, so no two join one run (one commit; a run stops before the rows left, a case of its own).
+const put = (n: number, ...rows: string[]): Mutation => ({
+  client: `c${n}`,
+  id: 1,
+  changes: (rows.length > 0 ? rows : [`n${n}`]).map((row) => ({ op: 'put', table: 'note', row: { id: row } })),
 });
 
 /** Returns concatenated note IDs ordered by primary key. */
@@ -28,9 +29,9 @@ test('push batch reaching workload cap: stops after the cap-reaching write, conf
   const cloud = cloudStorage(createNote);
   const space = new Space(cloud, [note], { pushRows: 4 });
   const poke = space.push([put(1), put(2, 'n2', 'm2'), put(3), put(4)]);
-  expect(poke?.lmids).toEqual({ c1: 2 });
+  expect(poke?.lmids).toEqual({ c1: 1, c2: 1 });
   expect(notes(cloud)).toBe('m2,n1,n2');
-  expect(space.push([put(3), put(4)])?.lmids).toEqual({ c1: 4 });
+  expect(space.push([put(3), put(4)])?.lmids).toEqual({ c3: 1, c4: 1 });
   expect(notes(cloud)).toBe('m2,n1,n2,n3,n4');
 });
 

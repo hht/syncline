@@ -140,13 +140,15 @@ export class Space {
    * Executes a batch of pushed client mutations sequentially.
    *
    * Skips already-processed mutation IDs; executes mutation IDs matching lmid + 1.
+   * Consecutive put and patch writes of one client with contiguous IDs commit as one write (a run, see PushedWrites.execute).
    * If mutation ID is greater than lmid + 1 and marked first (earliest pending write on that client after PITR rolled back confirmed writes),
    * advances lmid across the gap and executes within the same transaction (Process in TLA+ models).
    * Permanent client mutation identity (client, id) is preserved without renumbering.
    * Other gaps (missing prior writes without first) are skipped and emit write.skipped.
    * Non-executable writes and malformed mutations are held and advance lmid.
    * Transient storage errors (isTransient) throw without advancing lmid for the failing write, preserving earlier committed writes.
-   * Workload accumulates billed row writes up to pushRows, stopping after the cap-reaching write while the client pushes remainder (HandlePush in TLA+ models).
+   * Workload accumulates billed row writes up to pushRows, stopping after the cap-reaching write or run while the client pushes remainder (HandlePush in TLA+ models);
+   * a run changes at most the rows left.
    * Returns poke notice for online devices confirming executed writes, or Oversized if JSON payload exceeds limit.
    * @see https://doc.replicache.dev/reference/server-push
    * @see https://github.com/cloudflare/workerd/blob/v1.20260930.2/src/workerd/util/sqlite.c%2B%2B
@@ -163,7 +165,8 @@ export class Space {
     const known = new Map<string, number>();
     const executed = new Map<string, number>();
     const start = this.#daily.written;
-    for (const mutation of mutations) {
+    for (let at = 0; at < mutations.length; at += 1) {
+      const mutation = mutations[at] as Pushed;
       const { client, id, first } = mutation;
       const lmid = known.get(client) ?? this.#log.lmid(client);
       known.set(client, lmid);
@@ -172,9 +175,11 @@ export class Space {
         this.#events({ type: 'write.skipped', client, id, lmid });
         continue;
       }
-      head = this.#writes.execute(mutation, written);
-      known.set(client, id);
-      executed.set(client, id);
+      const step = this.#writes.execute(mutations, at, this.#pushRows - (this.#daily.written - start), written);
+      head = step.head;
+      at += step.decided - 1;
+      known.set(client, id + step.decided - 1);
+      executed.set(client, id + step.decided - 1);
       if (this.#daily.written - start >= this.#pushRows) break;
     }
     if (executed.size === 0) return undefined;

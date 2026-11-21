@@ -1,5 +1,8 @@
 import { Server } from '../../src/cloud/server.ts';
+import type { Oversized } from '../../src/cloud/space.ts';
+import type { Poke } from '../../src/protocol/messages.ts';
 import { socketLimit } from '../../src/protocol/messages.ts';
+import type { Pushed } from '../../src/protocol/parse.ts';
 import { protocolVersion } from '../../src/protocol/version.ts';
 import type { Storage } from '../../src/sqlite/storage.ts';
 import { Seams } from './test-bounds.ts';
@@ -40,6 +43,23 @@ export function seams(storage: (device: number) => Storage) {
     pushRows,
     pending: (device) => new Set(pending(device)),
   });
+}
+
+/** Space recording the writes each push decides (recordDecisions), handing joined the positions of writes that joined a run, also after a fault. */
+class DecidingSpace extends Space {
+  decisions: ReturnType<typeof recordDecisions> | undefined;
+  joined: (positions: number[]) => void = () => undefined;
+
+  override push(mutations: Pushed[]): Poke | undefined;
+  override push(mutations: Pushed[], limit: number): Poke | Oversized | undefined;
+  override push(mutations: Pushed[], limit = Number.POSITIVE_INFINITY): Poke | Oversized | undefined {
+    this.decisions?.batch(mutations);
+    try {
+      return super.push(mutations, limit);
+    } finally {
+      this.joined(this.decisions?.joined() ?? []);
+    }
+  }
 }
 
 export class SimulatedCloud {
@@ -96,8 +116,10 @@ export class SimulatedCloud {
     };
     const sql = { exec, databaseSize: 0 };
     const [tables, options] = this.#releases.deployed();
-    const space = new Space({ ...cloud, sql }, tables, { ...options, commitFloor, pushRows });
-    recordDecisions(cloud);
+    const space = new DecidingSpace({ ...cloud, sql }, tables, { ...options, commitFloor, pushRows });
+    // Unmetered storage: recording the batch is no work of the push.
+    space.decisions = recordDecisions(cloud);
+    space.joined = (positions) => this.#tracer?.joined(positions);
     return [space, new Server(this.#network.sockets(), space, chunkLimit)] as const;
   }
 

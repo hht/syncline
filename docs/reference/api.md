@@ -318,7 +318,7 @@ The Durable Object class of private spaces: one object per user. Extend it and c
 | Option | Type | Description |
 |---|---|---|
 | `cloud` | `{ tableName: drizzleTable }` | Cloud-side definitions of synced tables, which can add cloud-only columns, and tables only the cloud has. See [Cloud tables](#cloud-tables). |
-| `validation` | `Map<drizzleTable, StandardSchema>` | As on devices. The cloud checks uploaded writes and server writes with it. A schema must answer synchronously. |
+| `validation` | `Map<drizzleTable, StandardSchema>` | As on devices. The cloud checks uploaded writes and server writes with it; writes uploaded together are checked on their final rows (see [Held writes](errors.md#held-writes)). A schema must answer synchronously. |
 | `readOnly` | `drizzleTable[]` | Synced tables only server writes change. Pass the same list on devices. See [Read-only tables](#read-only-tables). |
 | `retired` | `string[]` | Tables and columns (`'table.column'`) removed from sync for good. Pass the same list on devices. A retired name can never be declared again. |
 | `onEvent` | `(event: SynclineEvent) => void` | Called for cloud events, for logs and alerts. See [Events](errors.md#events). |

@@ -83,7 +83,7 @@ For scale: inserting 10,000 rows into one bucket of a shared space took about 2 
 
 Two optional limits protect a private space from runaway uploads:
 
-- `writeQuota` refills `rate` rows per second, up to `burst` rows.
+- `writeQuota` refills `rate` rows per second, up to `burst` rows. It counts the rows each uploaded write changes, before consecutive writes are billed as one.
 - `dailyWrites` caps the billed row writes of uploads per UTC day. Indexes and the change log count; server writes don't.
 
 Past either one, the cloud closes the connection with 1013. The device retries later, and `uploadError` is set.
@@ -94,7 +94,7 @@ A private space accepts 32 concurrent connections (`connections`). A new connect
 
 ### Held writes
 
-The cloud holds a pushed write it cannot run, for example one breaking a rule above. The app hears about it through `onHeld`. Resubmit or discard it in the cloud with `resubmit`.
+The cloud holds a pushed write it cannot run, for example one breaking a rule above. The app hears about it through `onHeld`. Resubmit or discard it in the cloud with `resubmit`. Writes uploaded together that fail as one run again one at a time, which is billed for both tries.
 
 ## Downloads
 
@@ -149,7 +149,7 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 - **Signing out.** Opening the database for another `userID` clears the previous user's data. It fails with `PendingWritesError` instead if that user still has writes to upload.
 - **App triggers.** Triggers on synced tables fire again whenever the device undoes and redoes your pending writes. A trigger that raises an error [can block downloads](edge-cases.md#a-trigger-that-raises-an-error-can-block-downloads).
 - **Many pending writes.** The device undoes and redoes every pending write each time a change arrives in the private space and each time the database opens; reads and writes wait meanwhile. With thousands of one-row writes pending, each time takes tenths of a second. One `write` of many rows is redone faster than many writes of one row each.
-- **Billed rows.** An uploaded write is billed 2 row writes besides the rows it changes, index rows included. One `write` of 100 rows costs 102; 100 writes of one row each cost 300.
+- **Billed rows.** An uploaded write is billed 2 row writes besides the rows it changes, index rows included. One `write` of 100 rows costs 102. Consecutive writes uploaded together are usually billed as one write that changes each row once; a write that deletes rows is always billed on its own: 100 writes of one row each cost 102, and 100 writes to the same row cost 3. Uploaded one at a time, 100 writes of one row each cost 300. Writes made while an earlier upload waits for the cloud upload together, a large backlog in several uploads billed this way each.
 - **Foreign keys on your own tables.** SQLite does not enforce them. A synced row your table points at can be deleted.
 - **Changing tokens.** Call `reconnect()` when a user's permissions change. In shared spaces, live updates follow the old access until the device's next download, at the latest a minute after the old token expires; downloads check the token every time.
 - **Web.** Only one browser tab per site [can open the database](errors.md#the-web-app-works-in-one-tab-only). A site keeps at most 5 databases: opening another fails until `delete()` removes one.

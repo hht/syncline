@@ -17,15 +17,39 @@ export const lmids = (storage: Storage) =>
   );
 
 /**
- * Records every decided client mutation on the cloud (committed or held): a trigger on _syncline_client logs client, id,
- * and target version in the same transaction; rolls back with PITR, survives log truncation.
- * Note: trigger writes count toward billed rowsWritten.
+ * Records every decided client mutation on the cloud (committed or held): a trigger on _syncline_client logs, in the same transaction,
+ * each mutation of the push batch whose ID is past the client's old lmid and at most its new one, with the target version. A run
+ * decides several mutations in one commit; IDs a jump skips are not in the batch. Rolls back with PITR, survives log truncation.
+ * Call batch with each push batch before the push runs: it stores the batch in test_batch. After the push, joined lists the 1-based
+ * positions in it of writes decided since by the same commit as the write before them, which joined that write's run (J in TracePrivate.tla).
+ * A mutation counts as decided once lmid passes it, whatever the run did with its changes; P5 and convergence check those.
+ * Note: trigger writes count toward billed rowsWritten, so the simulation reaches pushRows a little earlier than production.
  */
 export function recordDecisions(storage: Storage) {
-  const record = 'INSERT INTO test_decided SELECT new.client, new.lmid, (SELECT max(version) + 1 FROM _syncline_commit)';
+  const record = (from: string) =>
+    `INSERT INTO test_decided SELECT client, id, (SELECT max(version) + 1 FROM _syncline_commit) FROM test_batch WHERE client = new.client AND id > ${from} AND id <= new.lmid`;
   storage.sql.exec('CREATE TABLE IF NOT EXISTS test_decided (client TEXT NOT NULL, id INTEGER NOT NULL, version INTEGER NOT NULL)');
-  storage.sql.exec(`CREATE TRIGGER IF NOT EXISTS test_decided_insert AFTER INSERT ON _syncline_client BEGIN ${record}; END`);
-  storage.sql.exec(`CREATE TRIGGER IF NOT EXISTS test_decided_update AFTER UPDATE ON _syncline_client BEGIN ${record}; END`);
+  storage.sql.exec('CREATE TABLE IF NOT EXISTS test_batch (client TEXT NOT NULL, id INTEGER NOT NULL, at INTEGER NOT NULL)');
+  storage.sql.exec(`CREATE TRIGGER IF NOT EXISTS test_decided_insert AFTER INSERT ON _syncline_client BEGIN ${record('0')}; END`);
+  storage.sql.exec(`CREATE TRIGGER IF NOT EXISTS test_decided_update AFTER UPDATE ON _syncline_client BEGIN ${record('old.lmid')}; END`);
+  // Decisions before the batch: a write in it the cloud already decided is skipped, never joining
+  let from = 0;
+  return {
+    batch(batch: { client: string; id: number }[]) {
+      storage.sql.exec('DELETE FROM test_batch');
+      for (const [at, { client, id }] of batch.entries()) storage.sql.exec('INSERT INTO test_batch VALUES (?, ?, ?)', client, id, at + 1);
+      from = Number(storage.sql.exec('SELECT coalesce(max(rowid), 0) AS last FROM test_decided').toArray()[0]?.last);
+    },
+    joined: () =>
+      storage.sql
+        .exec(
+          `WITH decided AS (SELECT b.at, d.version FROM test_batch b JOIN test_decided d USING (client, id) WHERE d.rowid > ?)
+           SELECT this.at FROM decided this JOIN decided before ON before.at = this.at - 1 AND before.version = this.version ORDER BY this.at`,
+          from,
+        )
+        .toArray()
+        .map(({ at }) => Number(at)),
+  };
 }
 
 /** Total decided client mutations (held mutations also record a commit entry). */

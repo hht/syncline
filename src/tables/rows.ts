@@ -150,16 +150,28 @@ export class Rows {
     if (stored) changed(change.table, keyOf(key, stored));
   }
 
+  // Synced table a row writes to, or why write rejects the row: table not synced, column not declared, or primary key column missing.
+  #known(table: string, row: Record<string, Value>) {
+    const known = this.#tables.get(table);
+    if (!known) return `Modified table is not a synced table: ${table}`;
+    const unknown = Object.keys(row).find((column) => !known.columns.has(column));
+    if (unknown !== undefined) return `Modified column is not declared on table ${table}: ${unknown}`;
+    const missing = known.key.find((column) => row[column] === undefined || row[column] === null);
+    if (missing !== undefined) return `Table ${table} is missing primary key column ${missing}`;
+    return known;
+  }
+
   // Validates that table is synced, columns belong to table, and primary keys are present.
   #table(table: string, row: Record<string, Value>) {
-    const known = this.#tables.get(table);
-    if (!known) throw new Reject(`Modified table is not a synced table: ${table}`);
-    const columns = Object.keys(row);
-    const unknown = columns.find((column) => !known.columns.has(column));
-    if (unknown !== undefined) throw new Reject(`Modified column is not declared on table ${table}: ${unknown}`);
-    const missing = known.key.find((column) => row[column] === undefined || row[column] === null);
-    if (missing !== undefined) throw new Reject(`Table ${table} is missing primary key column ${missing}`);
-    return { key: known.key, columns };
+    const known = this.#known(table, row);
+    if (typeof known === 'string') throw new Reject(known);
+    return { key: known.key, columns: Object.keys(row) };
+  }
+
+  /** Primary key of a put or patch row, or undefined if write would reject the row before running it. */
+  keyIn(table: string, row: Record<string, Value>) {
+    const known = this.#known(table, row);
+    return typeof known === 'string' ? undefined : keyOf(known.key, row);
   }
 
   // Validates delete operations to ensure only primary key columns are provided.

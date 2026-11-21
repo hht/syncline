@@ -320,7 +320,7 @@ Metro 第一次启动时，会下载已安装版本的 Web WebAssembly 二进制
 | 选项 | 类型 | 说明 |
 |---|---|---|
 | `cloud` | `{ tableName: drizzleTable }` | 同步表在云端的定义，可以添加只在云端的列，以及只有云端才有的表。见[云端表](#云端表)。 |
-| `validation` | `Map<drizzleTable, StandardSchema>` | 与设备上相同。云端用它检查上传的写入和服务端写入。schema 必须同步给出结果。 |
+| `validation` | `Map<drizzleTable, StandardSchema>` | 与设备上相同。云端用它检查上传的写入和服务端写入；一起上传的写入按最终的行检查（见[被暂扣的写入](errors.md#被暂扣的写入)）。schema 必须同步给出结果。 |
 | `readOnly` | `drizzleTable[]` | 只有服务端写入才能改变的同步表。在设备上传同一个列表。见[只读表](#只读表)。 |
 | `retired` | `string[]` | 永久移出同步的表和列（`'table.column'`）。在设备上传同一个列表。已退役的名字永远不能再声明。 |
 | `onEvent` | `(event: SynclineEvent) => void` | 云端事件发生时调用，用于日志和告警。见[事件](errors.md#事件)。 |
