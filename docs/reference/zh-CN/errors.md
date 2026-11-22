@@ -57,7 +57,7 @@ Syncline 会自行从网络和云端故障中恢复，待上传的写入会一�
 `write()` 被拒绝，什么都不会保存。原因：
 
 - `ValidationError`：某个值违反它的列声明（非空、枚举、长度、JSON、布尔值不是 0 或 1、实数列里的 Infinity）或你的 `validation` schema，或主键太长。`issues` 列出字段和原因。
-- 某个值是它的列存不下的，比如整数列里不是数字的文本，或者小数。SQLite 会用它自己的错误拒绝，而不是 `ValidationError`。
+- 某个值是它的列存不下的，比如整数列里不是数字的文本，或者小数。SQLite 会拒绝它，Drizzle 抛出 `DrizzleQueryError`，SQLite 自己的错误在它的 `cause` 里，而不是 `ValidationError`。
 - [值](limits.md#值)或[写入](limits.md#大小)超出了限制，比如无效文本、NaN，或行数过多。
 - 某行通过外键引用了不存在的行。
 - 写入了 `readOnly` 表。

@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { expect, test } from 'vitest';
 import { remoteDatabase } from '../../src/expo/remote-database.ts';
+import type { Database } from '../../src/expo/syncline.ts';
 import { Device } from '../support/test-device.ts';
 import { deviceStorage } from '../support/test-storage.ts';
 
@@ -236,4 +237,51 @@ test('a Drizzle get in a local write returns the first matching row, or undefine
     return [await db.select().from(note).orderBy(note.id).get(), await db.select().from(note).where(eq(note.id, 'n9')).get()];
   });
   expect(found).toEqual([{ id: 'n1', body: 'first' }, undefined]);
+});
+
+test('raw SQL in a local write reads rows as arrays, and reading them as objects throws an error naming the array forms', async () => {
+  const { device } = opened();
+  const read = await device.write(async (execute) => {
+    const db = remoteDatabase(execute);
+    await db.insert(note).values({ id: 'n1', body: 'first' });
+    return [await db.values(sql`SELECT id, body FROM note`), await db.all(sql`SELECT id FROM note`, 'arrays')];
+  });
+  expect(read).toEqual([[['n1', 'first']], [['n1']]]);
+  // Drizzle wraps what the adapter throws in DrizzleQueryError, as any statement error
+  const query = sql`SELECT id FROM note`;
+  for (const read of [(db: Database) => db.all(query), (db: Database) => db.get(query)]) {
+    const error = await device.write(async (execute) => read(remoteDatabase(execute))).catch((caught: unknown) => caught);
+    expect((error as Error).cause).toEqual(
+      expect.objectContaining({
+        message:
+          "Rows read as objects are not supported on devices: use db.values(query) or db.all(query, 'arrays') for raw SQL, or the query builder",
+      }),
+    );
+  }
+});
+
+test('Drizzle reads on a device decode boolean, timestamp, and JSON columns into the values written', async () => {
+  const kinds = sqliteTable('kinds', {
+    id: text().primaryKey(),
+    done: integer({ mode: 'boolean' }),
+    at: integer({ mode: 'timestamp_ms' }),
+    day: integer({ mode: 'timestamp' }),
+    data: text({ mode: 'json' }),
+  });
+  const storage = deviceStorage('CREATE TABLE kinds (id TEXT PRIMARY KEY, done INTEGER, at INTEGER, day INTEGER, data TEXT)');
+  const device = new Device(storage, [kinds]);
+  const row = { id: 'k1', done: true, at: new Date(1_700_000_000_123), day: new Date(1_700_000_000_000), data: { a: [1] } };
+  const read = await device.write(async (execute) => {
+    const db = remoteDatabase(execute);
+    await db.insert(kinds).values(row);
+    return [
+      await db.select().from(kinds),
+      await db
+        .insert(kinds)
+        .values({ ...row, id: 'k2' })
+        .returning()
+        .get(),
+    ];
+  });
+  expect(read).toEqual([[row], { ...row, id: 'k2' }]);
 });

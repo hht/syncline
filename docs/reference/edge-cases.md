@@ -16,11 +16,11 @@ A table or column named like a property every JavaScript object has, such as `co
 
 ### BigInt values throw the engine's own error
 
-BigInt values are refused. A query or write given one throws an error of the engine's own, not `ValidationError`.
+BigInt values are refused. A query or write given one throws `DrizzleQueryError` with an error of the engine's own as its `cause`, not `ValidationError`.
 
 ### An integer too large for SQLite can fail a server write with the engine's own error
 
-A server write refuses an integer outside the range under [Values](limits.md#values) with `ValidationError`. In a STRICT table, one too large for SQLite to store as an integer fails first with an error of the engine's own instead. Syncline creates every table STRICT unless a column has a type STRICT tables do not take, such as a cloud-only `numeric()` column.
+A server write refuses an integer outside the range under [Values](limits.md#values) with `ValidationError`. In a STRICT table, one too large for SQLite to store as an integer fails first instead, throwing `DrizzleQueryError` with an error of the engine's own as its `cause`. Syncline creates every table STRICT unless a column has a type STRICT tables do not take, such as a cloud-only `numeric()` column.
 
 ### Negative zero is stored as zero
 

@@ -45,7 +45,7 @@ allowBuilds:
 然后从 GitHub 安装最新发布的版本，以及与它配套的 Drizzle 和 TanStack Query 版本：
 
 ```sh
-pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.4 @tanstack/react-query@5
+pnpm add "github:hht/syncline#semver:*" drizzle-orm@1.0.0-rc.6 @tanstack/react-query@5
 ```
 
 保留引号，让 shell 原样传递 `*`。要固定到某个[版本](https://github.com/hht/syncline/releases)，把 `#semver:*` 换成 `#v<version>`。`drizzle-orm` 必须正好是上面的版本。

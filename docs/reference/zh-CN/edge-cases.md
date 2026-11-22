@@ -18,11 +18,11 @@
 
 ### BigInt 值抛出的是引擎自己的错误
 
-BigInt 值会被拒绝。查询或写入传入 BigInt 时，抛出的是引擎自己的错误，而不是 `ValidationError`。
+BigInt 值会被拒绝。查询或写入传入 BigInt 时，抛出的是 `DrizzleQueryError`，引擎自己的错误在它的 `cause` 里，而不是 `ValidationError`。
 
 ### SQLite 存不下的整数可能让服务端写入抛出引擎自己的错误
 
-服务端写入超出[值](limits.md#值)一节所说范围的整数时抛出 `ValidationError`。但在 STRICT 表中，大到 SQLite 无法存成整数的值会先失败，改为抛出引擎自己的错误。除非某一列的类型 STRICT 表不接受（比如只在云端的 `numeric()` 列），Syncline 建的表都是 STRICT 表。
+服务端写入超出[值](limits.md#值)一节所说范围的整数时抛出 `ValidationError`。但在 STRICT 表中，大到 SQLite 无法存成整数的值会先失败，改为抛出 `DrizzleQueryError`，引擎自己的错误在它的 `cause` 里。除非某一列的类型 STRICT 表不接受（比如只在云端的 `numeric()` 列），Syncline 建的表都是 STRICT 表。
 
 ### 负零存成零
 
