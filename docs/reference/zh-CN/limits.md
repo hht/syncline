@@ -59,7 +59,7 @@
 - 数字必须是有限值。NaN 会被拒绝，无效的 `Date` 会变成 NaN，同样被拒绝。查询参数传入 NaN 也会抛错。
 - 整数列的值必须在 ±9,007,199,254,740,991 之内，这是 JavaScript 数字能精确表示的范围。
 
-本地写入违反规则时会抛错并整体回滚。服务端写入违反文本或数字规则时抛出 `ValidationError`；但以 SQL 表达式给出或由 `$defaultFn` 填充的文本和 NaN 不会被检查，[SQLite 存不下的整数](edge-cases.md#sqlite-存不下的整数可能让服务端写入抛出引擎自己的错误)可能抛出引擎自己的错误。
+本地写入违反规则时会抛错并整体回滚。服务端写入违反文本或数字规则时抛出 `ValidationError`；但以 SQL 表达式给出或由 `$defaultFn` 填充的文本和 NaN 不会被检查，[SQLite 存不下的整数](edge-cases.md#sqlite-存不下的整数可能让服务端写入抛出引擎自己的错误)可能抛出 `DrizzleQueryError`，引擎自己的错误在它的 `cause` 里。
 
 ## 写入
 
@@ -165,4 +165,4 @@
 - **Expo**：`expo` ~58.0.14。
 - **React**：`syncline/react` 需要 `react` ^19.3.0 和 `@tanstack/react-query` ^5.104.0。
 - **后台同步**：`syncline/expo/background` 需要 `expo-background-task` ~58.0.11 和 `expo-task-manager` ~58.0.12。
-- **Drizzle**：`drizzle-orm` 1.0.0-rc.4。
+- **Drizzle**：`drizzle-orm` 1.0.0-rc.6。

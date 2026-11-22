@@ -106,7 +106,7 @@ The object `openSyncline` returns.
 | Member | Description |
 |---|---|
 | `name` | The database name. |
-| `db` | Drizzle database for reads. It cannot write: use `write`. |
+| `db` | Drizzle database for reads. It cannot write: use `write`. Raw SQL reads rows as arrays, through `db.values(query)` or `db.all(query, 'arrays')`; reading them as objects throws, and relational `db.query` is not available. The same holds for `tx`. |
 | [`write(body)`](#writebody) | Runs a local write in a transaction. |
 | `onChange(listener)` | Calls `listener` after synced or local-only tables change, with their names (`ReadonlySet<string>`). Returns a function that removes the listener. |
 | `tablesOf(sql)` | Resolves to the names of the tables a query reads, without running it. |

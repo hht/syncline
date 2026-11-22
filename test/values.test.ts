@@ -111,7 +111,9 @@ test('NaN and invalid dates are refused: a device write throws and stores nothin
     { id: 'n2', count: Number.NaN },
     { id: 'n3', at: new Date(Number.NaN) },
   ]) {
-    expect(await failure(() => write(phone.device, (tx) => tx.insert(item).values(asInsert(row))))).toMatch(/NaN/);
+    // Drizzle wraps what a device statement throws in DrizzleQueryError
+    const refused = await write(phone.device, (tx) => tx.insert(item).values(asInsert(row))).catch((caught: unknown) => caught);
+    expect((refused as Error).cause).toEqual(expect.objectContaining({ message: expect.stringMatching(/NaN/) }));
     expect(await failure(() => space.mutate((tx) => tx.insert(item, asInsert(row))))).toMatch(/NaN/);
   }
   holds([phone.storage, cloud], item, []);

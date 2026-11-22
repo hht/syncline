@@ -57,7 +57,7 @@ Breaking a rule throws when the app opens the database.
 - Numbers must be finite. NaN is refused, and so is an invalid `Date`, which becomes NaN. A query given a NaN parameter throws too.
 - Integer columns hold values within ±9,007,199,254,740,991, the range JavaScript numbers hold exactly.
 
-A local write breaking a rule throws and rolls back. A server write breaking a text or number rule throws `ValidationError`, except that text and NaN given as SQL expressions or filled in by `$defaultFn` are not checked, and that [an integer too large for SQLite](edge-cases.md#an-integer-too-large-for-sqlite-can-fail-a-server-write-with-the-engines-own-error) can fail with the engine's own error.
+A local write breaking a rule throws and rolls back. A server write breaking a text or number rule throws `ValidationError`, except that text and NaN given as SQL expressions or filled in by `$defaultFn` are not checked, and that [an integer too large for SQLite](edge-cases.md#an-integer-too-large-for-sqlite-can-fail-a-server-write-with-the-engines-own-error) can fail with the engine's own error, as the `cause` of `DrizzleQueryError`.
 
 ## Writes
 
@@ -163,4 +163,4 @@ Shared spaces are not checked. To download one again, call its `resync()`.
 - **Expo:** `expo` ~58.0.14.
 - **React:** `syncline/react` needs `react` ^19.3.0 and `@tanstack/react-query` ^5.104.0.
 - **Background sync:** `syncline/expo/background` needs `expo-background-task` ~58.0.11 and `expo-task-manager` ~58.0.12.
-- **Drizzle:** `drizzle-orm` 1.0.0-rc.4.
+- **Drizzle:** `drizzle-orm` 1.0.0-rc.6.

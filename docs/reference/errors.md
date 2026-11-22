@@ -55,7 +55,7 @@ The cloud closes a connection with codes such as these. Devices handle them on t
 `write()` rejects and nothing is saved. Causes:
 
 - `ValidationError`: a value breaks its column declaration (non-null, enum, length, JSON, a boolean other than 0 or 1, Infinity in a real column) or your `validation` schema, or the primary key is too long. `issues` lists the fields and reasons.
-- A value its column cannot hold, such as text that is not a number, or a fraction, in an integer column. SQLite refuses it with its own error, not `ValidationError`.
+- A value its column cannot hold, such as text that is not a number, or a fraction, in an integer column. SQLite refuses it, and Drizzle throws `DrizzleQueryError` with SQLite's error as its `cause`, not `ValidationError`.
 - A [value](limits.md#values) or [write](limits.md#size) past a limit, such as invalid text, NaN, or too many rows.
 - A row that references a missing row through a foreign key.
 - A write to a `readOnly` table.

@@ -108,7 +108,7 @@ Syncline 在每次连接前调用 `token`，连接期间每下载一块数据之
 | 成员 | 说明 |
 |---|---|
 | `name` | 数据库名。 |
-| `db` | 用于读取的 Drizzle 数据库。它不能写入：请用 `write`。 |
+| `db` | 用于读取的 Drizzle 数据库。它不能写入：请用 `write`。原始 SQL 按数组读取行，用 `db.values(query)` 或 `db.all(query, 'arrays')`；按对象读取行会抛错，关系查询 `db.query` 不可用。`tx` 也一样。 |
 | [`write(body)`](#writebody) | 在事务中执行一次本地写入。 |
 | `onChange(listener)` | 同步表或仅本地表改变后，以这些表的名字（`ReadonlySet<string>`）调用 `listener`。返回一个移除该监听器的函数。 |
 | `tablesOf(sql)` | 不执行查询，解析为它读取的表名。 |

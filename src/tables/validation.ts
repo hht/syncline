@@ -1,4 +1,5 @@
 import { getColumns } from 'drizzle-orm';
+import { durableSQLiteCodecs } from 'drizzle-orm/durable-sqlite/codecs';
 import { getTableConfig, type SQLiteColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { keyBytes, tableNameChars } from '../protocol/limits.ts';
 import { foldCase, quote, whereKey } from '../sqlite/sql.ts';
@@ -192,6 +193,19 @@ function checkOf(table: string, column: SQLiteColumn): Check {
 }
 
 /**
+ * Value of a stored column as Drizzle reads it: the codec its column names normalizes the stored value (booleans, dates, JSON), then the
+ * column maps it (custom types). The codec name is not typed, as Drizzle reads it internally; durableSQLiteCodecs accept the values both
+ * devices and the cloud store (numbers, text, byte arrays).
+ * @see https://github.com/drizzle-team/drizzle-orm/blob/v1.0.0-rc.6/drizzle-orm/src/relations.ts
+ * @see https://github.com/drizzle-team/drizzle-orm/blob/v1.0.0-rc.6/drizzle-orm/src/durable-sqlite/codecs.ts
+ */
+function decode(column: SQLiteColumn, value: unknown) {
+  const { codec } = column as unknown as { codec?: keyof typeof durableSQLiteCodecs };
+  const normalize = codec && (durableSQLiteCodecs[codec]?.normalize as ((value: unknown) => unknown) | undefined);
+  return column.mapFromDriverValue(normalize ? normalize(value) : value);
+}
+
+/**
  * Valid as devices judge it with SQLite json_valid: parses, and nests at most 1000 levels deep (SQLite JSON_MAX_DEPTH), which
  * JSON.parse does not limit.
  * @see https://sqlite.org/json1.html (JSON nesting limit)
@@ -269,7 +283,7 @@ export class Validator {
     const decoded = Object.fromEntries(
       fields.map(({ field, column }) => {
         const value = stored[column.name];
-        return [field, value === null ? null : column.mapFromDriverValue(value)];
+        return [field, value === null ? null : decode(column, value)];
       }),
     );
     const result = schema['~standard'].validate(decoded);
